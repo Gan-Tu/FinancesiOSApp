@@ -316,42 +316,6 @@ final class MobileCompanionTests: XCTestCase {
         }
     }
 
-    func testOriginalImportPrefersExternalReceiptAndPreservesPriorDataOnCommitFailure() throws {
-        for failCommit in [false, true] {
-            let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-            defer { try? FileManager.default.removeItem(at: folder) }
-            let local = folder.appendingPathComponent("Local", isDirectory: true)
-            let original = folder.appendingPathComponent("Original/Attachments/receipt.txt")
-            let existing = local.appendingPathComponent("Attachments/receipt.txt")
-            let oldBytes = Data("Old local receipt".utf8), importedBytes = Data("Current original receipt".utf8)
-            for url in [original, existing] { try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true) }
-            try oldBytes.write(to: existing); try importedBytes.write(to: original)
-            var journal = DemoData.fixture()
-            let asset = AttachmentAsset(originalFilename: "receipt.txt", storedPath: "Attachments/receipt.txt", mimeType: "text/plain", sizeBytes: Int64(oldBytes.count))
-            journal.transactions[0].attachment = AttachmentContainer(assets: [asset])
-            let store = MobileLedgerStore(supportDirectory: local, initialData: journal)
-            let before = try XCTUnwrap(store.cloudKitSQLiteStore.loadData())
-            var imported = journal
-            imported.transactions[0].attachment?.assets[0].storedPath = original.path
-            if failCommit {
-                try executeReviewSQL("CREATE TRIGGER reject_original BEFORE DELETE ON ledgers BEGIN SELECT RAISE(ABORT, 'Synthetic original import failure'); END", at: store.cloudKitSQLiteStore.databaseURL)
-                XCTAssertThrowsError(try store.applyOriginalFinancesImportedData(imported))
-                XCTAssertEqual(store.data.transactions, journal.transactions)
-                XCTAssertEqual(try store.cloudKitSQLiteStore.loadData()?.transactions, before.transactions)
-                XCTAssertEqual(try Data(contentsOf: existing), oldBytes)
-            } else {
-                let result = try store.applyOriginalFinancesImportedData(imported)
-                XCTAssertEqual(result.attachmentSummary.copiedAttachments, 1)
-                XCTAssertEqual(result.attachmentSummary.missingAttachments, 0)
-                let reopened = MobileLedgerStore(supportDirectory: local)
-                let restored = try XCTUnwrap(reopened.transaction(journal.transactions[0].id)?.attachment?.assets.first)
-                XCTAssertEqual(try Data(contentsOf: reopened.attachmentURL(for: restored)), importedBytes)
-                XCTAssertNotEqual(reopened.attachmentURL(for: restored), existing)
-            }
-            XCTAssertEqual(try Data(contentsOf: original), importedBytes)
-        }
-    }
-
     func testRemoteReceiptRelocationCleansTheOldFileAfterCommit() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }

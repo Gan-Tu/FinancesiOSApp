@@ -16,7 +16,6 @@ final class MobileBackupController: ObservableObject {
     @Published private(set) var isRunning = false
     @Published private(set) var fraction = 0.0
     @Published private(set) var title = ""
-    @Published private(set) var canCancel = true
     @Published private(set) var readyFile: SharedBackupFile?
     @Published var statusMessage: String?
     var shouldPresentShare = false
@@ -45,34 +44,20 @@ final class MobileBackupController: ObservableObject {
         }
     }
 
-    func importOriginal(from url: URL, using store: MobileLedgerStore) {
-        store.validationError = nil
-        start(title: "Importing Database", canCancel: false) { progress in
-            guard let result = await store.importOriginalFinancesDatabaseAsync(at: url) else {
-                let error = store.validationError ?? ValidationError(message: "The database could not be imported.")
-                store.validationError = nil
-                throw error
-            }
-            progress.completedUnitCount = progress.totalUnitCount
-            return .message("Imported \(result.ledgerCount) journals and \(result.transactionCount) transactions. \(result.attachmentSummary.copiedAttachments) attachments copied; \(result.attachmentSummary.missingAttachments) missing. iCloud Sync is off until you enable it again.")
-        }
-    }
-
     func loadPreparedBackup(using store: MobileLedgerStore) {
         if readyFile == nil, let url = store.latestExportedBackup() { readyFile = SharedBackupFile(url: url) }
     }
 
-    func cancel() { if canCancel { progress.cancel() } }
+    func cancel() { progress.cancel() }
 
-    private func start(title: String, canCancel: Bool = true, operation: @escaping (Progress) async throws -> Outcome) {
+    private func start(title: String, operation: @escaping (Progress) async throws -> Outcome) {
         guard !isRunning else { return }
         let id = UUID()
         jobID = id; isRunning = true; fraction = 0; self.title = title
-        self.canCancel = canCancel
         statusMessage = nil; shouldPresentShare = false
         progress = Progress(totalUnitCount: 1)
         pending = operation
-        if #available(iOS 26.0, *), canCancel {
+        if #available(iOS 26.0, *) {
             let identifier = (Bundle.main.bundleIdentifier ?? "dev.gan.FinancesApp.iOS") + ".backup." + id.uuidString
             // Continued-processing tasks support registration at user initiation.
             // A unique identifier keeps late callbacks separate from a later job.

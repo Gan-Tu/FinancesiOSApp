@@ -2557,75 +2557,6 @@ final class MobileLedgerStore: ObservableObject {
         committed = true
     }
 
-    @discardableResult
-    func importOriginalFinancesDatabase(at url: URL) -> OriginalImportResult? {
-        validationError = nil
-        let accessed = url.startAccessingSecurityScopedResource()
-        defer {
-            if accessed {
-                url.stopAccessingSecurityScopedResource()
-            }
-        }
-
-        do {
-            return try applyOriginalFinancesImportedData(OriginalFinancesSQLiteImporter(url: url).importData())
-        } catch {
-            validationError = ValidationError(message: "Original import failed: \(error.localizedDescription)")
-            return nil
-        }
-    }
-
-    @discardableResult
-    func importOriginalFinancesDatabaseAsync(at url: URL) async -> OriginalImportResult? {
-        validationError = nil
-        let accessed = url.startAccessingSecurityScopedResource()
-        defer {
-            if accessed {
-                url.stopAccessingSecurityScopedResource()
-            }
-        }
-
-        do {
-            let importedData = try await Task.detached(priority: .userInitiated) {
-                try OriginalFinancesSQLiteImporter(url: url).importData()
-            }.value
-            return try applyOriginalFinancesImportedData(importedData)
-        } catch {
-            validationError = ValidationError(message: "Original import failed: \(error.localizedDescription)")
-            return nil
-        }
-    }
-
-    func applyOriginalFinancesImportedData(_ importedData: JournalData) throws -> OriginalImportResult {
-        try requireWritableJournal()
-        var importedData = importedData
-        importedData.preservesImportedRecurringMaterializations = true
-        importedData.syncEnabled = false
-        importedData.lastSyncedAt = nil
-        try Self.validateCandidateData(importedData, operation: "Original import")
-        var createdFiles: [URL] = []
-        var committed = false
-        defer {
-            if !committed { for file in createdFiles { try? FileManager.default.removeItem(at: file) } }
-        }
-        let attachmentSummary = localizeImportedAttachments(in: &importedData, createdFiles: &createdFiles)
-        try replaceDataFromImport(&importedData, operation: "Original import")
-        committed = true
-        if attachmentSummary.missingAttachments > 0 || attachmentSummary.failedAttachments > 0 {
-            validationError = ValidationError(
-                message: "Imported data, but \(attachmentSummary.missingAttachments) attachment files were missing and \(attachmentSummary.failedAttachments) could not be copied."
-            )
-        }
-        return OriginalImportResult(
-            ledgerCount: data.ledgers.count,
-            commodityCount: data.commodities.count,
-            accountCount: data.accounts.count,
-            transactionCount: data.transactions.count,
-            recurringTransactionCount: data.transactions.filter { $0.recurrenceRule?.frequency != nil }.count,
-            attachmentSummary: attachmentSummary
-        )
-    }
-
     func setSyncEnabled(_ enabled: Bool) {
         #if DEBUG
         if CommandLine.arguments.contains("--demo") {
@@ -3270,10 +3201,6 @@ final class MobileLedgerStore: ObservableObject {
         return container
     }
 
-    private func sanitizedAttachmentFilename(_ name: String) -> String {
-        Self.sanitizedAttachmentFilenameValue(name)
-    }
-
     private nonisolated static func sanitizedAttachmentFilenameValue(_ name: String) -> String {
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-_ "))
         let scalars = name.unicodeScalars.map { scalar in
@@ -3370,78 +3297,6 @@ final class MobileLedgerStore: ObservableObject {
         return components.reduce(attachmentsDirectory) { url, component in
             url.appending(path: String(component))
         }
-    }
-
-    @discardableResult
-    private func localizeImportedAttachments(in importedData: inout JournalData, createdFiles: inout [URL]) -> AttachmentLocalizationSummary {
-        var summary = AttachmentLocalizationSummary()
-
-        for transactionIndex in importedData.transactions.indices {
-            guard var attachment = importedData.transactions[transactionIndex].attachment else { continue }
-            for assetIndex in attachment.assets.indices {
-                let asset = attachment.assets[assetIndex]
-                summary.totalAttachments += 1
-
-                let externalSource: URL?
-                if let url = URL(string: asset.storedPath), url.isFileURL {
-                    externalSource = url
-                } else if (asset.storedPath as NSString).isAbsolutePath {
-                    externalSource = URL(fileURLWithPath: asset.storedPath)
-                } else { externalSource = nil }
-                if externalSource == nil,
-                   validatedAttachmentRelativePathIfPresent(asset.storedPath) != nil,
-                   FileManager.default.fileExists(atPath: attachmentURL(for: asset).path) {
-                    summary.alreadyLocalAttachments += 1
-                    continue
-                }
-
-                let source = externalSource ?? attachmentURL(for: asset)
-                let relativePath = "Attachments/\(UUID().uuidString)-\(sanitizedAttachmentFilename(asset.originalFilename))"
-                guard FileManager.default.fileExists(atPath: source.path) else {
-                    var localizedMissingAsset = asset
-                    localizedMissingAsset.storedPath = relativePath
-                    attachment.assets[assetIndex] = localizedMissingAsset
-                    summary.missingAttachments += 1
-                    continue
-                }
-
-                let destination = attachmentFileURL(forRelativePath: relativePath)
-                if source.standardizedFileURL.path == destination.standardizedFileURL.path {
-                    attachment.assets[assetIndex].storedPath = relativePath
-                    summary.alreadyLocalAttachments += 1
-                    continue
-                }
-
-                do {
-                    try FileManager.default.createDirectory(
-                        at: destination.deletingLastPathComponent(),
-                        withIntermediateDirectories: true
-                    )
-                    createdFiles.append(destination)
-                    try FileManager.default.copyItem(at: source, to: destination)
-
-                    var localizedAsset = asset
-                    localizedAsset.storedPath = relativePath
-                    if let values = try? destination.resourceValues(forKeys: [.contentTypeKey, .fileSizeKey]) {
-                        localizedAsset.mimeType = values.contentType?.preferredMIMEType ?? localizedAsset.mimeType
-                        if let fileSize = values.fileSize {
-                            localizedAsset.sizeBytes = Int64(fileSize)
-                        }
-                    }
-                    attachment.assets[assetIndex] = localizedAsset
-                    summary.copiedAttachments += 1
-                } catch {
-                    try? FileManager.default.removeItem(at: destination)
-                    var localizedFailedAsset = asset
-                    localizedFailedAsset.storedPath = relativePath
-                    attachment.assets[assetIndex] = localizedFailedAsset
-                    summary.failedAttachments += 1
-                }
-            }
-            importedData.transactions[transactionIndex].attachment = attachment
-        }
-
-        return summary
     }
 
     private func refreshUnlockStateForLoadedData(previousSecurity: SecuritySettings? = nil) {

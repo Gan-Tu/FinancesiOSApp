@@ -112,25 +112,6 @@ extension UTType {
     static let financesMobileBackup = UTType(exportedAs: "dev.gan.FinancesApp.backup", conformingTo: .json)
     static let financesBackupPackage = UTType(filenameExtension: "fin") ?? .package
     static let financesCompressedBackup = UTType(filenameExtension: "zip") ?? .data
-    static let sqliteDatabase = UTType(filenameExtension: "sqlite") ?? .database
-    static let dbDatabase = UTType(filenameExtension: "db") ?? .database
-}
-
-struct AttachmentLocalizationSummary: Equatable {
-    var totalAttachments = 0
-    var copiedAttachments = 0
-    var alreadyLocalAttachments = 0
-    var missingAttachments = 0
-    var failedAttachments = 0
-}
-
-struct OriginalImportResult {
-    var ledgerCount: Int
-    var commodityCount: Int
-    var accountCount: Int
-    var transactionCount: Int
-    var recurringTransactionCount: Int
-    var attachmentSummary: AttachmentLocalizationSummary
 }
 
 extension Decimal {

@@ -431,8 +431,6 @@ struct BackupSettingsView: View {
     @EnvironmentObject private var store: MobileLedgerStore
     @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var backup = MobileBackupController.shared
-    private enum ImportKind { case backup, originalDatabase }
-    @State private var importKind = ImportKind.backup
     @State private var showingImporter = false
     @State private var pendingImport: URL?
     @State private var sharing: SharedBackupFile?
@@ -448,7 +446,7 @@ struct BackupSettingsView: View {
                         Label("Share Prepared Backup", systemImage: "square.and.arrow.up.on.square")
                     }.disabled(backup.isRunning)
                 }
-                Button { importKind = .backup; showingImporter = true } label: {
+                Button { showingImporter = true } label: {
                     Label("Import Backup", systemImage: "square.and.arrow.down")
                 }.disabled(backup.isRunning)
             }
@@ -457,13 +455,8 @@ struct BackupSettingsView: View {
                     ProgressView(backup.title, value: backup.fraction)
                     Text("You can leave this screen while preparation continues. Editing pauses until backup preparation finishes.")
                         .font(.footnote).foregroundStyle(.secondary)
-                    if backup.canCancel { Button("Cancel", role: .cancel) { backup.cancel() } }
+                    Button("Cancel", role: .cancel) { backup.cancel() }
                 }.accessibilityIdentifier("backup-progress")
-            }
-            Section("Import Data") {
-                Button { importKind = .originalDatabase; showingImporter = true } label: {
-                    Label("Import Original Finances Database", systemImage: "externaldrive.badge.plus")
-                }.disabled(backup.isRunning)
             }
             Section("Included") {
                 Label("\(store.orderedLedgers.count) Journals", systemImage: "folder")
@@ -493,12 +486,11 @@ struct BackupSettingsView: View {
                 else if completed { backup.statusMessage = "Backup shared." }
             }
         }
-        .fileImporter(isPresented: $showingImporter, allowedContentTypes: importKind == .backup ? [.financesMobileBackup, .financesBackupPackage, .financesCompressedBackup, .json, .item] : [.sqliteDatabase, .dbDatabase, .database, .item], allowsMultipleSelection: false) { result in
+        .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.financesMobileBackup, .financesBackupPackage, .financesCompressedBackup, .json, .item], allowsMultipleSelection: false) { result in
             switch result {
             case .success(let urls):
                 guard let url = urls.first else { return }
-                if importKind == .backup { pendingImport = url }
-                else { backup.importOriginal(from: url, using: store) }
+                pendingImport = url
             case .failure(let error): backup.statusMessage = "Import failed: \(error.localizedDescription)"
             }
         }
