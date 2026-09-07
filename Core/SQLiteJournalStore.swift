@@ -3469,6 +3469,7 @@ final class SQLiteJournalStore: @unchecked Sendable {
         struct HistoryPayload: Decodable {
             var templateHistory: RecurrenceTemplateHistory?
             var preservesImportedMaterializations: Bool?
+            var continuation: RecurrenceContinuation?
         }
         let decoder = JSONDecoder.makeAppDecoder()
         let rows: [(UUID, RecurrenceRule)] = try rows(
@@ -3503,7 +3504,8 @@ final class SQLiteJournalStore: @unchecked Sendable {
                     endDate: try optionalDate(columnText(statement, 4), table: "recurrence_rules", column: "end_date"),
                     onWorkdays: sqlite3_column_int64(statement, 5) != 0,
                     templateHistory: saved.templateHistory,
-                    preservesImportedMaterializations: saved.preservesImportedMaterializations
+                    preservesImportedMaterializations: saved.preservesImportedMaterializations,
+                    continuation: saved.continuation
                 )
             )
         }

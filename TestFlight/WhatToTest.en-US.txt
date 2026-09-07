@@ -1,5 +1,7 @@
 Finances v2 for iOS
 
+Recurring backups now resume future generation after restore. Check monthly/yearly dates, custom intervals, workdays, count/end limits, future-detail changes and deleted/moved occurrences. Export, restore, and reopen without editing the repeating rule; it should continue beyond the stored future range when the horizon advances. Update both iPhone and Mac clients for the new continuation metadata.
+
 Press a transaction in a register or Quick Search: the entire rectangular row should highlight gray immediately. Scrolling or swiping away cancels the press; releasing a tap still opens Details. Check taps in the empty space around the text as well.
 
 Quick Search now shows dates beside transaction results. Before typing, use All, Uncleared, Repeating, Today or Last Month. After typing, choose Note contains, Number contains, Payee contains or Search for to open the complete filtered register. Previews show up to 40 entries; the full list includes every match in the current journal/account/currency scope. Last Month means the previous calendar month. Check the empty popup, field choices, dated rows and returning from a result to the filtered list.

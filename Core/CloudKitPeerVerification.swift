@@ -718,7 +718,7 @@ enum CloudKitPeerVerification {
             for index in future.postings.indices { future.postings[index].amount = future.postings[index].accountID == recurringCheckingID ? -4 : 4 }
             let cutoff = calendar.date(from: DateComponents(year: 2020, month: 2, day: 15))!
             let history = RecurrenceTemplateHistory(baseTemplate: RecurrenceTransactionTemplate(transaction: anchor), changes: [RecurrenceTemplateChange(effectiveDate: cutoff, template: RecurrenceTransactionTemplate(transaction: future))])
-            anchor.recurrenceRule = RecurrenceRule(id: recurringRuleID, frequency: .monthly, occurrenceCount: 3, templateHistory: history)
+            anchor.recurrenceRule = RecurrenceRule(id: recurringRuleID, frequency: .monthly, occurrenceCount: 3, templateHistory: history, continuation: RecurrenceContinuation(anchorDate: date, calendar: calendar))
             let base = JournalData(ledgers: [Ledger(id: ledgerID, name: "Peer recurrence")], transactions: [anchor])
             var rows = RecurringJournalEditor.materialized(base, referenceDate: date, calendar: calendar).transactions.sorted { $0.date < $1.date }
             if marker.role == "consumer" {

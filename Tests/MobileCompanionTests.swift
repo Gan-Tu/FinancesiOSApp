@@ -74,6 +74,42 @@ final class MobileCompanionTests: XCTestCase {
         XCTAssertEqual(reopened.data.transactionTemplates, templates)
     }
 
+    func testArchiveRoundTripsKeepUnlimitedRulesLiveBeyondStoredFutureEntries() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let source = MobileLedgerStore(supportDirectory: folder.appendingPathComponent("source"), initialData: DemoData.fixture())
+        var draft = source.makeTransactionDraft()
+        draft.note = "Continuing archive series"; draft.payee = "Recurring payee"; draft.number = "R-19"
+        draft.postings[0].amount = "-19"; draft.postings[1].amount = "19"
+        draft.repeatFrequency = .monthly; draft.repeatIntervalValue = 2; draft.repeatOccurrenceCount = nil
+        source.saveTransaction(draft)
+        XCTAssertNil(source.validationError)
+        let firstSeries = source.data.transactions.filter { $0.note == draft.note }.sorted { $0.date < $1.date }
+        let last = try XCTUnwrap(firstSeries.last)
+        let ruleID = try XCTUnwrap(last.recurrenceRule?.id)
+        source.deleteTransaction(last.id, scope: .occurrence)
+        var current = source
+        for round in 0..<2 {
+            let url = try current.exportBackupFile()
+            let target = MobileLedgerStore(supportDirectory: folder.appendingPathComponent("receiver-\(round)"), initialData: JournalData())
+            target.importBackup(from: url)
+            XCTAssertNil(target.validationError)
+            XCTAssertNil(target.transaction(last.id))
+            current = target
+        }
+        let disk = try XCTUnwrap(current.cloudKitSQLiteStore.loadData())
+        let rule = try XCTUnwrap(disk.transactions.first { $0.recurrenceRule?.id == ruleID }?.recurrenceRule)
+        XCTAssertEqual(rule.frequency, .monthly); XCTAssertEqual(rule.intervalValue, 2)
+        XCTAssertNil(rule.occurrenceCount); XCTAssertTrue(rule.continuation?.allowsAutomaticExtension == true)
+        let future = Calendar.current.date(byAdding: .year, value: 9, to: Date())!
+        let extended = RecurringJournalEditor.materialized(disk, referenceDate: future)
+        let oldIDs = Set(disk.transactions.map(\.id))
+        let newRows = extended.transactions.filter { !oldIDs.contains($0.id) && $0.recurrenceRule?.id == ruleID }
+        XCTAssertFalse(newRows.isEmpty)
+        XCTAssertTrue(newRows.allSatisfy { $0.date > last.date && $0.note == draft.note && $0.payee == draft.payee && $0.number == draft.number })
+        XCTAssertFalse(extended.transactions.contains { $0.id == last.id })
+    }
+
     func testBackupRestoreDoesNotRegenerateDeletedRepeatingOccurrences() throws {
         for deletedIndex in [0, 1] {
             let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

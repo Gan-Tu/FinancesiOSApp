@@ -2076,7 +2076,7 @@ final class MobileLedgerStore: ObservableObject {
             return
         }
         let deletion: RecurringJournalEditor.DeletionResult
-        do { deletion = try RecurringJournalEditor.deleting(transactionID, scope: scope, in: data) }
+        do { deletion = try RecurringJournalEditor.deleting(transactionID, scope: scope, in: data, deletedIDs: deletedTransactionTombstoneIDs) }
         catch { validationError = ValidationError(message: error.localizedDescription); return }
         let ids = deletion.deletedIDs
         let removed = data.transactions.filter { ids.contains($0.id) }
@@ -2352,12 +2352,12 @@ final class MobileLedgerStore: ObservableObject {
     func exportBackupFile(progress: Progress = Progress(totalUnitCount: 1)) throws -> URL {
         try beginBackupFileOperation()
         defer { endBackupFileOperation() }
-        let snapshot = data, directory = supportDirectory
+        let snapshot = data, directory = supportDirectory, tombstones = deletedTransactionTombstoneIDs
         let destination = try newBackupURL()
         do {
             try Self.deferredPersistenceQueue.sync {
                 try Self.validateCandidateData(snapshot, operation: "Backup")
-                try BackupArchive.export(snapshot, to: destination, progress: progress) {
+                try BackupArchive.export(snapshot, to: destination, progress: progress, deletedIDs: tombstones) {
                     Self.attachmentURL(for: $0, supportDirectory: directory)
                 }
             }
@@ -2371,14 +2371,14 @@ final class MobileLedgerStore: ObservableObject {
     func exportBackupFileAsync(progress: Progress) async throws -> URL {
         try beginBackupFileOperation()
         defer { endBackupFileOperation() }
-        let snapshot = data, directory = supportDirectory
+        let snapshot = data, directory = supportDirectory, tombstones = deletedTransactionTombstoneIDs
         let destination = try newBackupURL()
         do {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 Self.deferredPersistenceQueue.async {
                     do {
                         try Self.validateCandidateData(snapshot, operation: "Backup")
-                        try BackupArchive.export(snapshot, to: destination, progress: progress) {
+                        try BackupArchive.export(snapshot, to: destination, progress: progress, deletedIDs: tombstones) {
                             Self.attachmentURL(for: $0, supportDirectory: directory)
                         }
                         continuation.resume()

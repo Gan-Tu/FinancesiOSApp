@@ -1,0 +1,11 @@
+# Recurrence continuation in backups
+
+Backup metadata includes each repeating rule, future-detail template history, and a portable continuation cursor: the schedule anchor, calendar/timezone, next scheduled index, consumed occurrence count, and last covered scheduled day. The cursor represents the entire previously considered range, including deleted slots and moved/edited occurrences. It does not depend on transaction or journal IDs.
+
+On restore, iOS and macOS keep existing rows and receipts, enable continuation, and generate further entries using the saved rules. Mac Import Journal can assign new IDs without losing the cursor. Automatic generation continues on later reloads; no schedule edit is required. Count-limited and ended rules stay bounded. New/duplicated schedules get fresh cursors. Explicit schedule changes keep the established editor behavior and start the updated schedule with a fresh cursor.
+
+The old imported-materialization flag remains for compatibility and protects imported rows from deduplication. Generation uses `shouldExtendRecurrences` instead, allowing updated clients to extend an authoritative snapshot. Use updated versions on both devices to preserve this new metadata when editing repeating rules.
+
+For older backups without a cursor, the importer reconstructs the covered range from existing dates and known native occurrence identities, preserving gaps inside that range and continuing afterward. Missing exception history outside the saved range cannot be recovered from an older file that never stored it. Opaque legacy Custom rules without a supported pattern remain preserved; the app does not guess a financial schedule. Daily, weekly, monthly, yearly, custom intervals, workday adjustment, occurrence limits, end dates, and known future-template history are supported.
+
+Tests cover generation beyond the serialized horizon, first/middle/last deletions, moved occurrences, future-template edits, month-end dates, workdays and timezone changes, finite/end limits, SQLite reload, repeated iOS ZIP export/import, Mac full ZIP restore/re-export, and Mac import under fresh journal/rule identities. All verification uses disposable data and fake transports.

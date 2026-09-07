@@ -84,3 +84,10 @@ The final unsigned iOS Release archive succeeded after the recurrence fix. Proje
 Quick Search shows Note, Number, Payee and Anywhere suggestions for typed text, dates under each result amount, and transaction/date shortcuts before typing. A suggestion opens a fully filtered register in the same journal/account/currency scope; its month summary uses the same matching IDs. Quick previews stop at 40 rows while full registers include all matches. Search uses the background renderer, and the unused old global-result cache/trigram index was removed. Ordinary unfiltered registers avoid allocating search strings. Last Month now selects the previous calendar month and excludes current/future dates.
 
 All 155 model/storage tests passed after the changes (`test_sim_2026-09-07T21-35-38-985Z_pid18930_e97424a3.xcresult`). Focused UI tests verified empty shortcuts, dated previews, field actions, preserved queries, no-results behavior, and return navigation. Native screenshots of both popup states were reviewed against the supplied examples.
+
+
+## Recurring schedules continue after backup restore
+
+This supersedes the earlier frozen-snapshot workaround. Backups carry the schedule anchor/calendar, generation cursor and consumed count alongside recurrence settings and future-template history. Restore preserves the covered range and resumes generation after it. Deleted first/middle/last and moved occurrences remain covered. The same state works after Mac import assigns fresh identities. Native duplication starts a fresh cursor for the new series.
+
+All 160 iOS model/storage tests passed in `test_sim_2026-09-07T23-22-53-445Z_pid18930_7d7ddfd1.xcresult`, including repeated real ZIP export/import and projection beyond the saved horizon. The iOS Release archive passed. The isolated Mac selection executed 183 tests with no failures and one opt-in large-file test skipped, covering full ZIP restore/re-export, new-journal import, native reload, recurrence editing/deletion/duplication, SQLite and CloudKit wire compatibility. See [backup continuation](BACKUP_CONTINUATION.md) for the legacy-file boundary.

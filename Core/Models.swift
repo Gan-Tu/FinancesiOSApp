@@ -221,9 +221,10 @@ struct RecurrenceRule: Identifiable, Codable, Hashable {
     // Optional for existing SQLite, backup, and sync payloads. Schedule fields
     // and occurrence identity remain separate from changes to future details.
     var templateHistory: RecurrenceTemplateHistory? = nil
-    /// Imported backups omit deleted-occurrence tombstones. Preserve their
-    /// existing series until an explicit schedule change regenerates it.
+    /// Protect the covered imported snapshot, including on older clients.
+    /// A portable continuation cursor enables safe future top-up on new clients.
     var preservesImportedMaterializations: Bool? = nil
+    var continuation: RecurrenceContinuation? = nil
 }
 
 struct RecurrenceTransactionTemplate: Codable, Hashable {
@@ -484,6 +485,11 @@ struct JournalData: Codable {
     func preservesRecurringMaterializations(for transaction: LedgerTransaction) -> Bool {
         transaction.recurrenceRule?.preservesImportedMaterializations
             ?? preservesRecurringMaterializations(in: transaction.ledgerID)
+    }
+
+    func shouldExtendRecurrences(for transaction: LedgerTransaction) -> Bool {
+        transaction.recurrenceRule?.continuation?.allowsAutomaticExtension
+            ?? !preservesRecurringMaterializations(for: transaction)
     }
 
     func preservesRecurringMaterializations(in ledgerID: UUID) -> Bool {

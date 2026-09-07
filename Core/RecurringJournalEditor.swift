@@ -17,7 +17,7 @@ enum RecurringJournalEditor {
         var scheduleChanged: Bool
     }
 
-    static func deleting(_ id: UUID, scope: Scope, in journal: JournalData, calendar: Calendar = .current) throws -> DeletionResult {
+    static func deleting(_ id: UUID, scope: Scope, in journal: JournalData, calendar: Calendar = .current, deletedIDs: Set<UUID> = []) throws -> DeletionResult {
         guard let row = journal.transactions.first(where: { $0.id == id }) else {
             throw ValidationError(message: "This transaction no longer exists.")
         }
@@ -29,6 +29,10 @@ enum RecurringJournalEditor {
             if scope == .future { ids = Set(series.filter { calendar.startOfDay(for: $0.date) >= calendar.startOfDay(for: row.date) }.map(\.id)) }
             let remaining = series.filter { !ids.contains($0.id) }
             if !remaining.isEmpty {
+                let before = rule
+                rule.continuation = inferredContinuation(rule: rule, rows: series, calendar: calendar, deletedIDs: deletedIDs,
+                    allowsAutomaticExtension: rule.continuation?.allowsAutomaticExtension ?? !journal.preservesRecurringMaterializations(for: row))
+                scheduleChanged = rule != before
                 if scope == .future {
                     let cutoff = calendar.date(byAdding: .day, value: -1, to: calendar.startOfDay(for: row.date))!
                     rule.endDate = min(rule.endDate ?? cutoff, cutoff)
@@ -129,6 +133,14 @@ enum RecurringJournalEditor {
                 history.replaceFutureTemplate(RecurrenceTransactionTemplate(transaction: edited), from: cutoff)
             }
             rule.templateHistory = history
+            if oldRule == nil || (isAnchor && scheduleChanged) {
+                rule.continuation = RecurrenceContinuation(anchorDate: history.scheduleAnchorDate ?? edited.date, calendar: calendar)
+            } else {
+                rule.continuation = canonicalRule?.continuation ?? inferredContinuation(rule: rule,
+                    rows: journal.transactions.filter { $0.recurrenceRule?.id == rule.id }, referenceDate: referenceDate,
+                    calendar: calendar, deletedIDs: deletedIDs,
+                    allowsAutomaticExtension: !journal.preservesRecurringMaterializations(for: originalAnchor ?? edited))
+            }
             edited.recurrenceRule = rule
             // SQLite stores one rule per identity. Every in-memory occurrence
             // must carry the same explicit history before any snapshot is saved.
@@ -161,7 +173,7 @@ enum RecurringJournalEditor {
         }
         let countBefore = oldRule.map { old in journal.transactions.filter { $0.recurrenceRule?.id == old.id }.count } ?? 0
         if edited.recurrenceRule != nil && isAnchor &&
-            (oldRule == nil || scheduleChanged || (countBefore <= 1 && !journal.preservesRecurringMaterializations(for: edited))) {
+            (oldRule == nil || scheduleChanged || (countBefore <= 1 && canonicalRule?.continuation == nil && !journal.preservesRecurringMaterializations(for: edited))) {
             materialize(ruleID: edited.recurrenceRule!.id, in: &result, referenceDate: referenceDate, calendar: calendar, deletedIDs: deletedIDs)
         }
         if oldRule == nil && edited.recurrenceRule == nil,
@@ -173,7 +185,7 @@ enum RecurringJournalEditor {
 
     static func materialized(_ journal: JournalData, referenceDate: Date = Date(), calendar: Calendar = .current, deletedIDs: Set<UUID> = []) -> JournalData {
         var result = journal
-        let ruleIDs = Set(journal.transactions.filter { !journal.preservesRecurringMaterializations(for: $0) }.compactMap { $0.recurrenceRule?.id })
+        let ruleIDs = Set(journal.transactions.filter { journal.shouldExtendRecurrences(for: $0) }.compactMap { $0.recurrenceRule?.id })
         for id in ruleIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
             materialize(ruleID: id, in: &result, referenceDate: referenceDate, calendar: calendar, deletedIDs: deletedIDs)
         }
@@ -181,6 +193,25 @@ enum RecurringJournalEditor {
     }
 
     private static func materialize(ruleID: UUID, in journal: inout JournalData, referenceDate: Date, calendar: Calendar, deletedIDs: Set<UUID>) {
+        if var rule = anchor(ruleID: ruleID, in: journal.transactions)?.recurrenceRule, rule.continuation != nil {
+            var ids = Set(journal.transactions.map(\.id))
+            let activeCalendar = rule.continuation!.calendar
+            let ledgerID = anchor(ruleID: ruleID, in: journal.transactions)?.ledgerID
+            let horizonDay = max(horizon(referenceDate, calendar: activeCalendar), journal.transactions
+                .filter { $0.ledgerID == ledgerID && $0.recurrenceRule == nil }
+                .map { activeCalendar.startOfDay(for: $0.date) }.max() ?? .distantPast)
+            var more: Bool
+            repeat {
+                let result = continueSeries(rule: rule, rows: journal.transactions.filter { $0.recurrenceRule?.id == ruleID },
+                    referenceDate: referenceDate, horizonDay: horizonDay, allIDs: &ids, deletedIDs: deletedIDs)
+                rule = result.rule; more = result.hasMore
+                journal.transactions.append(contentsOf: result.additions)
+            } while more
+            for index in journal.transactions.indices where journal.transactions[index].recurrenceRule?.id == ruleID {
+                journal.transactions[index].recurrenceRule = rule
+            }
+            return
+        }
         // Complete finite schedules in bounded allocation chunks. Replaying known
         // slots is necessary to preserve moved identities and deleted-slot counts.
         while materializeBatch(ruleID: ruleID, in: &journal, referenceDate: referenceDate, calendar: calendar, deletedIDs: deletedIDs) {}
@@ -259,7 +290,7 @@ enum RecurringJournalEditor {
     static func occurrenceID(ruleID: UUID, day: Date) -> UUID {
         identifier(namespace: "recurring-occurrence", parts: [ruleID.uuidString, String(Int64(day.timeIntervalSince1970.rounded()))])
     }
-    private static func postingID(transactionID: UUID, index: Int) -> UUID {
+    static func postingID(transactionID: UUID, index: Int) -> UUID {
         identifier(namespace: "recurring-posting", parts: [transactionID.uuidString, String(index)])
     }
     private static func identifier(namespace: String, parts: [String]) -> UUID {

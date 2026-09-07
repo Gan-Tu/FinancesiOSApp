@@ -80,14 +80,14 @@ enum BackupArchive {
         return result + suffix
     }
 
-    static func export(_ data: JournalData, to destination: URL, progress: Progress,
+    static func export(_ data: JournalData, to destination: URL, progress: Progress, deletedIDs: Set<UUID> = [],
                        attachmentURL: (AttachmentAsset) throws -> URL) throws {
         try checkCancellation(progress)
         try createDirectory(destination.deletingLastPathComponent())
         let partial = destination.appendingPathExtension("partial")
         var completed = false
         defer { if !completed { try? FileManager.default.removeItem(at: partial) } }
-        var snapshot = data
+        var snapshot = RecurringJournalEditor.preparingRecurrencesForBackup(data, deletedIDs: deletedIDs)
         snapshot.syncEnabled = false; snapshot.lastSyncedAt = nil
         var files: [(path: String, url: URL, size: Int64)] = []
         var pathsBySource: [String: String] = [:]
@@ -265,12 +265,9 @@ enum BackupArchive {
             } else { journal = try decodeJournal(bytes) }
         }
         journal.syncEnabled = false; journal.lastSyncedAt = nil
-        // Backup payloads have materialized rows but no deleted-occurrence
-        // tombstones. Keep each restored series exact until explicitly rescheduled;
-        // newly created series can still generate normally in these journals.
-        for index in journal.transactions.indices where journal.transactions[index].recurrenceRule != nil {
-            journal.transactions[index].recurrenceRule?.preservesImportedMaterializations = true
-        }
+        try validate(journal)
+        journal = RecurringJournalEditor.resumingRecurrencesFromBackup(journal)
+        journal = RecurringJournalEditor.materialized(journal)
         if !journal.ledgers.contains(where: { $0.id == journal.selectedLedgerID }) { journal.selectedLedgerID = journal.ledgers.sorted { $0.listIndex < $1.listIndex }.first?.id }
         try validate(journal)
         readProgress.completedUnitCount = readProgress.totalUnitCount
