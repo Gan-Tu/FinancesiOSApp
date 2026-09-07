@@ -1,5 +1,7 @@
 Finances v2 for iOS
 
+When opening or leaving journals and transaction lists, the top navigation/status area should stay covered without flashing transaction text behind it.
+
 First-level accounts now align with their category heading, with only true subaccounts indented. Chart visibility and each journal's account expansion choices persist across navigation and relaunch. Long account names stay on one line. With future transactions present, All and account registers should open near today even when charts are enabled. Future entries remain above and reachable by scrolling; the chart preference stays enabled until you turn it off.
 
 If an account, currency, template or its journal is deleted while its editor is open, saving should show an error and preserve the deletion.

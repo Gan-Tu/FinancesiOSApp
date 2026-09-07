@@ -39,6 +39,8 @@ struct AppShellView: View {
     var body: some View {
         NavigationStack(path: $navigationPath) {
             JournalsHomeScreen(navigationPath: $navigationPath, route: $route)
+                .toolbarBackground(Color(uiColor: .systemBackground), for: .navigationBar)
+                .toolbarBackground(.visible, for: .navigationBar)
                 .safeAreaInset(edge: .bottom, spacing: 0) { globalBottomBar }
                 .navigationDestination(for: MobileRoute.self) { destination in
                     Group {
@@ -61,6 +63,10 @@ struct AppShellView: View {
                         SettingsView(route: $route)
                     }
                     }
+                    // Keep both ends of a push/pop opaque while a register
+                    // moves to today's rows and the navigation title changes.
+                    .toolbarBackground(Color(uiColor: .systemBackground), for: .navigationBar)
+                    .toolbarBackground(.visible, for: .navigationBar)
                     .safeAreaInset(edge: .bottom, spacing: 0) { globalBottomBar }
                 }
         }
