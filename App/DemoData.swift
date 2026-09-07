@@ -23,7 +23,8 @@ enum DemoData {
             data.transactions[index].note = "Oldest test transaction"
         }
         let store = MobileLedgerStore(supportDirectory: directory, initialData: data)
-        if let transaction = store.data.transactions.first(where: { $0.note == "Weekly groceries" }), transaction.attachment == nil {
+        let hasSampleReceipt = store.data.transactions.contains { $0.note == "Weekly groceries" && $0.attachment?.assets.isEmpty == false }
+        if !hasSampleReceipt, let transaction = store.data.transactions.first(where: { $0.note == "Weekly groceries" }) {
             do {
                 let receipt = directory.appendingPathComponent("Sample Receipt.txt")
                 try Data("SAMPLE RECEIPT — DEMO DATA ONLY\nMarket\nWeekly groceries\nTotal: USD 67.31\n".utf8).write(to: receipt)
@@ -32,6 +33,22 @@ enum DemoData {
                 store.saveTransaction(draft)
                 try store.flushLocalChanges()
                 try? FileManager.default.removeItem(at: receipt)
+            } catch { store.validationError = ValidationError(message: error.localizedDescription) }
+        }
+        if CommandLine.arguments.contains("--demo-large-backup"),
+           let transaction = store.data.transactions.first(where: { $0.note == "Weekly groceries" }),
+           transaction.attachment?.assets.contains(where: { $0.originalFilename == "Background export sample.bin" }) != true {
+            do {
+                let path = "Attachments/BackgroundExportSample.bin"
+                let file = directory.appendingPathComponent(path)
+                try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                _ = FileManager.default.createFile(atPath: file.path, contents: Data())
+                let handle = try FileHandle(forWritingTo: file)
+                let size: UInt64 = 2 * 1024 * 1024 * 1024
+                try handle.truncate(atOffset: size); try handle.close()
+                var draft = store.draft(for: transaction)
+                draft.attachments.append(AttachmentAsset(originalFilename: "Background export sample.bin", storedPath: path, mimeType: "application/octet-stream", sizeBytes: Int64(size)))
+                store.saveTransactionAndFlush(draft)
             } catch { store.validationError = ValidationError(message: error.localizedDescription) }
         }
         // UI fixtures report progress without connecting to an iCloud account.

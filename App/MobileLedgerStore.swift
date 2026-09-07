@@ -118,12 +118,6 @@ private enum MobilePersistenceTiming {
     case deferredLocal
 }
 
-private enum MobileBackupImportReadResult {
-    case package(JournalData, URL)
-    case mobilePayload(MobileBackupPayload)
-    case journalData(JournalData)
-}
-
 private struct MobileLedgerDerivedCache {
     var balanceDateCutoff = Calendar.current.dateInterval(of: .day, for: Date())!.end
     var orderedLedgers: [Ledger] = []
@@ -437,6 +431,8 @@ final class MobileLedgerStore: ObservableObject {
     private var deletedTransactionTombstoneIDs: Set<UUID> = []
     private lazy var cloudSyncCoordinator = CloudKitJournalSyncCoordinator(host: self, dependencies: cloudKitSyncDependencies)
     private var deferredCloudSaveToken: UUID?
+    private var backupFileOperationInProgress = false
+    private var backupSelectionChanged = false
     private var derivedCache = MobileLedgerDerivedCache()
     private var transactionRowsCache: [MobileTransactionRowsCacheKey: [LedgerTransaction]] = [:]
     private var transactionDaySectionCache: [MobileTransactionRowsCacheKey: [MobileTransactionDaySection]] = [:]
@@ -498,6 +494,7 @@ final class MobileLedgerStore: ObservableObject {
     }
 
     private func requireWritableJournal() throws {
+        guard !backupFileOperationInProgress else { throw ValidationError(message: "A backup operation is in progress. Please wait until it finishes before editing.") }
         guard !requiresJournalRecovery else {
             throw ValidationError(message: "The saved journal requires recovery. Editing, imports, and iCloud sync are blocked to preserve its database and receipts. No automatic replacement is performed.")
         }
@@ -1327,6 +1324,7 @@ final class MobileLedgerStore: ObservableObject {
             return
         }
         data.selectedLedgerID = ledgerID
+        if backupFileOperationInProgress { backupSelectionChanged = true; return }
         save(syncCloud: true, refreshCache: false)
     }
 
@@ -2047,7 +2045,7 @@ final class MobileLedgerStore: ObservableObject {
     }
 
     private func refreshRecurringProjections(referenceDate: Date = Date(), syncCloud: Bool) {
-        guard !requiresJournalRecovery, !data.preservesImportedRecurringMaterializations else { return }
+        guard !backupFileOperationInProgress, !requiresJournalRecovery else { return }
         let day = Calendar.current.startOfDay(for: referenceDate)
         guard lastRecurrenceProjectionDay != day else { return }
         lastRecurrenceProjectionDay = day
@@ -2161,6 +2159,7 @@ final class MobileLedgerStore: ObservableObject {
     }
 
     func setTransactionCleared(_ transactionID: UUID, cleared: Bool) {
+        guard allowJournalMutation() else { return }
         guard let index = data.transactions.firstIndex(where: { $0.id == transactionID }),
               data.transactions[index].cleared != cleared else {
             return
@@ -2332,6 +2331,7 @@ final class MobileLedgerStore: ObservableObject {
     }
 
     func deleteTransactionTemplate(_ templateID: UUID) {
+        guard allowJournalMutation() else { return }
         guard let template = data.transactionTemplates.first(where: { $0.id == templateID }) else { return }
         data.transactionTemplates.removeAll { $0.id == templateID }
         refreshDerivedCacheForTransactionTemplateListChange(ledgerID: template.ledgerID)
@@ -2405,201 +2405,156 @@ final class MobileLedgerStore: ObservableObject {
         data.transactions.reduce(0) { $0 + ($1.attachment?.assets.count ?? 0) }
     }
 
-    func exportBackupDocument() -> MobileBackupDocument? {
-        validationError = nil
+    private func beginBackupFileOperation() throws {
+        try requireWritableJournal()
+        try flushLocalChanges()
+        cancelCloudSync()
+        backupFileOperationInProgress = true
+    }
+
+    private func endBackupFileOperation() {
+        backupFileOperationInProgress = false
+        if backupSelectionChanged {
+            backupSelectionChanged = false
+            save(syncCloud: true, refreshCache: false)
+        }
+        synchronizeIfEnabled()
+    }
+
+    private func newBackupURL() throws -> URL {
+        let directory = supportDirectory.appendingPathComponent("BackupExports", isDirectory: true)
+        try BackupArchive.createDirectory(directory)
+        // Keep completed files available to share extensions after dismissal.
+        // Only obsolete exports owned by this app are removed on a later export.
+        for item in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.creationDateKey]) {
+            if let date = try? item.resourceValues(forKeys: [.creationDateKey]).creationDate,
+               date < Date().addingTimeInterval(-7 * 24 * 60 * 60) { try? FileManager.default.removeItem(at: item) }
+        }
+        let job = directory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try BackupArchive.createDirectory(job)
+        let day = Date().formatted(.iso8601.year().month().day().dateSeparator(.dash))
+        return job.appendingPathComponent("\(day) - Finances Backup.zip")
+    }
+
+    func latestExportedBackup() -> URL? {
+        let directory = supportDirectory.appendingPathComponent("BackupExports", isDirectory: true)
+        let jobs = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.creationDateKey])) ?? []
+        var files: [(url: URL, date: Date)] = []
+        for job in jobs {
+            let contents = (try? FileManager.default.contentsOfDirectory(at: job, includingPropertiesForKeys: [.creationDateKey])) ?? []
+            for file in contents where file.pathExtension.lowercased() == "zip" {
+                let values = try? file.resourceValues(forKeys: [.creationDateKey])
+                files.append((file, values?.creationDate ?? .distantPast))
+            }
+        }
+        return files.max { $0.date < $1.date }?.url
+    }
+
+    func exportBackupFile(progress: Progress = Progress(totalUnitCount: 1)) throws -> URL {
+        try beginBackupFileOperation()
+        defer { endBackupFileOperation() }
+        let snapshot = data, directory = supportDirectory
+        let destination = try newBackupURL()
         do {
-            let payload = try Self.mobileBackupPayload(data: data, supportDirectory: supportDirectory)
-            let encoded = try JSONEncoder.appEncoder.encode(payload)
-            return MobileBackupDocument(data: encoded)
+            try Self.deferredPersistenceQueue.sync {
+                try Self.validateCandidateData(snapshot, operation: "Backup")
+                try BackupArchive.export(snapshot, to: destination, progress: progress) {
+                    Self.attachmentURL(for: $0, supportDirectory: directory)
+                }
+            }
+            return destination
         } catch {
-            validationError = ValidationError(message: "Backup failed: \(error.localizedDescription)")
-            return nil
+            try? FileManager.default.removeItem(at: destination.deletingLastPathComponent())
+            throw error
         }
     }
 
-    func exportBackupDocumentAsync() async -> MobileBackupDocument? {
-        validationError = nil
-        let snapshot = data
-        let supportDirectory = supportDirectory
+    func exportBackupFileAsync(progress: Progress) async throws -> URL {
+        try beginBackupFileOperation()
+        defer { endBackupFileOperation() }
+        let snapshot = data, directory = supportDirectory
+        let destination = try newBackupURL()
         do {
-            let encoded = try await Task.detached(priority: .userInitiated) {
-                let payload = try Self.mobileBackupPayload(data: snapshot, supportDirectory: supportDirectory)
-                return try JSONEncoder.appEncoder.encode(payload)
-            }.value
-            return MobileBackupDocument(data: encoded)
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                Self.deferredPersistenceQueue.async {
+                    do {
+                        try Self.validateCandidateData(snapshot, operation: "Backup")
+                        try BackupArchive.export(snapshot, to: destination, progress: progress) {
+                            Self.attachmentURL(for: $0, supportDirectory: directory)
+                        }
+                        continuation.resume()
+                    } catch { continuation.resume(throwing: error) }
+                }
+            }
+            return destination
         } catch {
-            validationError = ValidationError(message: "Backup failed: \(error.localizedDescription)")
-            return nil
+            try? FileManager.default.removeItem(at: destination.deletingLastPathComponent())
+            throw error
         }
     }
 
     func importBackup(from backupURL: URL) {
         validationError = nil
         let accessed = backupURL.startAccessingSecurityScopedResource()
-        defer {
-            if accessed {
-                backupURL.stopAccessingSecurityScopedResource()
-            }
-        }
-
+        defer { if accessed { backupURL.stopAccessingSecurityScopedResource() } }
         do {
-            try applyBackupImportReadResult(Self.readBackupImport(from: backupURL))
-        } catch {
-            validationError = ValidationError(message: "Backup restore failed: \(error.localizedDescription)")
-        }
+            try beginBackupFileOperation()
+            defer { endBackupFileOperation() }
+            let progress = Progress(totalUnitCount: 100)
+            let prepared = try Self.prepareBackupRestore(from: backupURL, supportDirectory: supportDirectory, progress: progress)
+            defer { try? FileManager.default.removeItem(at: prepared.workspace) }
+            try commitBackupRestore(prepared)
+        } catch { validationError = ValidationError(message: "Backup restore failed: \(error.localizedDescription)") }
     }
 
-    func importBackupAsync(from backupURL: URL) async {
+    func importBackupAsync(from backupURL: URL, progress: Progress) async throws {
         validationError = nil
         let accessed = backupURL.startAccessingSecurityScopedResource()
-        defer {
-            if accessed {
-                backupURL.stopAccessingSecurityScopedResource()
-            }
-        }
-
-        do {
-            let result = try await Task.detached(priority: .userInitiated) {
-                try Self.readBackupImport(from: backupURL)
-            }.value
-            try applyBackupImportReadResult(result)
-        } catch {
-            validationError = ValidationError(message: "Backup restore failed: \(error.localizedDescription)")
-        }
+        defer { if accessed { backupURL.stopAccessingSecurityScopedResource() } }
+        try beginBackupFileOperation()
+        defer { endBackupFileOperation() }
+        let directory = supportDirectory
+        let prepared = try await Task.detached(priority: .userInitiated) {
+            try Self.prepareBackupRestore(from: backupURL, supportDirectory: directory, progress: progress)
+        }.value
+        defer { try? FileManager.default.removeItem(at: prepared.workspace) }
+        try BackupArchive.checkCancellation(progress)
+        try commitBackupRestore(prepared)
     }
 
-    @discardableResult
-    func importBankStatement(from statementURL: URL, statementAccountID requestedStatementAccountID: UUID? = nil) -> BankStatementImportResult? {
-        validationError = nil
-        let accessed = statementURL.startAccessingSecurityScopedResource()
-        defer {
-            if accessed {
-                statementURL.stopAccessingSecurityScopedResource()
+    private nonisolated static func prepareBackupRestore(from url: URL, supportDirectory: URL, progress: Progress) throws -> PreparedBackupRestore {
+        let workspace = supportDirectory.appendingPathComponent(".backup-import-" + UUID().uuidString, isDirectory: true)
+        var error: NSError?
+        var result: Result<PreparedBackupRestore, Error>?
+        NSFileCoordinator().coordinate(readingItemAt: url, options: .withoutChanges, error: &error) { readableURL in
+            result = Result {
+                try BackupArchive.prepareRestore(from: readableURL, workspace: workspace, progress: progress,
+                    localAttachmentURL: { attachmentURL(for: $0, supportDirectory: supportDirectory) },
+                    validate: { try validateCandidateData($0, operation: "Imported backup") })
             }
         }
-
-        do {
-            let rows = try BankStatementImporter(url: statementURL).rows()
-            return try applyBankStatementRows(
-                rows,
-                statementURL: statementURL,
-                requestedStatementAccountID: requestedStatementAccountID
-            )
-        } catch {
-            validationError = ValidationError(message: "Statement import failed: \(error.localizedDescription)")
-            return nil
-        }
+        if let error { throw error }
+        guard let result else { throw ValidationError(message: "The selected backup could not be opened.") }
+        return try result.get()
     }
 
-    @discardableResult
-    func importBankStatementAsync(
-        from statementURL: URL,
-        statementAccountID requestedStatementAccountID: UUID? = nil
-    ) async -> BankStatementImportResult? {
-        validationError = nil
-        let accessed = statementURL.startAccessingSecurityScopedResource()
-        defer {
-            if accessed {
-                statementURL.stopAccessingSecurityScopedResource()
+    private func commitBackupRestore(_ prepared: PreparedBackupRestore) throws {
+        let destination = attachmentFileURL(forRelativePath: prepared.relativeReceiptsPath)
+        var moved = false, committed = false
+        defer { if moved && !committed { try? FileManager.default.removeItem(at: destination) } }
+        if FileManager.default.fileExists(atPath: prepared.receipts.path) {
+            let attachmentsDirectory = attachmentsDirectory
+            try Self.deferredPersistenceQueue.sync {
+                try FileManager.default.createDirectory(at: attachmentsDirectory, withIntermediateDirectories: true)
+                try FileManager.default.moveItem(at: prepared.receipts, to: destination)
             }
+            moved = true
         }
-
-        do {
-            let rows = try await Task.detached(priority: .userInitiated) {
-                try BankStatementImporter(url: statementURL).rows()
-            }.value
-            return try applyBankStatementRows(
-                rows,
-                statementURL: statementURL,
-                requestedStatementAccountID: requestedStatementAccountID
-            )
-        } catch {
-            validationError = ValidationError(message: "Statement import failed: \(error.localizedDescription)")
-            return nil
-        }
-    }
-
-    private func applyBankStatementRows(
-        _ rows: [BankStatementRow],
-        statementURL: URL,
-        requestedStatementAccountID: UUID?
-    ) throws -> BankStatementImportResult? {
-        try requireWritableJournal()
-        guard let ledgerID = selectedLedgerID else { return nil }
-        let previousData = data
-        do {
-            guard let statementAccountID = requestedStatementAccountID ?? defaultBankStatementAccountID(ledgerID: ledgerID) else {
-                throw BankStatementImportError.missingStatementAccount
-            }
-            guard let statementAccount = account(statementAccountID),
-                  statementAccount.ledgerID == ledgerID,
-                  statementAccount.parentID != nil,
-                  descendantIDs(of: statementAccountID).isEmpty else {
-                throw ValidationError(message: "Choose a non-group account in this journal for statement imports.")
-            }
-            guard defaultBankCounterAccountID(forIncome: false, ledgerID: ledgerID) != nil,
-                  defaultBankCounterAccountID(forIncome: true, ledgerID: ledgerID) != nil else {
-                throw BankStatementImportError.missingCounterAccount
-            }
-
-            var result = BankStatementImportResult()
-            for row in rows {
-                let amount = row.amount
-                let commodityID = account(statementAccountID)?.commodityID ?? defaultCommodityID(forLedger: ledgerID)
-                let sourceID: UUID?
-                if let externalID = row.externalID {
-                    let source = bankStatementSource(
-                        ledgerID: ledgerID,
-                        sourceAccountIdentifier: row.sourceAccountIdentifier ?? statementURL.lastPathComponent,
-                        date: row.date
-                    )
-                    if data.transactions.contains(where: {
-                        $0.ledgerID == ledgerID && $0.sourceID == source.id && $0.externalTransactionID == externalID
-                    }) {
-                        result.skippedCount += 1
-                        continue
-                    }
-                    sourceID = source.id
-                } else {
-                    sourceID = nil
-                }
-
-                let counterPostings = try bankCounterPostings(for: row, ledgerID: ledgerID, commodityID: commodityID)
-                let transaction = LedgerTransaction(
-                    ledgerID: ledgerID,
-                    sourceID: sourceID,
-                    date: row.date,
-                    payee: row.payee,
-                    note: row.note,
-                    number: row.number,
-                    cleared: true,
-                    postings: [
-                        Posting(
-                            accountID: statementAccountID,
-                            commodityID: commodityID,
-                            amount: amount,
-                            listIndex: 0
-                        )
-                    ] + counterPostings,
-                    externalTransactionID: row.externalID
-                )
-                try validate(postings: transaction.postings, ledgerID: ledgerID)
-                data.transactions.append(transaction)
-                result.importedCount += 1
-            }
-            guard result.importedCount > 0 || result.skippedCount > 0 else {
-                throw BankStatementImportError.emptyFile
-            }
-            save(syncCloud: true)
-            if result.skippedCount > 0 {
-                validationError = ValidationError(message: "Imported \(result.importedCount) transactions and skipped \(result.skippedCount) rows.")
-            }
-            return result
-        } catch {
-            data = previousData
-            refreshDerivedCache()
-            throw error
-        }
+        // No suspension between releasing the edit guard and the atomic commit.
+        backupFileOperationInProgress = false
+        var imported = prepared.data
+        try replaceDataFromImport(&imported)
+        committed = true
     }
 
     @discardableResult
@@ -2714,7 +2669,7 @@ final class MobileLedgerStore: ObservableObject {
             if !isForegroundActive { cloudSyncCoordinator.suspendForegroundWork() }
             return
         }
-        if !active {
+        if !active && !backupFileOperationInProgress {
             do { try flushLocalChanges() }
             catch { validationError = ValidationError(message: "Save failed: \(error.localizedDescription)") }
         }
@@ -2748,7 +2703,7 @@ final class MobileLedgerStore: ObservableObject {
     }
 
     func synchronizeFromNotification(isForeground: Bool) async -> CloudKitBackgroundRefreshOutcome {
-        guard data.syncEnabled, cloudKitSyncDependencies.automaticTriggersEnabled, !requiresJournalRecovery else { return .noData }
+        guard !backupFileOperationInProgress, data.syncEnabled, cloudKitSyncDependencies.automaticTriggersEnabled, !requiresJournalRecovery else { return .noData }
         // An active app keeps foreground ownership; the callback still has its own deadline.
         return await cloudSyncCoordinator.backgroundRefresh(isForeground: isForeground)
     }
@@ -2770,6 +2725,7 @@ final class MobileLedgerStore: ObservableObject {
     }
 
     private func requestCloudSync(reportProgress: Bool, requireFollowUpIfBusy: Bool = true) {
+        guard !backupFileOperationInProgress else { return }
         guard allowJournalMutation() else { return }
         guard data.syncEnabled else { return }
         cloudSyncCoordinator.synchronize(
@@ -2907,11 +2863,13 @@ final class MobileLedgerStore: ObservableObject {
 
 
     func setDateFormat(_ format: AppDateFormat) {
+        guard allowJournalMutation() else { return }
         data.dateFormat = format
         save(syncCloud: true, refreshCache: false)
     }
 
     func setAppearance(_ appearance: AppAppearance) {
+        guard allowJournalMutation() else { return }
         data.appearance = appearance
         save(syncCloud: true, refreshCache: false)
     }
@@ -2925,6 +2883,7 @@ final class MobileLedgerStore: ObservableObject {
     }
 
     func setPasswordLock(password: String, confirmation: String) {
+        guard allowJournalMutation() else { return }
         validationError = nil
         guard password.count >= 4 else {
             validationError = ValidationError(message: "Password must be at least 4 characters.")
@@ -2941,6 +2900,7 @@ final class MobileLedgerStore: ObservableObject {
     }
 
     func disablePasswordLock(password: String) {
+        guard allowJournalMutation() else { return }
         validationError = nil
         guard verifyPassword(password) else {
             validationError = ValidationError(message: "Password is incorrect.")
@@ -3091,182 +3051,6 @@ final class MobileLedgerStore: ObservableObject {
         }
     }
 
-    private nonisolated static func mobileBackupPayload(data: JournalData, supportDirectory: URL) throws -> MobileBackupPayload {
-        var backupData = data
-        backupData.syncEnabled = false
-        backupData.lastSyncedAt = nil
-
-        var attachments: [MobileBackupAttachment] = []
-        for transactionIndex in backupData.transactions.indices {
-            guard var attachment = backupData.transactions[transactionIndex].attachment else { continue }
-            for assetIndex in attachment.assets.indices {
-                let asset = attachment.assets[assetIndex]
-                let source = attachmentURL(for: asset, supportDirectory: supportDirectory)
-                guard FileManager.default.fileExists(atPath: source.path) else {
-                    throw ValidationError(message: "Attachment file is missing: \(asset.originalFilename)")
-                }
-                let relativePath = backupRelativePath(for: asset, supportDirectory: supportDirectory)
-                attachments.append(MobileBackupAttachment(
-                    storedPath: relativePath,
-                    originalFilename: asset.originalFilename,
-                    data: try Data(contentsOf: source)
-                ))
-                attachment.assets[assetIndex].storedPath = relativePath
-            }
-            backupData.transactions[transactionIndex].attachment = attachment
-        }
-
-        try validateCandidateData(backupData, operation: "Backup")
-        return MobileBackupPayload(journalData: backupData, attachments: attachments)
-    }
-
-    private nonisolated static func readBackupImport(from backupURL: URL) throws -> MobileBackupImportReadResult {
-        let values = try? backupURL.resourceValues(forKeys: [.isDirectoryKey])
-        if values?.isDirectory == true || backupURL.pathExtension.lowercased() == "fin" {
-            let journalURL = backupURL.appending(path: "Journal.json")
-            guard FileManager.default.fileExists(atPath: journalURL.path) else {
-                throw ValidationError(message: "Backup package does not contain Journal.json.")
-            }
-            let payload = try Data(contentsOf: journalURL)
-            return .package(try JSONDecoder.appDecoder.decode(JournalData.self, from: payload), backupURL)
-        }
-        guard backupURL.pathExtension.lowercased() != "zip" else {
-            throw ValidationError(message: "ZIP backups need to be expanded before importing on iPhone.")
-        }
-
-        let payload = try Data(contentsOf: backupURL)
-        if let backup = try? JSONDecoder.appDecoder.decode(MobileBackupPayload.self, from: payload) {
-            return .mobilePayload(backup)
-        }
-        return .journalData(try JSONDecoder.appDecoder.decode(JournalData.self, from: payload))
-    }
-
-    private func applyBackupImportReadResult(_ result: MobileBackupImportReadResult) throws {
-        try requireWritableJournal()
-        var imported: JournalData
-        var payloadFiles: [String: Data]? = nil
-        var packageDirectory: URL? = nil
-        switch result {
-        case .package(let journal, let directory):
-            imported = journal
-            packageDirectory = directory
-        case .mobilePayload(let payload):
-            guard payload.formatVersion == 1 else { throw ValidationError(message: "Unsupported backup format.") }
-            imported = payload.journalData
-            var files: [String: Data] = [:]
-            for file in payload.attachments {
-                let path = try validatedAttachmentRelativePath(file.storedPath)
-                if let previous = files[path], previous != file.data {
-                    throw ValidationError(message: "Backup contains conflicting attachment paths.")
-                }
-                files[path] = file.data
-            }
-            payloadFiles = files
-        case .journalData(let journal):
-            imported = journal
-        }
-        imported.syncEnabled = false
-        imported.lastSyncedAt = nil
-        if let selectedLedgerID = imported.selectedLedgerID,
-           !imported.ledgers.contains(where: { $0.id == selectedLedgerID }) {
-            imported.selectedLedgerID = imported.ledgers.sorted { $0.listIndex < $1.listIndex }.first?.id
-        }
-        if imported.selectedLedgerID == nil {
-            imported.selectedLedgerID = imported.ledgers.sorted { $0.listIndex < $1.listIndex }.first?.id
-        }
-
-        // Validate before writing even temporary receipt data.
-        try Self.validateCandidateData(imported, operation: "Imported backup")
-        let restoreID = UUID().uuidString
-        let staging = supportDirectory.appendingPathComponent(".restore-" + restoreID, isDirectory: true)
-        let stagedReceipts = staging.appendingPathComponent("receipts", isDirectory: true)
-        let relativeDirectory = "Attachments/Restore-" + restoreID
-        let destination = attachmentFileURL(forRelativePath: relativeDirectory)
-        var movedReceipts = false
-        var committed = false
-        defer {
-            try? FileManager.default.removeItem(at: staging)
-            if movedReceipts && !committed { try? FileManager.default.removeItem(at: destination) }
-        }
-        var relocated: [String: String] = [:]
-        for transactionIndex in imported.transactions.indices {
-            guard var attachment = imported.transactions[transactionIndex].attachment else { continue }
-            for assetIndex in attachment.assets.indices {
-                let asset = attachment.assets[assetIndex]
-                let path = try validatedAttachmentRelativePath(asset.storedPath)
-                if let replacement = relocated[path] {
-                    attachment.assets[assetIndex].storedPath = replacement
-                    continue
-                }
-                let filename = UUID().uuidString + "-" + sanitizedAttachmentFilename(asset.originalFilename)
-                let stagedFile = stagedReceipts.appendingPathComponent(filename)
-                try FileManager.default.createDirectory(at: stagedReceipts, withIntermediateDirectories: true)
-                if let payloadFiles {
-                    guard let bytes = payloadFiles[path] else {
-                        throw ValidationError(message: "Backup is missing attachment file: \(asset.originalFilename)")
-                    }
-                    try bytes.write(to: stagedFile, options: .atomic)
-                } else {
-                    let source: URL
-                    if let packageDirectory {
-                        source = packageDirectory.appendingPathComponent(path)
-                    } else {
-                        source = attachmentFileURL(forRelativePath: path)
-                    }
-                    guard (try? source.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
-                        throw ValidationError(message: "Backup is missing attachment file: \(asset.originalFilename)")
-                    }
-                    try FileManager.default.copyItem(at: source, to: stagedFile)
-                }
-                let replacement = relativeDirectory + "/" + filename
-                relocated[path] = replacement
-                attachment.assets[assetIndex].storedPath = replacement
-            }
-            imported.transactions[transactionIndex].attachment = attachment
-        }
-        if !relocated.isEmpty {
-            // Drain previously queued cleanup before making the new receipt set visible.
-            let attachmentsDirectory = attachmentsDirectory
-            try Self.deferredPersistenceQueue.sync {
-                try FileManager.default.createDirectory(at: attachmentsDirectory, withIntermediateDirectories: true)
-                try FileManager.default.moveItem(at: stagedReceipts, to: destination)
-            }
-            movedReceipts = true
-        }
-        try replaceDataFromImport(&imported)
-        committed = true
-    }
-
-    private func bankCounterPostings(for row: BankStatementRow, ledgerID: UUID, commodityID: UUID?) throws -> [Posting] {
-        let rows: [(category: String?, amount: Decimal)] = row.splits.isEmpty
-            ? [(row.category, row.amount)]
-            : row.splits.map { ($0.category, $0.amount) }
-        var postings: [Posting] = []
-        for (index, row) in rows.enumerated() {
-            guard let accountID = bankCounterAccountID(category: row.category, counterAmount: -row.amount, ledgerID: ledgerID) else {
-                throw BankStatementImportError.missingCounterAccount
-            }
-            postings.append(Posting(
-                accountID: accountID,
-                commodityID: commodityID,
-                amount: -row.amount,
-                listIndex: index + 1
-            ))
-        }
-        return postings
-    }
-
-    private func bankStatementSource(ledgerID: UUID, sourceAccountIdentifier: String, date: Date) -> TransactionSource {
-        if let existing = data.sources.first(where: {
-            $0.ledgerID == ledgerID && $0.type == 10 && $0.externalID == sourceAccountIdentifier
-        }) {
-            return existing
-        }
-        let source = TransactionSource(ledgerID: ledgerID, type: 10, date: date, externalID: sourceAccountIdentifier)
-        data.sources.append(source)
-        return source
-    }
-
     private func replaceDataFromImport(_ importedData: inout JournalData, operation: String = "Imported backup") throws {
         try requireWritableJournal()
         try Self.validateCandidateData(importedData, operation: operation)
@@ -3326,6 +3110,15 @@ final class MobileLedgerStore: ObservableObject {
         let commodityIDs = Set(candidate.commodities.map(\.id))
         let accountIDs = Set(candidate.accounts.map(\.id))
         let sourceIDs = Set(candidate.sources.map(\.id))
+
+        guard ledgerIDs.count == candidate.ledgers.count,
+              commodityIDs.count == candidate.commodities.count,
+              accountIDs.count == candidate.accounts.count,
+              sourceIDs.count == candidate.sources.count,
+              Set(candidate.transactions.map(\.id)).count == candidate.transactions.count,
+              Set(candidate.transactionTemplates.map(\.id)).count == candidate.transactionTemplates.count else {
+            throw ValidationError(message: "\(operation) contains duplicate record identifiers.")
+        }
 
         if let selectedLedgerID = candidate.selectedLedgerID, !ledgerIDs.contains(selectedLedgerID) {
             throw ValidationError(message: "\(operation) selected journal is missing.")
@@ -3439,42 +3232,6 @@ final class MobileLedgerStore: ObservableObject {
         Set(transaction.postings.compactMap { postingCommodityID($0, ledgerID: transaction.ledgerID) })
     }
 
-    private func defaultBankStatementAccountID(ledgerID: UUID) -> UUID? {
-        let candidates = accounts(for: ledgerID).filter {
-            $0.ledgerID == ledgerID &&
-                $0.kind == .asset &&
-                $0.parentID != nil &&
-                descendantIDs(of: $0.id).isEmpty
-        }
-        return candidates.first { $0.name.localizedCaseInsensitiveContains("checking") }?.id ??
-            candidates.first { $0.name.localizedCaseInsensitiveContains("cash") }?.id ??
-            candidates.first?.id
-    }
-
-    private func bankCounterAccountID(category: String?, counterAmount: Decimal, ledgerID: UUID) -> UUID? {
-        if let category,
-           let matched = accounts(for: ledgerID).first(where: {
-               $0.ledgerID == ledgerID &&
-                   $0.parentID != nil &&
-                   $0.name.compare(category, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
-           }) {
-            return matched.id
-        }
-        return defaultBankCounterAccountID(forIncome: counterAmount < .zero, ledgerID: ledgerID)
-    }
-
-    private func defaultBankCounterAccountID(forIncome isIncome: Bool, ledgerID: UUID) -> UUID? {
-        let kind: AccountKind = isIncome ? .income : .expense
-        let preferredName = isIncome ? "Salary" : "Dining"
-        let ledgerAccounts = accounts(for: ledgerID).filter { $0.kind == kind && $0.parentID != nil }
-        let leafAccounts = ledgerAccounts.filter { account in
-            descendantIDs(of: account.id).isEmpty
-        }
-        let candidates = leafAccounts.isEmpty ? ledgerAccounts : leafAccounts
-        return candidates.first { $0.name.compare(preferredName, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }?.id ??
-            candidates.first?.id
-    }
-
     private func defaultCommodityID(forLedger ledgerID: UUID) -> UUID? {
         derivedCache.defaultCommodityIDByLedger[ledgerID]
     }
@@ -3524,20 +3281,6 @@ final class MobileLedgerStore: ObservableObject {
         }
         let cleaned = String(scalars).trimmingCharacters(in: .whitespacesAndNewlines)
         return cleaned.isEmpty ? "Attachment" : cleaned
-    }
-
-    private nonisolated static func backupRelativePath(for asset: AttachmentAsset, supportDirectory: URL) -> String {
-        if let relativePath = validatedAttachmentRelativePathIfPresent(asset.storedPath, supportDirectory: supportDirectory) {
-            return relativePath
-        }
-        return "Attachments/\(asset.id.uuidString)-\(sanitizedAttachmentFilenameValue(asset.originalFilename))"
-    }
-
-    private func validatedAttachmentRelativePath(_ path: String) throws -> String {
-        guard let relativePath = validatedAttachmentRelativePathIfPresent(path) else {
-            throw ValidationError(message: "Backup contains an invalid attachment path.")
-        }
-        return relativePath
     }
 
     private func validatedAttachmentRelativePathIfPresent(_ path: String) -> String? {

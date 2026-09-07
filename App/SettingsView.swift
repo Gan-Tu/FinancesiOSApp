@@ -429,183 +429,96 @@ struct SecuritySettingsView: View {
 
 struct BackupSettingsView: View {
     @EnvironmentObject private var store: MobileLedgerStore
-    @State private var exportDocument: MobileBackupDocument?
-    @State private var exportingBackup = false
-    @State private var importingBackup = false
-    @State private var importingStatement = false
-    @State private var importingOriginalDatabase = false
-    @State private var backupOperationInProgress = false
-    @State private var statusMessage: String?
+    @Environment(\.scenePhase) private var scenePhase
+    @ObservedObject private var backup = MobileBackupController.shared
+    private enum ImportKind { case backup, originalDatabase }
+    @State private var importKind = ImportKind.backup
+    @State private var showingImporter = false
+    @State private var pendingImport: URL?
+    @State private var sharing: SharedBackupFile?
 
     var body: some View {
         Form {
             Section {
-                Button {
-                    backupOperationInProgress = true
-                    Task {
-                        if let document = await store.exportBackupDocumentAsync() {
-                            exportDocument = document
-                            exportingBackup = true
-                        }
-                        backupOperationInProgress = false
-                    }
-                } label: {
+                Button { backup.export(using: store) } label: {
                     Label("Export Backup", systemImage: "square.and.arrow.up")
+                }.disabled(backup.isRunning)
+                if let file = backup.readyFile {
+                    Button { sharing = file } label: {
+                        Label("Share Prepared Backup", systemImage: "square.and.arrow.up.on.square")
+                    }.disabled(backup.isRunning)
                 }
-                .disabled(backupOperationInProgress)
-
-                Button {
-                    importingBackup = true
-                } label: {
+                Button { importKind = .backup; showingImporter = true } label: {
                     Label("Import Backup", systemImage: "square.and.arrow.down")
-                }
-                .disabled(backupOperationInProgress)
+                }.disabled(backup.isRunning)
             }
-
+            if backup.isRunning {
+                Section {
+                    ProgressView(backup.title, value: backup.fraction)
+                    Text("You can leave this screen while preparation continues. Editing pauses until backup preparation finishes.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    if backup.canCancel { Button("Cancel", role: .cancel) { backup.cancel() } }
+                }.accessibilityIdentifier("backup-progress")
+            }
             Section("Import Data") {
-                Button {
-                    importingStatement = true
-                } label: {
-                    Label("Import Bank Statement", systemImage: "doc.text.magnifyingglass")
-                }
-                .disabled(backupOperationInProgress)
-
-                Button {
-                    importingOriginalDatabase = true
-                } label: {
+                Button { importKind = .originalDatabase; showingImporter = true } label: {
                     Label("Import Original Finances Database", systemImage: "externaldrive.badge.plus")
-                }
-                .disabled(backupOperationInProgress)
+                }.disabled(backup.isRunning)
             }
-
             Section("Included") {
                 Label("\(store.orderedLedgers.count) Journals", systemImage: "folder")
                 Label("\(store.data.accounts.count) Accounts", systemImage: "list.bullet.rectangle")
                 Label("\(store.data.transactions.count) Transactions", systemImage: "arrow.left.arrow.right")
-                Label("\(store.selectedLedgerTransactionTemplates.count) Templates", systemImage: "doc.text")
+                Label("\(store.data.transactionTemplates.count) Templates", systemImage: "doc.text")
                 Label("\(store.backupAttachmentCount) Attachments", systemImage: "paperclip")
             }
-
             Section {
-                Text("Backups include local data and attachment files. Restores turn Cloud Sync off and clear local sync metadata before saving the imported data.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                Text("Backups include all journals and receipt files in a ZIP. Use the share sheet to save to Files, Dropbox, or another destination. Restoring replaces the current journals and turns Cloud Sync off.")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
         }
-        .navigationTitle("Backup")
-        .navigationBarTitleDisplayMode(.inline)
+        .navigationTitle("Backup").navigationBarTitleDisplayMode(.inline)
         .compactGroupedForm()
-        .fileExporter(
-            isPresented: $exportingBackup,
-            document: exportDocument,
-            contentType: .financesMobileBackup,
-            defaultFilename: defaultBackupFilename
-        ) { result in
-            switch result {
-            case .success:
-                statusMessage = "Backup exported."
-            case .failure(let error):
-                statusMessage = "Backup export failed: \(error.localizedDescription)"
-            }
-            exportDocument = nil
+        .onAppear {
+            backup.loadPreparedBackup(using: store)
+            presentPreparedBackup()
         }
-        .fileImporter(
-            isPresented: $importingBackup,
-            allowedContentTypes: [.financesMobileBackup, .financesBackupPackage, .financesCompressedBackup, .json, .item],
-            allowsMultipleSelection: false
-        ) { result in
+        .onChange(of: backup.readyFile?.id) { presentPreparedBackup() }
+        .onChange(of: scenePhase) { presentPreparedBackup() }
+        .onChange(of: store.requiresUnlock) { presentPreparedBackup() }
+        .sheet(item: $sharing) { file in
+            BackupShareSheet(url: file.url) { completed, error in
+                sharing = nil
+                if let error { backup.statusMessage = "Sharing failed: \(error.localizedDescription)" }
+                else if completed { backup.statusMessage = "Backup shared." }
+            }
+        }
+        .fileImporter(isPresented: $showingImporter, allowedContentTypes: importKind == .backup ? [.financesMobileBackup, .financesBackupPackage, .financesCompressedBackup, .json, .item] : [.sqliteDatabase, .dbDatabase, .database, .item], allowsMultipleSelection: false) { result in
             switch result {
             case .success(let urls):
                 guard let url = urls.first else { return }
-                backupOperationInProgress = true
-                Task {
-                    await store.importBackupAsync(from: url)
-                    if store.validationError == nil {
-                        statusMessage = "Backup imported. iCloud Sync is off until you enable it again."
-                    }
-                    backupOperationInProgress = false
-                }
-            case .failure(let error):
-                statusMessage = "Backup import failed: \(error.localizedDescription)"
+                if importKind == .backup { pendingImport = url }
+                else { backup.importOriginal(from: url, using: store) }
+            case .failure(let error): backup.statusMessage = "Import failed: \(error.localizedDescription)"
             }
         }
-        .fileImporter(
-            isPresented: $importingStatement,
-            allowedContentTypes: [.bankStatementCSV, .bankStatementTSV, .ofxStatement, .qfxStatement, .qifStatement, .commaSeparatedText, .tabSeparatedText, .item],
-            allowsMultipleSelection: false
-        ) { result in
-            switch result {
-            case .success(let urls):
-                guard let url = urls.first else { return }
-                backupOperationInProgress = true
-                Task {
-                    let imported = await store.importBankStatementAsync(from: url)
-                    if let imported {
-                        statusMessage = "Imported \(imported.importedCount) transactions. Skipped \(imported.skippedCount)."
-                    }
-                    backupOperationInProgress = false
-                }
-            case .failure(let error):
-                statusMessage = "Statement import failed: \(error.localizedDescription)"
+        .confirmationDialog("Replace Current Journals?", isPresented: Binding(get: { pendingImport != nil }, set: { if !$0 { pendingImport = nil } }), titleVisibility: .visible) {
+            if let url = pendingImport {
+                Button("Restore Backup", role: .destructive) { pendingImport = nil; backup.restore(from: url, using: store) }
             }
-        }
-        .fileImporter(
-            isPresented: $importingOriginalDatabase,
-            allowedContentTypes: [.sqliteDatabase, .dbDatabase, .database, .item],
-            allowsMultipleSelection: false
-        ) { result in
-            switch result {
-            case .success(let urls):
-                guard let url = urls.first else { return }
-                backupOperationInProgress = true
-                Task {
-                    if let imported = await store.importOriginalFinancesDatabaseAsync(at: url) {
-                        statusMessage = originalImportMessage(imported)
-                    }
-                    backupOperationInProgress = false
-                }
-            case .failure(let error):
-                statusMessage = "Original import failed: \(error.localizedDescription)"
-            }
-        }
-        .alert("Backup", isPresented: Binding(
-            get: { statusMessage != nil },
-            set: { if !$0 { statusMessage = nil } }
-        )) {
-            Button("OK") {
-                statusMessage = nil
-            }
+            Button("Cancel", role: .cancel) { pendingImport = nil }
         } message: {
-            Text(statusMessage ?? "")
+            Text("Restore \(pendingImport?.lastPathComponent ?? "this backup")? This replaces all current journals and attachments. Export a backup first if you want to keep them.")
         }
+        .alert("Backup", isPresented: Binding(get: { backup.statusMessage != nil }, set: { if !$0 { backup.statusMessage = nil } })) {
+            Button("OK") { backup.statusMessage = nil }
+        } message: { Text(backup.statusMessage ?? "") }
     }
 
-    private var defaultBackupFilename: String {
-        "\(Self.filenameFormatter.string(from: Date())) - Finances Backup.financesbackup"
-    }
-
-    private static let filenameFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter
-    }()
-
-    private func originalImportMessage(_ result: OriginalImportResult) -> String {
-        var parts = [
-            "Imported \(result.ledgerCount) journals",
-            "\(result.accountCount) accounts",
-            "\(result.transactionCount) transactions"
-        ]
-        if result.recurringTransactionCount > 0 {
-            parts.append("\(result.recurringTransactionCount) repeating")
-        }
-        if result.attachmentSummary.totalAttachments > 0 {
-            parts.append("\(result.attachmentSummary.copiedAttachments) attachments copied")
-            if result.attachmentSummary.missingAttachments > 0 {
-                parts.append("\(result.attachmentSummary.missingAttachments) missing")
-            }
-        }
-        return parts.joined(separator: ". ") + ". iCloud Sync is off until you enable it again."
+    private func presentPreparedBackup() {
+        guard scenePhase == .active, !store.requiresUnlock, backup.shouldPresentShare, let file = backup.readyFile else { return }
+        backup.shouldPresentShare = false
+        sharing = file
     }
 }
 

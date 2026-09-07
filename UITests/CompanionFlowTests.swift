@@ -1,6 +1,32 @@
 import XCTest
 
 final class CompanionFlowTests: XCTestCase {
+    @MainActor func testJournalPaddingAndChartPanelRemainStableWhileLoading() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--demo", "--reset-demo", "--demo-future", "--demo-slow-register"]
+        app.launch()
+        defer { app.terminate() }
+        let journal = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Personal,")).firstMatch
+        XCTAssertTrue(journal.waitForExistence(timeout: 10))
+        XCTAssertGreaterThanOrEqual(journal.frame.minY - app.navigationBars["Journals"].frame.maxY, 12)
+        XCTAssertTrue(journal.label.hasSuffix("6"), "Journal and overview uncleared badges both exclude future entries")
+        journal.tap(); app.buttons["All"].tap(); app.buttons["Show Chart"].tap()
+        let panel = app.otherElements["register-chart-panel"].firstMatch
+        XCTAssertTrue(panel.waitForExistence(timeout: 5))
+        let height = panel.frame.height
+        let top = panel.frame.minY
+        wait(for: [expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: app.staticTexts["TODAY"])], timeout: 10)
+        XCTAssertEqual(panel.frame.height, height, accuracy: 1)
+        XCTAssertEqual(panel.frame.minY, top, accuracy: 1, "Loading must not collapse a search drawer and shift the chart")
+        XCTAssertFalse(app.searchFields.firstMatch.exists, "Register search belongs to the explicit bottom Search sheet")
+        XCTAssertTrue(app.staticTexts["Cash Flow"].isHittable)
+        panel.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.55)).tap()
+        XCTAssertEqual(panel.frame.height, height, accuracy: 1, "Selecting a chart bar must not push the rows down")
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Pinned chart with stable current-day rows"; screenshot.lifetime = .keepAlways; add(screenshot)
+    }
+
     @MainActor func testChartPreferencePersistsAcrossNavigationAndRelaunch() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -17,11 +43,13 @@ final class CompanionFlowTests: XCTestCase {
         app.navigationBars["All"].buttons.element(boundBy: 0).tap()
         app.buttons["All"].tap()
         wait(for: [expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: app.staticTexts["TODAY"])], timeout: 10)
+        XCTAssertTrue(chart.isHittable, "An enabled chart remains visible beside today's rows")
         XCTAssertTrue(app.buttons["Hide Chart"].exists)
 
         app.terminate(); app.launchArguments = ["--demo"]; app.launch()
         personal.tap(); app.buttons["All"].tap()
         wait(for: [expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: app.staticTexts["TODAY"])], timeout: 10)
+        XCTAssertTrue(chart.isHittable)
         XCTAssertTrue(app.buttons["Hide Chart"].exists)
         app.buttons["Hide Chart"].tap()
         app.terminate(); app.launch()
@@ -29,6 +57,29 @@ final class CompanionFlowTests: XCTestCase {
         XCTAssertTrue(app.buttons["Show Chart"].exists)
         XCTAssertFalse(chart.exists)
         wait(for: [expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: app.staticTexts["TODAY"])], timeout: 10)
+    }
+
+    @MainActor func testRegisterSearchUsesBottomSheetAndReturnsToRegister() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--demo", "--reset-demo", "--demo-future"]
+        app.launch()
+        defer { app.terminate() }
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Personal,")).firstMatch.tap()
+        app.buttons["All"].tap()
+        wait(for: [expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: app.staticTexts["TODAY"])], timeout: 10)
+        app.buttons["Quick Search"].tap()
+        XCTAssertTrue(app.navigationBars["Search Transactions"].waitForExistence(timeout: 5))
+        let field = app.searchFields.firstMatch
+        field.tap(); field.typeText("67.31")
+        let result = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "search-transaction-", "Weekly groceries")).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "search-transaction-", "Dinner with friends")).firstMatch.exists)
+        result.tap()
+        XCTAssertTrue(app.navigationBars["Details"].waitForExistence(timeout: 5))
+        app.navigationBars["Details"].buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.navigationBars["All"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.searchFields.firstMatch.exists)
     }
 
     @MainActor func testOverviewHierarchyAlignsCategoryAndPersistsExpansion() throws {

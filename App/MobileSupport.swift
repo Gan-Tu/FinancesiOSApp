@@ -112,49 +112,8 @@ extension UTType {
     static let financesMobileBackup = UTType(exportedAs: "dev.gan.FinancesApp.backup", conformingTo: .json)
     static let financesBackupPackage = UTType(filenameExtension: "fin") ?? .package
     static let financesCompressedBackup = UTType(filenameExtension: "zip") ?? .data
-    static let bankStatementCSV = UTType(filenameExtension: "csv") ?? .commaSeparatedText
-    static let bankStatementTSV = UTType(filenameExtension: "tsv") ?? .tabSeparatedText
-    static let ofxStatement = UTType(filenameExtension: "ofx") ?? .data
-    static let qfxStatement = UTType(filenameExtension: "qfx") ?? .data
-    static let qifStatement = UTType(filenameExtension: "qif") ?? .data
     static let sqliteDatabase = UTType(filenameExtension: "sqlite") ?? .database
     static let dbDatabase = UTType(filenameExtension: "db") ?? .database
-}
-
-struct MobileBackupAttachment: Codable, Hashable {
-    var storedPath: String
-    var originalFilename: String
-    var data: Data
-}
-
-struct MobileBackupPayload: Codable {
-    var formatVersion = 1
-    var exportedAt = Date()
-    var journalData: JournalData
-    var attachments: [MobileBackupAttachment]
-}
-
-struct MobileBackupDocument: FileDocument {
-    static var readableContentTypes: [UTType] {
-        [.financesMobileBackup, .json]
-    }
-
-    var data: Data
-
-    init(data: Data = Data()) {
-        self.data = data
-    }
-
-    init(configuration: ReadConfiguration) throws {
-        guard let data = configuration.file.regularFileContents else {
-            throw CocoaError(.fileReadCorruptFile)
-        }
-        self.data = data
-    }
-
-    func fileWrapper(configuration _: WriteConfiguration) throws -> FileWrapper {
-        FileWrapper(regularFileWithContents: data)
-    }
 }
 
 struct AttachmentLocalizationSummary: Equatable {

@@ -137,6 +137,8 @@ final class RecurringJournalEditorTests: XCTestCase {
     func testLegacyHistoryIsCapturedBeforeAnchorOneOffAndImportedRowsStayAuthoritative() throws {
         let f = Fixture(); var original = try f.series(count: 1)
         original.preservesImportedRecurringMaterializations = true
+        // Legacy imports predate the per-series override now set for new rules.
+        for index in original.transactions.indices { original.transactions[index].recurrenceRule?.preservesImportedMaterializations = nil }
         original.transactions[0].recurrenceRule?.templateHistory = nil
         original.transactions[0].recurrenceRule?.occurrenceCount = nil
         var edit = original.transactions[0]; edit.payee = "Anchor exception"
@@ -176,6 +178,8 @@ final class RecurringJournalEditorTests: XCTestCase {
         XCTAssertGreaterThan(normal.transactions.count, 80)
         XCTAssertGreaterThanOrEqual(try XCTUnwrap(f.rows(normal).last?.date), f.day(2034, 5, 10))
         original.preservesImportedRecurringMaterializations = true
+        // Legacy imports predate the per-series override now set for new rules.
+        for index in original.transactions.indices { original.transactions[index].recurrenceRule?.preservesImportedMaterializations = nil }
         let imported = try RecurringJournalEditor.apply(oneOff, replacing: nil, in: original, referenceDate: f.day(2026, 1, 1), calendar: f.calendar)
         XCTAssertEqual(imported.transactions.count, 3)
     }
@@ -216,6 +220,8 @@ final class RecurringJournalEditorTests: XCTestCase {
         var early = f.rows(original)[1]; early.date = f.day(2025, 12, 10)
         XCTAssertThrowsError(try RecurringJournalEditor.apply(early, replacing: early.id, in: original, calendar: f.calendar))
         original.preservesImportedRecurringMaterializations = true
+        // Legacy imports predate the per-series override now set for new rules.
+        for index in original.transactions.indices { original.transactions[index].recurrenceRule?.preservesImportedMaterializations = nil }
         for index in original.transactions.indices { original.transactions[index].recurrenceRule?.frequency = .custom }
         var anchor = f.rows(original)[0]; anchor.date = f.day(2026, 1, 5)
         XCTAssertThrowsError(try RecurringJournalEditor.apply(anchor, replacing: anchor.id, in: original, scope: .future, calendar: f.calendar))

@@ -3,17 +3,29 @@ import Charts
 
 struct RegisterChart: View {
     let months: [RegisterMonth]
-    @State private var monthsShown = 6
-    @State private var currencyID: UUID?
+    let isLoading: Bool
+    @AppStorage("display.chartMonths", store: MobileDisplayPreferences.defaults) private var monthsShown = 6
+    @AppStorage private var currencyID: String
     @State private var selectedDate: Date?
+    @ScaledMetric(relativeTo: .caption) private var captionHeight = 18
+
+    init(months: [RegisterMonth], ledgerID: UUID?, isLoading: Bool = false) {
+        self.months = months
+        self.isLoading = isLoading
+        _currencyID = AppStorage(wrappedValue: "", "display.chartCurrency.\(ledgerID?.uuidString ?? "all")", store: MobileDisplayPreferences.defaults)
+    }
 
     private var currencies: [RegisterMoney] {
         var seen = Set<UUID>()
         return months.flatMap { $0.income + $0.expenses }.filter { seen.insert($0.id).inserted }.sorted { $0.symbol < $1.symbol }
     }
-    private var selectedCurrency: UUID? { currencyID ?? currencies.first?.id }
+    private var selectedCurrency: UUID? {
+        let preferred = UUID(uuidString: currencyID)
+        return currencies.first { $0.id == preferred }?.id ?? currencies.first?.id
+    }
+    private var period: Int { [6, 12, 24].contains(monthsShown) ? monthsShown : 6 }
     private var visible: [RegisterMonth] {
-        let cutoff = Calendar.current.date(byAdding: .month, value: -(monthsShown - 1), to: Calendar.current.dateInterval(of: .month, for: Date())!.start)!
+        let cutoff = Calendar.current.date(byAdding: .month, value: -(period - 1), to: Calendar.current.dateInterval(of: .month, for: Date())!.start)!
         return months.filter { $0.date >= cutoff && $0.date <= Date() }.sorted { $0.date < $1.date }
     }
 
@@ -23,16 +35,18 @@ struct RegisterChart: View {
                 Text("Cash Flow").font(.headline)
                 Spacer()
                 if currencies.count > 1 {
-                    Picker("Currency", selection: Binding(get: { selectedCurrency }, set: { currencyID = $0 })) {
+                    Picker("Currency", selection: Binding(get: { selectedCurrency }, set: { currencyID = $0?.uuidString ?? "" })) {
                         ForEach(currencies) { Text($0.symbol).tag(Optional($0.id)) }
                     }.labelsHidden()
                 }
-                Picker("Period", selection: $monthsShown) {
+                Picker("Period", selection: Binding(get: { period }, set: { monthsShown = $0 })) {
                     Text("6 Months").tag(6); Text("12 Months").tag(12); Text("24 Months").tag(24)
                 }.labelsHidden()
-            }
-            if visible.isEmpty {
-                Text("No cash flow in this period").foregroundStyle(.secondary).frame(height: 140)
+            }.frame(minHeight: 32)
+            if isLoading {
+                ProgressView("Loading Transactions").font(.footnote).frame(height: 170)
+            } else if visible.isEmpty {
+                Text("No cash flow in this period").foregroundStyle(.secondary).frame(height: 170)
             } else {
                 Chart(visible) { month in
                     BarMark(x: .value("Month", month.date, unit: .month), y: .value("Amount", value(month.income)))
@@ -44,12 +58,25 @@ struct RegisterChart: View {
                 .chartXAxis { AxisMarks(values: .stride(by: .month)) { AxisValueLabel(format: .dateTime.month(.abbreviated)) } }
                 .chartXSelection(value: $selectedDate)
                 .frame(height: 170)
-                if let selectedDate, let month = visible.first(where: { Calendar.current.isDate($0.date, equalTo: selectedDate, toGranularity: .month) }) {
-                    Text("\(month.date.formatted(.dateTime.month(.wide).year())): \(moneyString(Decimal(value(month.income) + value(month.expenses)), symbol: currencies.first(where: { $0.id == selectedCurrency })?.symbol ?? "USD")) net")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
             }
-        }.padding(.vertical, 4)
+            Text(selectionSummary ?? " ")
+                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading).frame(height: captionHeight)
+                .opacity(selectionSummary == nil ? 0 : 1).accessibilityHidden(selectionSummary == nil)
+        }
+        .padding(.vertical, 4)
+        .onChange(of: currencyID) { selectedDate = nil }
+        .onChange(of: monthsShown) { selectedDate = nil }
+    }
+    private var selectionSummary: String? {
+        guard !isLoading, !visible.isEmpty else { return nil }
+        let selectedMonth = selectedDate.flatMap { date in visible.first { Calendar.current.isDate($0.date, equalTo: date, toGranularity: .month) } }
+        let months = selectedMonth.map { [$0] } ?? visible
+        let net = months.reduce(Decimal.zero) { total, month in
+            total + (month.income.first { $0.id == selectedCurrency }?.amount ?? 0) + (month.expenses.first { $0.id == selectedCurrency }?.amount ?? 0)
+        }
+        let label = selectedMonth?.date.formatted(.dateTime.month(.wide).year()) ?? "\(period) months"
+        return "\(label): \(moneyString(net, symbol: currencies.first(where: { $0.id == selectedCurrency })?.symbol ?? "USD")) net"
     }
     private func value(_ values: [RegisterMoney]) -> Double { NSDecimalNumber(decimal: values.first { $0.id == selectedCurrency }?.amount ?? 0).doubleValue }
 }

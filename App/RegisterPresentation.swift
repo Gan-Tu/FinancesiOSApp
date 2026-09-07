@@ -87,11 +87,6 @@ struct RegisterCashFlow {
 /// All totals keep currencies separate. Account registers include descendants and
 /// running balances include earlier entries even when a search hides those rows.
 struct RegisterPresentation {
-    enum ScrollTarget: Hashable {
-        case day(Date)
-        case chart
-    }
-
     let months: [RegisterMonth]
     let amounts: [UUID: [RegisterMoney]]
     let balances: [UUID: [RegisterMoney]]
@@ -99,7 +94,7 @@ struct RegisterPresentation {
     /// Sync timestamps, connection preferences, and security state do not change
     /// register calculations. Array equality is cheap for unchanged COW buffers.
     static func hasSameContent(_ lhs: JournalData, _ rhs: JournalData) -> Bool {
-        lhs.selectedLedgerID == rhs.selectedLedgerID && lhs.transactions == rhs.transactions &&
+        lhs.selectedLedgerID == rhs.selectedLedgerID && lhs.ledgers == rhs.ledgers && lhs.transactions == rhs.transactions &&
             lhs.accounts == rhs.accounts && lhs.commodities == rhs.commodities
     }
 
@@ -109,11 +104,6 @@ struct RegisterPresentation {
         let days = months.flatMap(\.days).map(\.date)
         guard let newest = days.first, Self.isFuture(newest, now: now, calendar: calendar) else { return nil }
         return days.first { !Self.isFuture($0, now: now, calendar: calendar) } ?? days.last
-    }
-
-    func initialScrollTarget(showsChart: Bool, now: Date = Date(), calendar: Calendar = .current) -> ScrollTarget? {
-        if let day = initialDay(now: now, calendar: calendar) { return .day(day) }
-        return showsChart && !months.isEmpty ? .chart : nil
     }
 
     static func isFuture(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> Bool {
@@ -207,4 +197,65 @@ struct RegisterPresentation {
         }
         return RegisterPresentation(months: months, amounts: amounts, balances: balances)
     }
+}
+
+/// Immutable Foundation-value snapshots; no mutable store or UI objects cross
+/// the worker boundary. Receipt contents remain on disk.
+struct RegisterRenderRequest: @unchecked Sendable {
+    let data: JournalData
+    let rows: [LedgerTransaction]
+    let scope: MobileTransactionScope
+    let search: String
+    let dateInterval: DateInterval?
+    let transactionIDs: Set<UUID>?
+
+    func matches(_ other: RegisterRenderRequest) -> Bool {
+        scope == other.scope && search == other.search && dateInterval == other.dateInterval &&
+            transactionIDs == other.transactionIDs && RegisterPresentation.hasSameContent(data, other.data) && rows == other.rows
+    }
+}
+
+struct RegisterRenderResult: @unchecked Sendable {
+    let presentation: RegisterPresentation
+}
+
+struct RegisterSearchResult: @unchecked Sendable {
+    let rows: [LedgerTransaction]
+}
+
+actor RegisterRenderWorker {
+    static let shared = RegisterRenderWorker()
+
+    func render(_ request: RegisterRenderRequest) async throws -> RegisterRenderResult {
+        try Task.checkCancellation()
+        #if DEBUG
+        if CommandLine.arguments.contains("--demo-slow-register") { try await Task.sleep(for: .seconds(2)) }
+        #endif
+        let rows = try filteredRows(request)
+        let presentation = RegisterPresentation.build(data: request.data, rows: rows, scope: request.scope)
+        try Task.checkCancellation()
+        return RegisterRenderResult(presentation: presentation)
+    }
+
+    func search(_ request: RegisterRenderRequest) throws -> RegisterSearchResult {
+        try Task.checkCancellation()
+        return RegisterSearchResult(rows: try filteredRows(request))
+    }
+
+    private func filteredRows(_ request: RegisterRenderRequest) throws -> [LedgerTransaction] {
+        let query = request.search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let accounts = Dictionary(uniqueKeysWithValues: request.data.accounts.map { ($0.id, $0.name) })
+        let ledgers = Dictionary(uniqueKeysWithValues: request.data.ledgers.map { ($0.id, $0.name) })
+        return try request.rows.filter { transaction in
+            try Task.checkCancellation()
+            if let interval = request.dateInterval, !(transaction.date >= interval.start && transaction.date < interval.end) { return false }
+            if let ids = request.transactionIDs, !ids.contains(transaction.id) { return false }
+            guard !query.isEmpty else { return true }
+            let fields = [transaction.note, transaction.payee, transaction.number, ledgers[transaction.ledgerID] ?? ""]
+                + transaction.postings.compactMap { accounts[$0.accountID] }
+                + transaction.postings.map { String(describing: $0.amount) }
+            return fields.joined(separator: " ").lowercased().contains(query)
+        }
+    }
+
 }

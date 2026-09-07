@@ -1,19 +1,7 @@
 Finances v2 for iOS
 
-When opening or leaving journals and transaction lists, the top navigation/status area should stay covered without flashing transaction text behind it.
+Backup: Export Backup should prepare a ZIP with all journals and receipts, then open Apple's share sheet. Try Save to Files or an installed provider such as Dropbox. You can leave the Backup screen or background the app during preparation; return to share the completed file. Large exports now stream receipt bytes instead of building a giant in-memory document. Import the saved ZIP and check transactions, balances, templates and attachments. Restore replaces current journals after confirmation and turns Cloud Sync off. Older mobile backups and .fin packages still import. Deleted repeating occurrences should stay deleted after restore/reopen; new repeating schedules should still generate normally. Import Bank Statements has been removed.
 
-First-level accounts now align with their category heading, with only true subaccounts indented. Chart visibility and each journal's account expansion choices persist across navigation and relaunch. Long account names stay on one line. With future transactions present, All and account registers should open near today even when charts are enabled. Future entries remain above and reachable by scrolling; the chart preference stays enabled until you turn it off.
+Navigation: Journals has space below its heading. Opening All or an account register should land near today without flashing future transactions or shifting its header. Future entries remain above and reachable. Turn the chart on, leave and return: the chart should stay visibly open alongside today's rows. Chart loading and selection should not move the rows. Search from the bottom magnifying glass; register search keeps the current account/currency/filter scope and also accepts amounts.
 
-If an account, currency, template or its journal is deleted while its editor is open, saving should show an error and preserve the deletion.
-
-Swipe journals or accounts left: Delete should be red, while Rename/Edit stays blue. Settings action menus have larger tap targets and descriptive accessibility labels.
-
-Sync now shows Uploading or Downloading in the journal footer and Cloud Sync screen. Upload progress counts completed changes; downloads show an activity bar and changes received because iCloud does not supply a download total. Close the Cloud Sync sheet with Done or by swiping down and confirm sync continues in the footer. Turning Cloud Sync off should cancel it; finishing or turning it off should hide the progress bar.
-
-Please test the simplified All Transactions view and Templates customization: no batch Edit button, permanent delete/reorder controls, and + at the top right. Check left-swipe Duplicate/Delete, duplicate date choices, recurring deletion scopes, and right-swipe cleared status.
-
-Check receipt previews, backup restore, and iPhone/Mac sync after offline changes. Receipt files should survive restores, interrupted uploads, and shared-file deletions. Check long repeating schedules and nested accounts.
-
-With Password Lock enabled, leave an editor open, background and reopen the app, then unlock and confirm the unsaved draft remains. Ordinary syncing should not relock an active session.
-
-Report issues through TestFlight feedback with the build number and steps to reproduce.
+Check scrolling with large journals, chart toggles, account expansion, transaction details, left-swipe Duplicate/Delete and right-swipe cleared status. Cloud Sync should continue after dismissing its sheet. Report problems with the build number and reproduction steps.

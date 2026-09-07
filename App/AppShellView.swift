@@ -83,7 +83,7 @@ struct AppShellView: View {
             case .templates(let ledgerID):
                 TemplateManagementSheet(ledgerID: ledgerID)
             case .quickSearch:
-                QuickSearchSheet(navigationPath: $navigationPath, presentedSheet: $presentedSheet, route: $route, contextLedgerID: currentLedgerID)
+                QuickSearchSheet(navigationPath: $navigationPath, presentedSheet: $presentedSheet, route: $route, contextLedgerID: currentLedgerID, contextScope: currentRegisterScope)
             }
         }
         .background {
@@ -138,6 +138,15 @@ struct AppShellView: View {
 
     private var currentLedgerID: UUID? {
         navigationPath.reversed().compactMap { $0.resolvedLedgerID(in: store) }.first
+    }
+
+    private var currentRegisterScope: MobileTransactionScope? {
+        switch navigationPath.last {
+        case .transactions(let scope, _, _): scope
+        case .account(let id): .account(id)
+        case .currency(let id): .currency(id)
+        default: nil
+        }
     }
 
     private var currentAccountID: UUID? {

@@ -177,6 +177,9 @@ struct Ledger: Identifiable, Codable, Hashable {
     var id = UUID()
     var name: String
     var listIndex: Int = 0
+    /// A backup imported as a separate journal can retain its existing
+    /// recurrence materializations without changing other journals' policy.
+    var preservesImportedRecurringMaterializations: Bool? = nil
 }
 
 struct Commodity: Identifiable, Codable, Hashable {
@@ -218,6 +221,9 @@ struct RecurrenceRule: Identifiable, Codable, Hashable {
     // Optional for existing SQLite, backup, and sync payloads. Schedule fields
     // and occurrence identity remain separate from changes to future details.
     var templateHistory: RecurrenceTemplateHistory? = nil
+    /// Imported backups omit deleted-occurrence tombstones. Preserve their
+    /// existing series until an explicit schedule change regenerates it.
+    var preservesImportedMaterializations: Bool? = nil
 }
 
 struct RecurrenceTransactionTemplate: Codable, Hashable {
@@ -473,6 +479,16 @@ struct JournalData: Codable {
         self.appearance = appearance
         self.security = security
         self.preservesImportedRecurringMaterializations = preservesImportedRecurringMaterializations
+    }
+
+    func preservesRecurringMaterializations(for transaction: LedgerTransaction) -> Bool {
+        transaction.recurrenceRule?.preservesImportedMaterializations
+            ?? preservesRecurringMaterializations(in: transaction.ledgerID)
+    }
+
+    func preservesRecurringMaterializations(in ledgerID: UUID) -> Bool {
+        ledgers.first(where: { $0.id == ledgerID })?.preservesImportedRecurringMaterializations
+            ?? preservesImportedRecurringMaterializations
     }
 
     private enum CodingKeys: String, CodingKey {

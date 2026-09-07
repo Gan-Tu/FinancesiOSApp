@@ -150,6 +150,28 @@ final class CompanionParityTests: XCTestCase {
 }
 
 final class RegisterBalanceCurrencyTests: XCTestCase {
+    @MainActor func testBackgroundRenderFiltersAmountsAndPreservesPriorBalances() async throws {
+        let fixture = makeFixture()
+        let request = RegisterRenderRequest(data: fixture.data, rows: fixture.data.transactions, scope: .account(fixture.cash.id), search: "-25", dateInterval: nil, transactionIDs: nil)
+        let result = try await RegisterRenderWorker.shared.render(request).presentation
+        XCTAssertEqual(result.months.flatMap(\.days).flatMap(\.transactions).map(\.id), [fixture.data.transactions[4].id])
+        XCTAssertEqual(result.balances[fixture.data.transactions[4].id], [RegisterMoney(commodityID: fixture.usd.id, symbol: "USD", amount: 975)])
+    }
+
+    @MainActor func testCanceledBackgroundRenderProducesNoResult() async throws {
+        let fixture = makeFixture()
+        let request = RegisterRenderRequest(data: fixture.data, rows: fixture.data.transactions, scope: .all, search: "", dateInterval: nil, transactionIDs: nil)
+        let gate = AsyncStream<Void>.makeStream()
+        let task = Task {
+            for await _ in gate.stream { break }
+            return try await RegisterRenderWorker.shared.render(request)
+        }
+        task.cancel()
+        gate.continuation.finish()
+        do { _ = try await task.value; XCTFail("A canceled render must not replace current rows") }
+        catch is CancellationError { }
+    }
+
     func testInitialPositionPrioritizesTodayOverChartAndDistantFutureEntries() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
@@ -160,21 +182,18 @@ final class RegisterBalanceCurrencyTests: XCTestCase {
         }
         for scope in [MobileTransactionScope.all, .account(fixture.cash.id), .account(fixture.group.id)] {
             let result = RegisterPresentation.build(data: fixture.data, rows: fixture.data.transactions, scope: scope, calendar: calendar)
-            for showsChart in [false, true] {
-                XCTAssertEqual(result.initialScrollTarget(showsChart: showsChart, now: now, calendar: calendar), .day(calendar.startOfDay(for: now)))
-            }
+            XCTAssertEqual(result.initialDay(now: now, calendar: calendar), calendar.startOfDay(for: now))
             XCTAssertEqual(result.months.flatMap(\.days).flatMap(\.transactions).count, 6)
         }
         let withoutToday = fixture.data.transactions.filter { !calendar.isDate($0.date, inSameDayAs: now) }
         let recent = RegisterPresentation.build(data: fixture.data, rows: withoutToday, scope: .all, calendar: calendar)
-        XCTAssertEqual(recent.initialScrollTarget(showsChart: true, now: now, calendar: calendar), .day(calendar.startOfDay(for: fixture.data.transactions[1].date)))
+        XCTAssertEqual(recent.initialDay(now: now, calendar: calendar), calendar.startOfDay(for: fixture.data.transactions[1].date))
         let future = fixture.data.transactions.filter { $0.date > now }
         let futureOnly = RegisterPresentation.build(data: fixture.data, rows: future, scope: .all, calendar: calendar)
-        XCTAssertEqual(futureOnly.initialScrollTarget(showsChart: true, now: now, calendar: calendar), .day(calendar.startOfDay(for: fixture.data.transactions[3].date)))
+        XCTAssertEqual(futureOnly.initialDay(now: now, calendar: calendar), calendar.startOfDay(for: fixture.data.transactions[3].date))
         let history = fixture.data.transactions.filter { $0.date < now }
         let historyOnly = RegisterPresentation.build(data: fixture.data, rows: history, scope: .all, calendar: calendar)
-        XCTAssertNil(historyOnly.initialScrollTarget(showsChart: false, now: now, calendar: calendar))
-        XCTAssertEqual(historyOnly.initialScrollTarget(showsChart: true, now: now, calendar: calendar), .chart)
+        XCTAssertNil(historyOnly.initialDay(now: now, calendar: calendar))
     }
 
     func testSyncOnlyChangesDoNotInvalidateRegisterContent() {
@@ -191,6 +210,8 @@ final class RegisterBalanceCurrencyTests: XCTestCase {
         updated = original; updated.commodities[0].symbol = "CAD"
         XCTAssertFalse(RegisterPresentation.hasSameContent(original, updated))
         updated = original; updated.selectedLedgerID = UUID()
+        XCTAssertFalse(RegisterPresentation.hasSameContent(original, updated))
+        updated = original; updated.ledgers[0].name = "Renamed journal"
         XCTAssertFalse(RegisterPresentation.hasSameContent(original, updated))
     }
 

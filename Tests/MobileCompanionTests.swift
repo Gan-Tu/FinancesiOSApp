@@ -74,6 +74,55 @@ final class MobileCompanionTests: XCTestCase {
         XCTAssertEqual(reopened.data.transactionTemplates, templates)
     }
 
+    func testBackupRestoreDoesNotRegenerateDeletedRepeatingOccurrences() throws {
+        for deletedIndex in [0, 1] {
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            let source = MobileLedgerStore(supportDirectory: folder.appendingPathComponent("source"), initialData: DemoData.fixture())
+            var draft = source.makeTransactionDraft()
+            draft.note = "Backup repeating series"
+            draft.postings[0].amount = "-10"; draft.postings[1].amount = "10"
+            draft.repeatFrequency = .monthly; draft.repeatOccurrenceCount = 3
+            source.saveTransaction(draft)
+            XCTAssertNil(source.validationError)
+            let series = source.data.transactions.filter { $0.note == draft.note }.sorted { $0.date < $1.date }
+            XCTAssertEqual(series.count, 3)
+            let ruleID = try XCTUnwrap(series.first?.recurrenceRule?.id)
+            source.deleteTransaction(series[deletedIndex].id, scope: .occurrence)
+            XCTAssertNil(source.validationError)
+            let expected = Set(series.enumerated().filter { $0.offset != deletedIndex }.map { $0.element.id })
+            let backup = try source.exportBackupFile()
+            let receiverFolder = folder.appendingPathComponent("receiver")
+            let receiver = MobileLedgerStore(supportDirectory: receiverFolder, initialData: DemoData.fixture())
+            receiver.importBackup(from: backup)
+            XCTAssertNil(receiver.validationError)
+            try receiver.flushLocalChanges()
+            let sqliteData = try XCTUnwrap(receiver.cloudKitSQLiteStore.loadData())
+            XCTAssertTrue(sqliteData.transactions.filter { $0.recurrenceRule?.id == ruleID }.allSatisfy { $0.recurrenceRule?.preservesImportedMaterializations == true })
+            let reopened = MobileLedgerStore(supportDirectory: receiverFolder)
+            XCTAssertFalse(reopened.requiresJournalRecovery)
+            XCTAssertEqual(Set(reopened.data.transactions.filter { $0.recurrenceRule?.id == ruleID }.map(\.id)), expected)
+            let existing = try XCTUnwrap(reopened.data.transactions.first { $0.recurrenceRule?.id == ruleID })
+            var edit = reopened.draft(for: existing); edit.note = "Restored detail edit"
+            reopened.saveTransaction(edit)
+            XCTAssertNil(reopened.validationError)
+            try reopened.flushLocalChanges()
+            let final = MobileLedgerStore(supportDirectory: receiverFolder)
+            XCTAssertEqual(Set(final.data.transactions.filter { $0.recurrenceRule?.id == ruleID }.map(\.id)), expected)
+            var newSeries = final.makeTransactionDraft()
+            newSeries.note = "New repeating series after restore"
+            newSeries.postings[0].amount = "-15"; newSeries.postings[1].amount = "15"
+            newSeries.repeatFrequency = .monthly; newSeries.repeatOccurrenceCount = 3
+            final.saveTransaction(newSeries)
+            XCTAssertNil(final.validationError)
+            XCTAssertEqual(final.data.transactions.filter { $0.note == newSeries.note }.count, 3)
+            try final.flushLocalChanges()
+            let newRows = try XCTUnwrap(final.cloudKitSQLiteStore.loadData()).transactions.filter { $0.note == newSeries.note }
+            XCTAssertEqual(newRows.count, 3)
+            XCTAssertTrue(newRows.allSatisfy { $0.recurrenceRule?.preservesImportedMaterializations == false })
+        }
+    }
+
     func testNestedReceiptsSurviveRestoreReopenAndOtherReceiptDeletion() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -101,7 +150,7 @@ final class MobileCompanionTests: XCTestCase {
     }
 
     func testRejectedBackupsPreserveOriginalReceiptBytesAndJournal() throws {
-        for mode in ["missing-payload", "missing-package", "invalid-journal", "database-failure"] {
+        for mode in ["missing-payload", "missing-package", "invalid-journal", "duplicate-account", "duplicate-transaction", "database-failure"] {
             let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             defer { try? FileManager.default.removeItem(at: folder) }
             let store = MobileLedgerStore(supportDirectory: folder, initialData: DemoData.fixture())
@@ -123,6 +172,8 @@ final class MobileCompanionTests: XCTestCase {
                 candidate.transactions[1].attachment = AttachmentContainer(assets: [AttachmentAsset(originalFilename: "missing.txt", storedPath: "Attachments/missing.txt", mimeType: "text/plain", sizeBytes: 1)])
             }
             if mode == "invalid-journal" { candidate.transactions[0].postings[0].accountID = UUID() }
+            if mode == "duplicate-account" { candidate.accounts.append(candidate.accounts[0]) }
+            if mode == "duplicate-transaction" { candidate.transactions.append(candidate.transactions[0]) }
             if mode == "database-failure" {
                 try executeReviewSQL("CREATE TRIGGER reject_restore BEFORE DELETE ON ledgers BEGIN SELECT RAISE(ABORT, 'Synthetic restore failure'); END", at: store.cloudKitSQLiteStore.databaseURL)
             }
@@ -237,9 +288,7 @@ final class MobileCompanionTests: XCTestCase {
             let submitted = try store.cloudKitSQLiteStore.claimCloudKitChanges(contextKey: context, limit: 1000)
             let receipt = try XCTUnwrap(submitted.first { $0.recordType == "attachment_asset" })
             if restore {
-                let document = try XCTUnwrap(store.exportBackupDocument())
-                let backup = folder.appendingPathComponent("backup.json")
-                try document.data.write(to: backup)
+                let backup = try store.exportBackupFile()
                 store.importBackup(from: backup)
             } else { store.deleteTransaction(row.id) }
             XCTAssertNil(store.validationError)
@@ -480,9 +529,12 @@ final class MobileCompanionTests: XCTestCase {
         let reopened = MobileLedgerStore(supportDirectory: folder, initialData: JournalData())
         let restored = try XCTUnwrap(reopened.transaction(row.id)?.attachment?.assets.first)
         XCTAssertEqual(try Data(contentsOf: reopened.attachmentURL(for: restored)), bytes)
-        let document = try XCTUnwrap(reopened.exportBackupDocument())
-        let payload = try JSONDecoder.appDecoder.decode(MobileBackupPayload.self, from: document.data)
-        XCTAssertEqual(payload.attachments.first?.data, bytes)
+        let backup = try reopened.exportBackupFile()
+        let receiver = MobileLedgerStore(supportDirectory: folder.appendingPathComponent("receiver"), initialData: JournalData())
+        receiver.importBackup(from: backup)
+        XCTAssertNil(receiver.validationError)
+        let received = try XCTUnwrap(receiver.transaction(row.id)?.attachment?.assets.first)
+        XCTAssertEqual(try Data(contentsOf: receiver.attachmentURL(for: received)), bytes)
         reopened.deleteTransaction(row.id)
         XCTAssertEqual(reopened.backupAttachmentCount, 0)
     }

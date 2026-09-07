@@ -58,7 +58,7 @@ struct JournalsHomeScreen: View {
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer(minLength: 8)
-                            let count = store.transactions(scope: .uncleared, ledgerID: ledger.id).count
+                            let count = store.unclearedTransactionCount(ledgerID: ledger.id)
                             if count > 0 { Text(count.formatted()).foregroundStyle(.secondary).monospacedDigit() }
                         }
                         .padding(.vertical, 2)
@@ -81,6 +81,7 @@ struct JournalsHomeScreen: View {
         }
         .listStyle(.insetGrouped)
         .compactGroupedForm()
+        .contentMargins(.top, 16, for: .scrollContent)
         .overlay {
             if store.orderedLedgers.isEmpty {
                 ContentUnavailableView {
@@ -108,6 +109,7 @@ struct JournalsHomeScreen: View {
 struct JournalOverviewScreen: View {
     @EnvironmentObject private var store: MobileLedgerStore
     @Environment(\.editMode) private var editMode
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let ledgerID: UUID
     @Binding var navigationPath: [MobileRoute]
     @Binding var route: EditorRoute?
@@ -148,7 +150,7 @@ struct JournalOverviewScreen: View {
             TransactionLinksSection(ledgerID: ledgerID) { navigationPath.append(.templates(ledgerID)) }
             Section {
                 ForEach(AccountKind.allCases) { kind in
-                    Button { toggleKind(kind) } label: {
+                    Button { withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { toggleKind(kind) } } label: {
                         HStack {
                             Text(groupTitle(kind)).fontWeight(.semibold)
                                 .accessibilityIdentifier("account-kind-title-\(kind.rawValue)")
@@ -190,7 +192,7 @@ struct JournalOverviewScreen: View {
                             .contextMenu {
                                 if node.hasChildren {
                                     Button(collapsedAccounts.contains(node.id) ? "Expand Subaccounts" : "Collapse Subaccounts") {
-                                        toggleAccount(node.id)
+                                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { toggleAccount(node.id) }
                                     }
                                 }
 
@@ -324,6 +326,7 @@ private struct SectionActionHeader: View {
 
 struct TransactionListScreen: View {
     @EnvironmentObject private var store: MobileLedgerStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let scope: MobileTransactionScope
     let title: String
     @Binding var route: EditorRoute?
@@ -331,44 +334,60 @@ struct TransactionListScreen: View {
     var transactionIDs: Set<UUID>? = nil
     var ledgerID: UUID? = nil
     let openTransaction: (UUID) -> Void
-    @State private var searchText = ""
     @State private var pendingDeletion: LedgerTransaction?
     @State private var pendingDuplication: LedgerTransaction?
     @AppStorage("display.showsTransactionChart", store: MobileDisplayPreferences.defaults) private var showsChart = false
     @State private var selectedMonth: Date?
     @State private var presentation = RegisterPresentation(months: [], amounts: [:], balances: [:])
-    @State private var positionedInitialRows = false
+    @State private var renderRequest: RegisterRenderRequest?
+    @State private var renderID = UUID()
+    @State private var isActive = false
+    @State private var hasLoaded = false
+    @State private var contentReady = false
+    @State private var initialDay: Date?
+    @State private var initialScrollRequested = false
+    @State private var loadingVisible = false
+    @State private var loadError: String?
 
-    private typealias ScrollTarget = RegisterPresentation.ScrollTarget
-
-    private var rows: [LedgerTransaction] {
-        store.transactions(scope: scope, ledgerID: ledgerID, search: searchText).filter { row in
-            (dateInterval.map { row.date >= $0.start && row.date < $0.end } ?? true) && (transactionIDs?.contains(row.id) ?? true)
-        }
-    }
+    private enum ScrollTarget: Hashable { case day(Date) }
 
     var body: some View {
         ScrollViewReader { proxy in
             List {
-                if showsChart && dateInterval == nil {
-                    RegisterChart(months: presentation.months)
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
-                        .id(ScrollTarget.chart)
-                }
                 ForEach(presentation.months) { month in monthSection(month) }
             }
             .listStyle(.plain)
+            .opacity(contentReady ? 1 : 0)
+            .allowsHitTesting(contentReady)
+            .accessibilityHidden(!contentReady)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if showsChart && dateInterval == nil {
+                    RegisterChart(months: presentation.months, ledgerID: ledgerID ?? store.selectedLedgerID, isLoading: !hasLoaded)
+                        .padding(.horizontal, 20).padding(.vertical, 8)
+                        .background(Color(uiColor: .systemBackground))
+                        .overlay(alignment: .bottom) { Divider() }
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("register-chart-panel")
+                }
+            }
             .contentMargins(.bottom, 24, for: .scrollContent)
             .environment(\.defaultMinListRowHeight, 0)
-            .searchable(text: $searchText, prompt: "Notes, payee, account or amount")
-            .overlay { if presentation.months.isEmpty { ContentUnavailableView(searchText.isEmpty ? "No Transactions" : "No Results", systemImage: searchText.isEmpty ? "arrow.left.arrow.right" : "magnifyingglass", description: Text(searchText.isEmpty ? "Use the compose button to add your first transaction." : "Try a different search.")) } }
+            .overlay {
+                if let loadError {
+                    ContentUnavailableView("Couldn’t Load Transactions", systemImage: "exclamationmark.triangle", description: Text(loadError))
+                } else if !contentReady && loadingVisible && !(showsChart && dateInterval == nil) {
+                    ProgressView("Loading Transactions").accessibilityIdentifier("register-loading")
+                } else if hasLoaded && presentation.months.isEmpty {
+                    ContentUnavailableView("No Transactions", systemImage: "arrow.left.arrow.right", description: Text("Use the compose button to add your first transaction."))
+                }
+            }
             .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     if dateInterval == nil {
                         Button(showsChart ? "Hide Chart" : "Show Chart", systemImage: showsChart ? "chart.bar.fill" : "chart.bar") {
-                            withAnimation { showsChart.toggle() }
+                            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.22)) { showsChart.toggle() }
                         }
                         .accessibilityIdentifier("toggle-transaction-chart")
                         .accessibilityValue(showsChart ? "Shown" : "Hidden")
@@ -382,31 +401,23 @@ struct TransactionListScreen: View {
             }
             .modifier(TransactionDeletionConfirmation(transaction: $pendingDeletion))
             .modifier(TransactionDuplicateConfirmation(transaction: $pendingDuplication))
-            .task(id: searchText) {
-                if !searchText.isEmpty {
-                    do { try await Task.sleep(for: .milliseconds(150)) }
-                    catch { return }
-                }
-                guard !Task.isCancelled else { return }
-                refresh()
+            .onAppear { isActive = true; scheduleRefresh() }
+            .onDisappear { isActive = false; renderRequest = nil }
+            .onReceive(store.$data.removeDuplicates(by: RegisterPresentation.hasSameContent).debounce(for: .milliseconds(40), scheduler: RunLoop.main)) { _ in scheduleRefresh() }
+            .task(id: renderID) { [renderID, renderRequest] in await renderCurrentRequest(renderRequest, id: renderID) }
+            .task(id: contentReady) {
+                guard !contentReady else { loadingVisible = false; return }
+                do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
+                if !contentReady { loadingVisible = true }
             }
-            .onReceive(store.$data.removeDuplicates(by: RegisterPresentation.hasSameContent).debounce(for: .milliseconds(40), scheduler: RunLoop.main)) { _ in refresh() }
-            .task(id: presentation.months.isEmpty) {
-                guard !presentation.months.isEmpty, !positionedInitialRows else { return }
-                guard dateInterval == nil, searchText.isEmpty else { return }
+            .task(id: initialDay) {
+                guard let day = initialDay, !contentReady, isActive else { return }
                 await Task.yield()
                 guard !Task.isCancelled else { return }
-                positionedInitialRows = true
-                if let target = presentation.initialScrollTarget(showsChart: showsChart) {
-                    proxy.scrollTo(target, anchor: .top)
-                }
-            }
-            .onChange(of: showsChart) {
-                if showsChart {
-                    Task { @MainActor in
-                        await Task.yield()
-                        proxy.scrollTo(ScrollTarget.chart, anchor: .top)
-                    }
+                var update = Transaction(animation: nil); update.disablesAnimations = true
+                withTransaction(update) {
+                    proxy.scrollTo(ScrollTarget.day(day), anchor: .top)
+                    initialScrollRequested = true
                 }
             }
         }
@@ -423,6 +434,14 @@ struct TransactionListScreen: View {
                     .id(ScrollTarget.day(day.date))
                     .font(.subheadline.weight(.bold)).foregroundColor(Color(uiColor: .label))
                     .padding(.top, 14).padding(.bottom, 10)
+                    .background {
+                        if initialDay == day.date && !contentReady {
+                            RegisterInitialPositionProbe(armed: initialScrollRequested) {
+                                guard initialDay == day.date, !contentReady else { return }
+                                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.12)) { contentReady = true }
+                            }
+                        }
+                    }
                     .listRowInsets(EdgeInsets(top: 0, leading: 28, bottom: 0, trailing: 20))
                     .listRowSeparator(.hidden)
                 ForEach(day.transactions) { transaction in
@@ -480,7 +499,37 @@ struct TransactionListScreen: View {
         return (store.data.dateFormat == .iso ? dateString(date, format: .iso) : date.formatted(.dateTime.month(.wide).day().year())).uppercased()
     }
 
-    private func refresh() { presentation = RegisterPresentation.build(data: store.data, rows: rows, scope: scope) }
+    private func scheduleRefresh() {
+        guard isActive else { return }
+        let request = RegisterRenderRequest(data: store.data, rows: store.transactions(scope: scope, ledgerID: ledgerID), scope: scope, search: "", dateInterval: dateInterval, transactionIDs: transactionIDs)
+        if let previous = renderRequest, request.matches(previous) { return }
+        renderRequest = request
+        renderID = UUID()
+    }
+
+    private func renderCurrentRequest(_ snapshot: RegisterRenderRequest?, id: UUID) async {
+        guard let request = snapshot, isActive, id == renderID, !Task.isCancelled else { return }
+        do {
+            let result = try await RegisterRenderWorker.shared.render(request)
+            guard !Task.isCancelled, isActive, id == renderID else { return }
+            var update = Transaction(animation: nil); update.disablesAnimations = true
+            withTransaction(update) {
+                presentation = result.presentation
+                hasLoaded = true
+                loadError = nil
+                if !contentReady {
+                    initialScrollRequested = false
+                    initialDay = dateInterval == nil ? presentation.initialDay() : nil
+                    if initialDay == nil { contentReady = true }
+                }
+            }
+        } catch is CancellationError { return }
+        catch {
+            guard id == renderID else { return }
+            loadError = error.localizedDescription
+            hasLoaded = true; contentReady = true
+        }
+    }
 
     private func summaryPill(_ label: String, value: RegisterMoney, color: Color, month: Date) -> some View {
         Button { selectedMonth = month } label: {
@@ -1048,34 +1097,44 @@ struct QuickSearchSheet: View {
     @Binding var route: EditorRoute?
     @State private var searchText = ""
     @State private var searchResults = MobileQuickSearchResults.empty
+    @State private var isSearching = false
+    @State private var searchRevision = UUID()
 
     var contextLedgerID: UUID? = nil
+    var contextScope: MobileTransactionScope? = nil
 
     var body: some View {
         NavigationStack {
             List {
                 if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Section("Suggestions") {
-                        suggestion("All Transactions", "arrow.right") {
-                            open(.all, title: "All")
+                    if contextScope != nil {
+                        Text("Search this register by notes, payee, account or amount.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Section("Suggestions") {
+                            suggestion("All Transactions", "arrow.right") {
+                                open(.all, title: "All")
+                            }
+                            suggestion("Uncleared Transactions", "circle") {
+                                open(.uncleared, title: "Uncleared")
+                            }
+                            suggestion("Repeating Transactions", "arrow.2.squarepath") {
+                                open(.repeating, title: "Repeating")
+                            }
                         }
-                        suggestion("Uncleared Transactions", "circle") {
-                            open(.uncleared, title: "Uncleared")
-                        }
-                        suggestion("Repeating Transactions", "arrow.2.squarepath") {
-                            open(.repeating, title: "Repeating")
-                        }
-                    }
-                    Section("Date") {
-                        suggestion("Today", "calendar") {
-                            open(.today, title: "Today")
-                        }
-                        suggestion("Last Month", "calendar") {
-                            open(.lastMonth, title: "Last Month")
+                        Section("Date") {
+                            suggestion("Today", "calendar") {
+                                open(.today, title: "Today")
+                            }
+                            suggestion("Last Month", "calendar") {
+                                open(.lastMonth, title: "Last Month")
+                            }
                         }
                     }
                 } else {
-                    if searchResults.isEmpty {
+                    if isSearching {
+                        ProgressView("Searching")
+                    } else if searchResults.isEmpty {
                         Section {
                             Text("No Results")
                                 .foregroundStyle(.secondary)
@@ -1094,6 +1153,7 @@ struct QuickSearchSheet: View {
                                     .padding(.leading, 8)
                                 }
                                 .buttonStyle(.plain)
+                                .accessibilityIdentifier("search-transaction-\(transaction.id.uuidString)")
                             }
                         }
                     }
@@ -1173,7 +1233,7 @@ struct QuickSearchSheet: View {
             }
             .listStyle(.plain)
             .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search")
-            .navigationTitle("Quick Search")
+            .navigationTitle(contextScope == nil ? "Quick Search" : "Search Transactions")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -1183,18 +1243,32 @@ struct QuickSearchSheet: View {
                 }
             }
         }
-        .onAppear(perform: refreshSearchResults)
-        .onChange(of: searchText) { _, _ in
-            refreshSearchResults()
-        }
+        .onChange(of: searchText) { searchRevision = UUID() }
+        .onReceive(store.$data.removeDuplicates(by: RegisterPresentation.hasSameContent)) { _ in searchRevision = UUID() }
+        .task(id: searchRevision) { await refreshSearchResults() }
     }
 
-    private func refreshSearchResults() {
+    private func refreshSearchResults() async {
         let trimmedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedSearch.isEmpty else {
             searchResults = .empty
+            isSearching = false
             return
         }
+        isSearching = true
+        searchResults = .empty
+        do {
+            try await Task.sleep(for: .milliseconds(150))
+            if let scope = contextScope {
+                let request = RegisterRenderRequest(data: store.data, rows: store.transactions(scope: scope, ledgerID: contextLedgerID), scope: scope, search: trimmedSearch, dateInterval: nil, transactionIDs: nil)
+                let result = try await RegisterRenderWorker.shared.search(request)
+                try Task.checkCancellation()
+                searchResults = .empty
+                searchResults.transactions = result.rows
+                isSearching = false
+                return
+            }
+        } catch { return }
         let ledgers = store.searchLedgers(trimmedSearch)
         searchResults = MobileQuickSearchResults(
             transactions: store.searchTransactions(trimmedSearch),
@@ -1206,6 +1280,7 @@ struct QuickSearchSheet: View {
                 (ledger.id, store.transactions(scope: .all, ledgerID: ledger.id).count)
             })
         )
+        isSearching = false
     }
 
     private func suggestion(_ title: String, _ icon: String, action: @escaping () -> Void) -> some View {
@@ -1250,7 +1325,8 @@ struct QuickSearchSheet: View {
 
     private func openTransaction(_ transaction: LedgerTransaction) {
         store.selectLedger(transaction.ledgerID)
-        navigationPath = [.journal(transaction.ledgerID), .transaction(transaction.id)]
+        if contextScope != nil { navigationPath.append(.transaction(transaction.id)) }
+        else { navigationPath = [.journal(transaction.ledgerID), .transaction(transaction.id)] }
         dismissSheet()
     }
 

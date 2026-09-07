@@ -19,6 +19,7 @@
 		30256E5326690C11ADBDFE51 /* AmountExpressionEvaluatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCDEF59CF1ECC61824DD7109 /* AmountExpressionEvaluatorTests.swift */; };
 		31995C99B67C5DD75EB53FCA /* AppShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0117BB6E878EA57F13889AB /* AppShellView.swift */; };
 		34E3369F9440ACC3A4329BE1 /* MobileCompanionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1548C3C8C0B03D7A03A6215B /* MobileCompanionTests.swift */; };
+		365E59A84D13B94E80911260 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 5E78F564BDEF0B05B196B23A /* ZIPFoundation */; };
 		36A1CBF3A99B7A6D1A5BAB86 /* LayoutAuditTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCBDFF5A7BA12D148161FF03 /* LayoutAuditTests.swift */; };
 		3821F420F8AAA79FF41E767D /* RecurringJournalEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ACC2C03AF40231D12945107 /* RecurringJournalEditor.swift */; };
 		3D008210DD2A2256D9AC6DBC /* UUIDOrderingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F560DDCB2842B7A051249C4E /* UUIDOrderingTests.swift */; };
@@ -35,18 +36,23 @@
 		72112E529D976720A45E9888 /* AmountExpressionEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D2918BF16A82E35047FA336 /* AmountExpressionEvaluator.swift */; };
 		7907CF83EEDD0EFD77BFCBA2 /* SQLiteJournalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 646414B7AA5605EC2E6D0932 /* SQLiteJournalStore.swift */; };
 		7950D92F754A06CE3EE55E6D /* RegisterPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 914E2B57753B6A7E96E4D302 /* RegisterPresentation.swift */; };
-		7D01CE82ED79EF15147DBEB8 /* BankStatementImporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7199A10D2421537D2FC6537E /* BankStatementImporter.swift */; };
+		8F977A0B4310795829EBD5A5 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 5AFE5B861B06CC23242E7B41 /* ZIPFoundation */; };
 		9527ECB173193231DCBF4951 /* TemplateInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E28F07BC584CD2DDD3519C8B /* TemplateInteractionTests.swift */; };
 		95BA27FC95A9553680156841 /* SQLiteCloudKitSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD57D4F7D32FD381F1F005DC /* SQLiteCloudKitSyncTests.swift */; };
 		9F31014BB5272FB0FC30CF3B /* CloudKitJournalSyncCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24ED3D7B11C16498B8799B27 /* CloudKitJournalSyncCoordinator.swift */; };
 		A0514262A1EB9BF115FA4E62 /* CloudKitLiveVerificationScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25974F9B7E22B3998E791C21 /* CloudKitLiveVerificationScene.swift */; };
+		A6ED9B3721FC8F66A8F162FC /* BackupTransfer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2F6685EDA1D3541AFD7FD6C /* BackupTransfer.swift */; };
 		AADCECC96B8EDF240467EE08 /* CloudKitLiveVerification.swift in Sources */ = {isa = PBXBuildFile; fileRef = B699F730EDBC2E09BA478486 /* CloudKitLiveVerification.swift */; };
 		AB26A21DF842505D1576DD4E /* Editors.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3288B0BA96F43F72A89C35CC /* Editors.swift */; };
+		AF2198559A0D8EED7062E677 /* BackupArchive.swift in Sources */ = {isa = PBXBuildFile; fileRef = E471E67CBC5110720103E4C6 /* BackupArchive.swift */; };
 		AFE69CF50D37424E491D7D63 /* MobileNavigationShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6F4FE5138DED8F860CEC9BF /* MobileNavigationShell.swift */; };
+		B09FCED0DE3B96402A66426C /* RegisterInitialPositionProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 745410D34470319B0E56B85F /* RegisterInitialPositionProbe.swift */; };
 		B23435F545F1EC6F9D2B8B23 /* SQLiteCloudKitBatchingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15246DDD0437BC92E0557861 /* SQLiteCloudKitBatchingTests.swift */; };
 		B234E00A059574DD3ED8374E /* StartupTiming.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DA0031D15825CFF57817DEF /* StartupTiming.swift */; };
+		B3CE611D87F5702DCBFA7694 /* ZIPFoundation-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 197799545D52A0EFA0FB98D0 /* ZIPFoundation-LICENSE.txt */; };
 		B7200DC3EF48C81180A477F7 /* RegisterInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A810A2B1087ABD369EDA29D1 /* RegisterInteractionTests.swift */; };
 		B80A45F69FE542E7FBA2808C /* AccountSelectionLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FFF96D5E50240B7D5141358 /* AccountSelectionLabel.swift */; };
+		BC2CFEC2B20AEFEC03B23F02 /* BackupArchiveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D5403346BB22199DDE0FB93 /* BackupArchiveTests.swift */; };
 		BF90E29FF5A6F00F664E3265 /* AccountMovePlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19F24D00A92B6D0791D7A981 /* AccountMovePlan.swift */; };
 		C3C1FBF76AFE2FA56CE79FF4 /* CloudKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08BF3F396D78651E71F52BE0 /* CloudKit.framework */; };
 		C5ADF8CB6D5A38D3FB95D432 /* CompanionParityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BF5FDC8D25578E85C46179B /* CompanionParityTests.swift */; };
@@ -94,6 +100,7 @@
 		1548C3C8C0B03D7A03A6215B /* MobileCompanionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileCompanionTests.swift; sourceTree = "<group>"; };
 		15B92CC9B01C0FC2447DE2CC /* TransactionDeletion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransactionDeletion.swift; sourceTree = "<group>"; };
 		17797728AE53448A820518DB /* CloudKitSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitSyncService.swift; sourceTree = "<group>"; };
+		197799545D52A0EFA0FB98D0 /* ZIPFoundation-LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "ZIPFoundation-LICENSE.txt"; sourceTree = "<group>"; };
 		19F24D00A92B6D0791D7A981 /* AccountMovePlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountMovePlan.swift; sourceTree = "<group>"; };
 		1DA0031D15825CFF57817DEF /* StartupTiming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupTiming.swift; sourceTree = "<group>"; };
 		24ED3D7B11C16498B8799B27 /* CloudKitJournalSyncCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitJournalSyncCoordinator.swift; sourceTree = "<group>"; };
@@ -101,13 +108,14 @@
 		3288B0BA96F43F72A89C35CC /* Editors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editors.swift; sourceTree = "<group>"; };
 		3560BF5AF03AF9DAEC248778 /* TransactionGutter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransactionGutter.swift; sourceTree = "<group>"; };
 		373409D19DBB842FA8DBF66B /* CloudKitForegroundSyncTriggers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitForegroundSyncTriggers.swift; sourceTree = "<group>"; };
+		4D5403346BB22199DDE0FB93 /* BackupArchiveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupArchiveTests.swift; sourceTree = "<group>"; };
 		5E2F3511E87504E00AF3ED52 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		5F62E975F0C8BE20162D7CA8 /* CurrencyCatalogPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CurrencyCatalogPicker.swift; sourceTree = "<group>"; };
 		63A781D63578BFDFCB5A639B /* RecurringTransactionEditPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecurringTransactionEditPolicy.swift; sourceTree = "<group>"; };
 		646414B7AA5605EC2E6D0932 /* SQLiteJournalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLiteJournalStore.swift; sourceTree = "<group>"; };
 		698576CA66FD282D25C41EFF /* FinancesiOSUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = FinancesiOSUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		7199A10D2421537D2FC6537E /* BankStatementImporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BankStatementImporter.swift; sourceTree = "<group>"; };
 		7331FE1CCF089396B76A3CA1 /* RecurringTransactionEditPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecurringTransactionEditPolicyTests.swift; sourceTree = "<group>"; };
+		745410D34470319B0E56B85F /* RegisterInitialPositionProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RegisterInitialPositionProbe.swift; sourceTree = "<group>"; };
 		77F5414AD4EB3080873A37E8 /* TransactionScheduleEditors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransactionScheduleEditors.swift; sourceTree = "<group>"; };
 		7B106AB2E1A34CB2428A021A /* FinancesMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinancesMobileApp.swift; sourceTree = "<group>"; };
 		7D2918BF16A82E35047FA336 /* AmountExpressionEvaluator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AmountExpressionEvaluator.swift; sourceTree = "<group>"; };
@@ -133,8 +141,10 @@
 		DCDEF59CF1ECC61824DD7109 /* AmountExpressionEvaluatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AmountExpressionEvaluatorTests.swift; sourceTree = "<group>"; };
 		E06C3C3000BC78FFEFC1832F /* DemoData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoData.swift; sourceTree = "<group>"; };
 		E28F07BC584CD2DDD3519C8B /* TemplateInteractionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemplateInteractionTests.swift; sourceTree = "<group>"; };
+		E471E67CBC5110720103E4C6 /* BackupArchive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupArchive.swift; sourceTree = "<group>"; };
 		E544C7CCCB40D25685656BDD /* NativeJournalStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeJournalStorage.swift; sourceTree = "<group>"; };
 		F0117BB6E878EA57F13889AB /* AppShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppShellView.swift; sourceTree = "<group>"; };
+		F2F6685EDA1D3541AFD7FD6C /* BackupTransfer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupTransfer.swift; sourceTree = "<group>"; };
 		F3F02023F256143383A56756 /* PhysicalSyncAcceptanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhysicalSyncAcceptanceTests.swift; sourceTree = "<group>"; };
 		F479A4FC0F82E7BCD578DB19 /* MobileSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileSupport.swift; sourceTree = "<group>"; };
 		F560DDCB2842B7A051249C4E /* UUIDOrderingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UUIDOrderingTests.swift; sourceTree = "<group>"; };
@@ -145,10 +155,19 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		D0891286CB86DE9884682C8E /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				365E59A84D13B94E80911260 /* ZIPFoundation in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		EA812CDE746932DADF1CFB32 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				8F977A0B4310795829EBD5A5 /* ZIPFoundation in Frameworks */,
 				1F649B78D9BF9D8140ADE4DC /* libsqlite3.tbd in Frameworks */,
 				C3C1FBF76AFE2FA56CE79FF4 /* CloudKit.framework in Frameworks */,
 			);
@@ -164,6 +183,7 @@
 				9FFF96D5E50240B7D5141358 /* AccountSelectionLabel.swift */,
 				F0117BB6E878EA57F13889AB /* AppShellView.swift */,
 				B5CD3AA6662EAAD3753AF40F /* Assets.xcassets */,
+				F2F6685EDA1D3541AFD7FD6C /* BackupTransfer.swift */,
 				25974F9B7E22B3998E791C21 /* CloudKitLiveVerificationScene.swift */,
 				5F62E975F0C8BE20162D7CA8 /* CurrencyCatalogPicker.swift */,
 				E06C3C3000BC78FFEFC1832F /* DemoData.swift */,
@@ -177,11 +197,13 @@
 				C3FE4DE9349447E40CA9A063 /* PrivacyInfo.xcprivacy */,
 				13AFB6B6FB83278C098593CD /* ReceiptViews.swift */,
 				0DE0CFA8C0041BA407E81FE4 /* RegisterChart.swift */,
+				745410D34470319B0E56B85F /* RegisterInitialPositionProbe.swift */,
 				914E2B57753B6A7E96E4D302 /* RegisterPresentation.swift */,
 				CEB4BFC9144352620F8B0F32 /* SettingsView.swift */,
 				15B92CC9B01C0FC2447DE2CC /* TransactionDeletion.swift */,
 				3560BF5AF03AF9DAEC248778 /* TransactionGutter.swift */,
 				77F5414AD4EB3080873A37E8 /* TransactionScheduleEditors.swift */,
+				197799545D52A0EFA0FB98D0 /* ZIPFoundation-LICENSE.txt */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -221,6 +243,7 @@
 			isa = PBXGroup;
 			children = (
 				DCDEF59CF1ECC61824DD7109 /* AmountExpressionEvaluatorTests.swift */,
+				4D5403346BB22199DDE0FB93 /* BackupArchiveTests.swift */,
 				BCC8DCD29B30E3C7B6B9188F /* CloudKitJournalSyncTests.swift */,
 				8BF5FDC8D25578E85C46179B /* CompanionParityTests.swift */,
 				1548C3C8C0B03D7A03A6215B /* MobileCompanionTests.swift */,
@@ -251,7 +274,7 @@
 				19F24D00A92B6D0791D7A981 /* AccountMovePlan.swift */,
 				7D2918BF16A82E35047FA336 /* AmountExpressionEvaluator.swift */,
 				13D968B89685C6F8CBB70B08 /* AttachmentDuplicator.swift */,
-				7199A10D2421537D2FC6537E /* BankStatementImporter.swift */,
+				E471E67CBC5110720103E4C6 /* BackupArchive.swift */,
 				373409D19DBB842FA8DBF66B /* CloudKitForegroundSyncTriggers.swift */,
 				24ED3D7B11C16498B8799B27 /* CloudKitJournalSyncCoordinator.swift */,
 				B699F730EDBC2E09BA478486 /* CloudKitLiveVerification.swift */,
@@ -296,6 +319,7 @@
 			buildConfigurationList = 3D0B7F271B6C2493D231C8EA /* Build configuration list for PBXNativeTarget "FinancesiOSTests" */;
 			buildPhases = (
 				77A5852377F4EDC1CE8EF788 /* Sources */,
+				D0891286CB86DE9884682C8E /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -304,6 +328,7 @@
 			);
 			name = FinancesiOSTests;
 			packageProductDependencies = (
+				5E78F564BDEF0B05B196B23A /* ZIPFoundation */,
 			);
 			productName = FinancesiOSTests;
 			productReference = 051025E46B7B73A862F5B102 /* FinancesiOSTests.xctest */;
@@ -323,6 +348,7 @@
 			);
 			name = FinancesiOS;
 			packageProductDependencies = (
+				5AFE5B861B06CC23242E7B41 /* ZIPFoundation */,
 			);
 			productName = FinancesiOS;
 			productReference = C26FF8CDA5AAF5178BFAA8C2 /* FinancesiOS.app */;
@@ -372,6 +398,9 @@
 			);
 			mainGroup = C9885595CBA1B27DDA838323;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				710371976F9CCFE8C959A800 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = ACC5B2497D75CBF3ECF0ECDB /* Products */;
 			projectDirPath = "";
@@ -391,6 +420,7 @@
 			files = (
 				5E6DD6EDE47AB531A3EC6986 /* Assets.xcassets in Resources */,
 				CDFC63A70AD0F8531788681F /* PrivacyInfo.xcprivacy in Resources */,
+				B3CE611D87F5702DCBFA7694 /* ZIPFoundation-LICENSE.txt in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -414,6 +444,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				30256E5326690C11ADBDFE51 /* AmountExpressionEvaluatorTests.swift in Sources */,
+				BC2CFEC2B20AEFEC03B23F02 /* BackupArchiveTests.swift in Sources */,
 				DB179CAE25E4A7DAAB398520 /* CloudKitJournalSyncTests.swift in Sources */,
 				C5ADF8CB6D5A38D3FB95D432 /* CompanionParityTests.swift in Sources */,
 				34E3369F9440ACC3A4329BE1 /* MobileCompanionTests.swift in Sources */,
@@ -435,7 +466,8 @@
 				72112E529D976720A45E9888 /* AmountExpressionEvaluator.swift in Sources */,
 				31995C99B67C5DD75EB53FCA /* AppShellView.swift in Sources */,
 				2A77E3BE503FBA5EF39D3661 /* AttachmentDuplicator.swift in Sources */,
-				7D01CE82ED79EF15147DBEB8 /* BankStatementImporter.swift in Sources */,
+				AF2198559A0D8EED7062E677 /* BackupArchive.swift in Sources */,
+				A6ED9B3721FC8F66A8F162FC /* BackupTransfer.swift in Sources */,
 				1E7101472456F582591DBCDD /* CloudKitForegroundSyncTriggers.swift in Sources */,
 				9F31014BB5272FB0FC30CF3B /* CloudKitJournalSyncCoordinator.swift in Sources */,
 				AADCECC96B8EDF240467EE08 /* CloudKitLiveVerification.swift in Sources */,
@@ -458,6 +490,7 @@
 				3821F420F8AAA79FF41E767D /* RecurringJournalEditor.swift in Sources */,
 				DFAA3797ECAAE3598D60097F /* RecurringTransactionEditPolicy.swift in Sources */,
 				4FA54855F8AE4E2DFDAFB437 /* RegisterChart.swift in Sources */,
+				B09FCED0DE3B96402A66426C /* RegisterInitialPositionProbe.swift in Sources */,
 				7950D92F754A06CE3EE55E6D /* RegisterPresentation.swift in Sources */,
 				D6C06657CDFD81A31A043990 /* SQLiteImporter.swift in Sources */,
 				7907CF83EEDD0EFD77BFCBA2 /* SQLiteJournalStore.swift in Sources */,
@@ -768,6 +801,30 @@
 			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		710371976F9CCFE8C959A800 /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/weichsel/ZIPFoundation.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.9.20;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		5AFE5B861B06CC23242E7B41 /* ZIPFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 710371976F9CCFE8C959A800 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
+			productName = ZIPFoundation;
+		};
+		5E78F564BDEF0B05B196B23A /* ZIPFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 710371976F9CCFE8C959A800 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
+			productName = ZIPFoundation;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = DF17D01CCEF767EE88A463FA /* Project object */;
 }

@@ -3466,7 +3466,10 @@ final class SQLiteJournalStore: @unchecked Sendable {
         // column, so recover it once per rule from the persisted JSON payload.
         // Missing history is valid for older journals; malformed history must
         // fail loading rather than silently lose future-series edits.
-        struct HistoryPayload: Decodable { var templateHistory: RecurrenceTemplateHistory? }
+        struct HistoryPayload: Decodable {
+            var templateHistory: RecurrenceTemplateHistory?
+            var preservesImportedMaterializations: Bool?
+        }
         let decoder = JSONDecoder.makeAppDecoder()
         let rows: [(UUID, RecurrenceRule)] = try rows(
             """
@@ -3489,7 +3492,7 @@ final class SQLiteJournalStore: @unchecked Sendable {
             guard let payload = columnData(statement, 6) else {
                 throw SQLiteJournalStoreError.missingPayload("recurrence_rules.payload_json")
             }
-            let history = try decoder.decode(HistoryPayload.self, from: payload).templateHistory
+            let saved = try decoder.decode(HistoryPayload.self, from: payload)
             return (
                 id,
                 RecurrenceRule(
@@ -3499,7 +3502,8 @@ final class SQLiteJournalStore: @unchecked Sendable {
                     occurrenceCount: occurrenceCount,
                     endDate: try optionalDate(columnText(statement, 4), table: "recurrence_rules", column: "end_date"),
                     onWorkdays: sqlite3_column_int64(statement, 5) != 0,
-                    templateHistory: history
+                    templateHistory: saved.templateHistory,
+                    preservesImportedMaterializations: saved.preservesImportedMaterializations
                 )
             )
         }

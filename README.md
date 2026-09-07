@@ -11,10 +11,18 @@ Open **FinancesiOS.xcodeproj** and select **FinancesiOS**. Choose a simulator an
 - Expenses, income, transfers, split postings, arithmetic amount entry, cleared status, transaction duplication and reusable templates.
 - Repeating schedules, occurrence/future edit scopes, attachments, searchable account selection and journal-specific currencies.
 - Receipt file/photo import, on-device receipt scanning, inline thumbnails and Quick Look previews.
-- Local SQLite persistence, backup/restore, bank-statement import, display preferences and password lock.
+- Local SQLite persistence, ZIP backup/restore with receipt files, native sharing, display preferences and password lock.
 - Shared CloudKit private database, receipt assets, offline changes, explicit conflicts, account-change handling and automatic foreground/push sync.
 
 The app uses the Mac project’s `iCloud.dev.gan.FinanceApp` container and `FinancesJournal_v1` zone. Use the same Apple Account and CloudKit environment on each device. Simulator builds are intentionally offline; a successful simulator test is not evidence of physical device synchronization.
+
+## Backups
+
+Export Backup streams all journals and receipt files into a ZIP, then opens Apple's share sheet for Files and installed destinations such as Dropbox. Preparation belongs to the app rather than the screen, and a completed export remains available under Share Prepared Backup. iOS 26 uses continued processing when available; older systems use Apple's finite background allowance. If the system stops preparation, the app discards the incomplete file and leaves the journal unchanged.
+
+Import Backup accepts these ZIPs, wrapped Mac `.fin` ZIPs, `.fin` directories and older mobile backup files. It validates and stages the full backup before replacing the current journals after confirmation. Cloud Sync is disabled after restore. Restored repeating series keep exactly the backed-up occurrences until their schedule is explicitly changed; new repeating series still generate normally. Large older JSON backups should first be converted to ZIP on a device that can open them; mobile legacy JSON import is bounded to avoid running out of memory.
+
+Registers open near today with future entries reachable above. An enabled chart stays visible on return. The bottom Search button searches the current register without expanding or collapsing the navigation bar.
 
 ## Build and test
 

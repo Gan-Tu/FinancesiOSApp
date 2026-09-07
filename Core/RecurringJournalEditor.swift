@@ -104,6 +104,8 @@ enum RecurringJournalEditor {
             throw ValidationError(message: "A new repeating transaction must start its own series.")
         }
         if var rule = edited.recurrenceRule {
+            rule.preservesImportedMaterializations = oldRule == nil || (isAnchor && scheduleChanged)
+                ? false : canonicalRule?.preservesImportedMaterializations
             rule.intervalValue = max(rule.intervalValue, 1)
             if let count = rule.occurrenceCount, count < 1,
                oldRule == nil || canonicalRule?.occurrenceCount != count {
@@ -159,10 +161,10 @@ enum RecurringJournalEditor {
         }
         let countBefore = oldRule.map { old in journal.transactions.filter { $0.recurrenceRule?.id == old.id }.count } ?? 0
         if edited.recurrenceRule != nil && isAnchor &&
-            (oldRule == nil || scheduleChanged || (countBefore <= 1 && !journal.preservesImportedRecurringMaterializations)) {
+            (oldRule == nil || scheduleChanged || (countBefore <= 1 && !journal.preservesRecurringMaterializations(for: edited))) {
             materialize(ruleID: edited.recurrenceRule!.id, in: &result, referenceDate: referenceDate, calendar: calendar, deletedIDs: deletedIDs)
         }
-        if oldRule == nil && edited.recurrenceRule == nil && !journal.preservesImportedRecurringMaterializations,
+        if oldRule == nil && edited.recurrenceRule == nil,
            calendar.startOfDay(for: edited.date) > horizon(referenceDate, calendar: calendar) {
             result = materialized(result, referenceDate: referenceDate, calendar: calendar, deletedIDs: deletedIDs)
         }
@@ -170,9 +172,8 @@ enum RecurringJournalEditor {
     }
 
     static func materialized(_ journal: JournalData, referenceDate: Date = Date(), calendar: Calendar = .current, deletedIDs: Set<UUID> = []) -> JournalData {
-        guard !journal.preservesImportedRecurringMaterializations else { return journal }
         var result = journal
-        let ruleIDs = Set(journal.transactions.compactMap { $0.recurrenceRule?.id })
+        let ruleIDs = Set(journal.transactions.filter { !journal.preservesRecurringMaterializations(for: $0) }.compactMap { $0.recurrenceRule?.id })
         for id in ruleIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
             materialize(ruleID: id, in: &result, referenceDate: referenceDate, calendar: calendar, deletedIDs: deletedIDs)
         }
