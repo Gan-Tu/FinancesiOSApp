@@ -4,7 +4,7 @@ The app displays **Finances v2** on iPhone and iPad. Its separate App Store Conn
 
 ## Automatic releases
 
-The independent repository is [Gan-Tu/FinancesiOSApp](https://github.com/Gan-Tu/FinancesiOSApp), with `main` as the release branch. Xcode Cloud workflow **iOS TestFlight** (`C33DA8C1-4329-46D0-AABA-2EA88BF8D3F1`) is enabled with:
+The independent repository is [Gan-Tu/FinancesiOSApp](https://github.com/Gan-Tu/FinancesiOSApp), with `main` as the release branch. Xcode Cloud workflow **Finances v2 iOS Release** (`DF223336-1A31-46E0-AD46-553F136D2EA9`) is enabled with:
 
 - Primary repository `https://github.com/Gan-Tu/FinancesiOSApp.git` and project `FinancesiOS.xcodeproj`.
 - Branch Changes on `main`, triggered by any changed file; superseded runs may be canceled.
@@ -12,7 +12,7 @@ The independent repository is [Gan-Tu/FinancesiOSApp](https://github.com/Gan-Tu/
 - An iOS archive prepared for App Store Connect, using Apple-managed signing.
 - TestFlight Internal Testing delivery to **Internal Testing** (`dab76ac6-fee0-4017-9348-8287ff48c3b9`).
 
-The next cloud build number was **90** when configured, continuing the existing cloud product counter. Do not reset it to the local build number or reuse earlier uploaded numbers. The Mac workflow is separate and remains unchanged.
+The iOS Cloud product is **DD1BB18D-ED95-4E32-A428-D109B0906D51**, separate from the Mac product **F6360E5A-E7BB-48AF-AABB-DB45113C1F15**. The new iOS counter starts at **100**, above its last uploaded build91. Do not reset it to the local project build number. The former iOS workflow `C33DA8C1-4329-46D0-AABA-2EA88BF8D3F1` under the Mac product is a transitional fallback to retire after the first new-product release is verified; Mac workflows/history are preserved.
 
 The owner-requested Hotmail tester was invited to Internal Testing and build **1.0.0 (3)** was assigned. The Gmail tester remains in external **Personal Beta**; build 3 is waiting for Apple's beta review with automatic notification enabled. Internal builds do not require that external review. Accept the TestFlight invitation with the corresponding Apple Account.
 

@@ -36,7 +36,7 @@
   "internalBuildAssigned": true,
   "repository": "https://github.com/Gan-Tu/FinancesiOSApp",
   "releaseBranch": "main",
-  "cloudWorkflowID": "C33DA8C1-4329-46D0-AABA-2EA88BF8D3F1",
+  "cloudWorkflowID": "DF223336-1A31-46E0-AD46-553F136D2EA9",
   "automaticReleaseStatus": "Verified: code push triggered build 90; required tests, signed archive and internal TestFlight distribution succeeded",
   "latestInternalRelease": {
     "build": "90",
@@ -48,5 +48,18 @@
     "distribution": "Succeeded",
     "githubRunID": 34096886257,
     "githubChecks": "Succeeded"
+  },
+  "cloudProductID": "DD1BB18D-ED95-4E32-A428-D109B0906D51",
+  "cloudWorkflowName": "Finances v2 iOS Release",
+  "formerCloudWorkflowID": "C33DA8C1-4329-46D0-AABA-2EA88BF8D3F1",
+  "newProductFirstBuildNumber": 100,
+  "review": {
+    "passes": 4,
+    "independentReviewers": 3,
+    "reviewedSourceCommit": "839d7fda82568bae9b2505e88753e8939fee8d2b",
+    "actionableFindingsRemaining": 0,
+    "latestDomainTestsPassed": 131,
+    "priorCompleteSuitePassed": 148,
+    "priorCompleteSuiteSkipped": 1
   }
 }

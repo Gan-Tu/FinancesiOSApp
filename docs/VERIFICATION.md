@@ -56,3 +56,9 @@ Template accounts now precede the details. Selecting a template with Scan Invoic
 The requested register, swipe, details, form, account hierarchy, currency selection, template order and template management changes were checked against their implementation and regression coverage. Customize Templates was also manually opened in the simulator: Done is on the left, + on the right, and delete/reorder controls remain visible; creating and saving a template from the modal passed. The 64 original FinanceClone file hashes still match the initial snapshot. App display name is Finances v2, with the latest green square icon.
 
 This recheck does not claim actual camera capture was tested or that Apple has approved external beta review. Physical foreground/background CloudKit checks and read-only Production parity are documented separately.
+
+## Independent review release
+
+Four independent review passes ended with no actionable findings at `839d7fd`. All131 domain/storage tests passed after the final receipt-reference fix; the preceding complete suite passed148 with one explicitly opt-in physical-device test skipped. See `INDEPENDENT_REVIEW.md` for findings, fixes and evidence. Original FinanceClone files remain unchanged.
+
+The iOS Cloud product is now separate from Mac: `DD1BB18D-ED95-4E32-A428-D109B0906D51`, workflow `DF223336-1A31-46E0-AD46-553F136D2EA9`. Its first reviewed release is configured as build100. Production CloudKit container, zone and account binding are unchanged. The earlier one-journal Production parity snapshot predates the separate Mac task's authorized full-data seed and is historical evidence, not a claim about current journal counts.

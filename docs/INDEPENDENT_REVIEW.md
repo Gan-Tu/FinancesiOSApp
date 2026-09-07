@@ -33,3 +33,9 @@ The third independent reviewer reproduced one remaining issue: a remote deletion
 The complete suite at `d3a654c` passed **148 tests**, with the opt-in physical-device acceptance test skipped. After the final receipt-reference changes, all **131 domain/storage tests** passed. The synthetic remote-deletion test initially reused an already-acknowledged mutation identifier; correcting the fixture to create a new remote mutation made the intended deletion scenario valid.
 
 Final independent re-review follows on the committed receipt-reference fix before release.
+
+## Round 4 — complete
+
+Independent re-review of `839d7fda82568bae9b2505e88753e8939fee8d2b` found **no actionable findings**. The reviewer independently reran the former shared-file failure, sole-owner deletion, and injected commit rollback probes against the committed production helper. All behaved correctly. The queue-order concern raised during review was ruled out: inbound receipt installation follows a synchronous local-write flush and does not yield before commit.
+
+The final application source is unchanged after this review; subsequent changes record verification and the separate iOS Cloud release ownership. Four review passes were completed using three independent reviewer agents, with fixes and regression checks between rounds.
