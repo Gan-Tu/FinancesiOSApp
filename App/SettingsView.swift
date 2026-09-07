@@ -78,7 +78,9 @@ struct SettingsView: View {
                                 }
                             } label: {
                                 Image(systemName: "ellipsis.circle")
+                                    .frame(width: 44, height: 44).contentShape(Rectangle())
                             }
+                            .accessibilityLabel("Actions for journal \(ledger.name)")
                         }
                     }
                     Button {
@@ -114,7 +116,9 @@ struct SettingsView: View {
                                 }
                             } label: {
                                 Image(systemName: "ellipsis.circle")
+                                    .frame(width: 44, height: 44).contentShape(Rectangle())
                             }
+                            .accessibilityLabel("Actions for currency \(currency.symbol)")
                         }
                     }
                     Button {
@@ -151,7 +155,9 @@ struct SettingsView: View {
                                 }
                             } label: {
                                 Image(systemName: "ellipsis.circle")
+                                    .frame(width: 44, height: 44).contentShape(Rectangle())
                             }
+                            .accessibilityLabel("Actions for template \(template.name)")
                         }
                     }
                     Button {

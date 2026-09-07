@@ -69,7 +69,7 @@ struct JournalsHomeScreen: View {
                         Button("Delete Journal", systemImage: "trash", role: .destructive) { pendingDelete = ledger }
                     }
                     .swipeActions(allowsFullSwipe: false) {
-                        Button("Delete", role: .destructive) { pendingDelete = ledger }
+                        Button("Delete", role: .destructive) { pendingDelete = ledger }.tint(.red)
                         Button("Rename") { route = .journalRename(ledger) }.tint(.blue)
                     }
                 }
@@ -143,7 +143,7 @@ struct JournalOverviewScreen: View {
                                 Button("Delete Account", systemImage: "trash", role: .destructive) { pendingAccountDelete = node.account }
                             }
                             .swipeActions(allowsFullSwipe: false) {
-                                Button("Delete", role: .destructive) { pendingAccountDelete = node.account }
+                                Button("Delete", role: .destructive) { pendingAccountDelete = node.account }.tint(.red)
                                 Button("Edit") { route = .account(store.draft(for: node.account)) }.tint(.blue)
                             }
                         }
