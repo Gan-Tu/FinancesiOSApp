@@ -870,10 +870,14 @@ final class CloudKitJournalSyncTests: XCTestCase {
         addTeardownBlock { await fixture.close() }
         return fixture
     }
+    // These are harness liveness bounds, not the simulated background deadlines.
+    // Cold hosted simulators can spend over ten seconds starting the first passes.
+    private let observationTimeout: TimeInterval = 30
+
     private func next(_ fixture: CKJournalFixture, _ kind: CKJournalCall.Kind) async throws -> CKJournalCall {
         let ready = fixture.network.nextExpectation()
-        guard await XCTWaiter.fulfillment(of: [ready], timeout: 10) == .completed, let call = fixture.network.takeNext() else {
-            throw CloudKitSyncError.service("Controlled CloudKit call did not arrive.")
+        guard await XCTWaiter.fulfillment(of: [ready], timeout: observationTimeout) == .completed, let call = fixture.network.takeNext() else {
+            throw CloudKitSyncError.service("Controlled CloudKit call did not arrive. Progress: \(fixture.host.progress.state). Failure: \(fixture.host.failure ?? "none"). Calls: \(fixture.network.calls.map { $0.kind.rawValue }).")
         }
         XCTAssertEqual(call.kind, kind)
         return call
@@ -889,9 +893,9 @@ final class CloudKitJournalSyncTests: XCTestCase {
             else { await fixture.coordinator.waitUntilIdle() }
             done.fulfill()
         }
-        guard await XCTWaiter.fulfillment(of: [done], timeout: 10) == .completed else {
+        guard await XCTWaiter.fulfillment(of: [done], timeout: observationTimeout) == .completed else {
             fixture.coordinator.cancel(); fixture.network.abort(); task.cancel()
-            throw CloudKitSyncError.service("Controlled CloudKit pass did not settle.")
+            throw CloudKitSyncError.service("Controlled CloudKit pass did not settle. Progress: \(fixture.host.progress.state). Failure: \(fixture.host.failure ?? "none"). Calls: \(fixture.network.calls.map { $0.kind.rawValue }).")
         }
         await task.value
     }

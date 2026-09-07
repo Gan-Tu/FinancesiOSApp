@@ -3,16 +3,15 @@
   "appStoreConnectID": "6809320145",
   "bundleID": "dev.gan.FinancesApp.iOS",
   "version": "1.0.0",
-  "build": "3",
-  "buildID": "b5c5585c-61be-4908-a236-1a614b3a3e3f",
+  "build": "100",
+  "buildID": "bb729dd3-fcf0-408f-aa3a-ee3e38718376",
   "uploadStatus": "succeeded",
-  "uploadCompletedAt": "2026-09-06T23:26:22-07:00",
   "externalGroup": "Personal Beta",
   "externalGroupID": "0fcafa21-7692-4786-91be-543455f9c6e9",
   "testerCount": 1,
   "requestedTesterVerified": true,
   "automaticallyNotifyTesters": true,
-  "externalReviewStatus": "Waiting for Review",
+  "externalReviewStatus": "Submitted for Review",
   "macRecurrenceCommit": "54e63a99d95101d43ba275641e1719707058078c",
   "macBuild": "88",
   "macBuildStatus": "TestFlight internal distribution succeeded",
@@ -26,6 +25,11 @@
       "build": "2",
       "status": "Removed from Review",
       "reason": "Latest square icon reference and template form ordering."
+    },
+    {
+      "build": "3",
+      "status": "Removed from Review",
+      "reason": "Replaced with reviewed build100."
     }
   ],
   "homeScreenName": "Finances v2",
@@ -37,17 +41,17 @@
   "repository": "https://github.com/Gan-Tu/FinancesiOSApp",
   "releaseBranch": "main",
   "cloudWorkflowID": "DF223336-1A31-46E0-AD46-553F136D2EA9",
-  "automaticReleaseStatus": "Verified: code push triggered build 90; required tests, signed archive and internal TestFlight distribution succeeded",
+  "automaticReleaseStatus": "Verified: main push505a09e triggered distinct iOS product build100, required tests/archive/internal distribution succeeded",
   "latestInternalRelease": {
-    "build": "90",
-    "sourceCommit": "3c8b87baea91c19475427f2ea2a299a176d91f70",
-    "cloudBuildID": "bad17112-d6f2-4bbc-9b18-18e18acfc631",
+    "build": "100",
+    "sourceCommit": "505a09e0280df63fa46949f511efdbdb2d6bc16a",
+    "cloudBuildID": "38e4158f-fbef-40d8-afd0-aa3662813c3e",
     "trigger": "Code push",
     "tests": "Succeeded",
     "archive": "Succeeded",
     "distribution": "Succeeded",
-    "githubRunID": 34096886257,
-    "githubChecks": "Succeeded"
+    "githubRunID": 34106326430,
+    "githubChecks": "Two cold-runner harness observation timeouts; test-only follow-up pending"
   },
   "cloudProductID": "DD1BB18D-ED95-4E32-A428-D109B0906D51",
   "cloudWorkflowName": "Finances v2 iOS Release",
@@ -61,5 +65,8 @@
     "latestDomainTestsPassed": 131,
     "priorCompleteSuitePassed": 148,
     "priorCompleteSuiteSkipped": 1
-  }
+  },
+  "uploadDateCreated": "Sep 7, 2026 2:32 AM PDT",
+  "verifiedAt": "2026-09-07T10:02:32.201499+00:00",
+  "formerCloudWorkflowStatus": "Deactivated after new-product build100 succeeded"
 }

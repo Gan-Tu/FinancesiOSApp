@@ -1,0 +1,9 @@
+Finances v2 for iOS
+
+Please test the simplified All Transactions view and Templates customization: no batch Edit button, permanent delete/reorder controls, and + at the top right. Check left-swipe Duplicate/Delete, duplicate date choices, recurring deletion scopes, and right-swipe cleared status.
+
+Check receipt previews, backup restore, and iPhone/Mac sync after offline changes. Receipt files should survive restores, interrupted uploads, and shared-file deletions. Check long repeating schedules and nested accounts.
+
+With Password Lock enabled, leave an editor open, background and reopen the app, then unlock and confirm the unsaved draft remains. Ordinary syncing should not relock an active session.
+
+Report issues through TestFlight feedback with the build number and steps to reproduce.

@@ -12,11 +12,11 @@ The independent repository is [Gan-Tu/FinancesiOSApp](https://github.com/Gan-Tu/
 - An iOS archive prepared for App Store Connect, using Apple-managed signing.
 - TestFlight Internal Testing delivery to **Internal Testing** (`dab76ac6-fee0-4017-9348-8287ff48c3b9`).
 
-The iOS Cloud product is **DD1BB18D-ED95-4E32-A428-D109B0906D51**, separate from the Mac product **F6360E5A-E7BB-48AF-AABB-DB45113C1F15**. The new iOS counter starts at **100**, above its last uploaded build91. Do not reset it to the local project build number. The former iOS workflow `C33DA8C1-4329-46D0-AABA-2EA88BF8D3F1` under the Mac product is a transitional fallback to retire after the first new-product release is verified; Mac workflows/history are preserved.
+The iOS Cloud product is **DD1BB18D-ED95-4E32-A428-D109B0906D51**, separate from the Mac product **F6360E5A-E7BB-48AF-AABB-DB45113C1F15**. The new iOS counter starts at **100**, above its last uploaded build91. Do not reset it to the local project build number. The former iOS workflow `C33DA8C1-4329-46D0-AABA-2EA88BF8D3F1` under the Mac product is disabled after build100 successfully completed tests, archive and internal distribution. Mac workflows/history are preserved.
 
-The owner-requested Hotmail tester was invited to Internal Testing and build **1.0.0 (3)** was assigned. The Gmail tester remains in external **Personal Beta**; build 3 is waiting for Apple's beta review with automatic notification enabled. Internal builds do not require that external review. Accept the TestFlight invitation with the corresponding Apple Account.
+The owner-requested Hotmail tester was invited to Internal Testing and build **1.0.0 (100)** was assigned. The Gmail tester remains in external **Personal Beta**; build100 replaced build3 in Apple's beta-review queue with automatic notification enabled. Internal builds do not require that external review. Accept the TestFlight invitation with the corresponding Apple Account.
 
-GitHub Actions independently builds and tests pushes and pull requests. Xcode Cloud performs release signing and upload; no GitHub signing secrets or App Store Connect API key are required. The obsolete manual GitHub upload workflow has been removed.
+GitHub Actions independently builds and tests pushes and pull requests. Xcode Cloud performs release signing and upload; no GitHub signing secrets or App Store Connect API key are required. The obsolete manual GitHub upload workflow has been removed. `TestFlight/WhatToTest.en-US.txt` supplies testing guidance for future Cloud releases.
 
 ## CloudKit and signing
 

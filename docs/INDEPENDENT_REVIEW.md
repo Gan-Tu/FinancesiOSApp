@@ -39,3 +39,9 @@ Final independent re-review follows on the committed receipt-reference fix befor
 Independent re-review of `839d7fda82568bae9b2505e88753e8939fee8d2b` found **no actionable findings**. The reviewer independently reran the former shared-file failure, sole-owner deletion, and injected commit rollback probes against the committed production helper. All behaved correctly. The queue-order concern raised during review was ruled out: inbound receipt installation follows a synchronous local-write flush and does not yield before commit.
 
 The final application source is unchanged after this review; subsequent changes record verification and the separate iOS Cloud release ownership. Four review passes were completed using three independent reviewer agents, with fixes and regression checks between rounds.
+
+## Hosted test-runner follow-up
+
+Build100 completed Apple's required tests/archive/internal distribution, but the independent GitHub run hit two ten-second harness timeouts during its first controlled CloudKit cases. The same runner's next passing case took9.746seconds before subsequent cases returned to subsecond timings. Harness observation bounds are now30seconds with progress/call diagnostics; application deadlines and all outcome assertions are unchanged. TestFlight notes are checked in so future automatic releases include testing guidance.
+
+The adjusted sync harness passed all37 sync tests locally. The iOS runtime source remains the independently reviewed `839d7fd` version. Build100 is internally distributed and submitted for external review; the old C33 workflow is disabled. A CI-only re-review precedes the final follow-up push.
