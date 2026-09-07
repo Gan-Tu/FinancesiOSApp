@@ -5,8 +5,20 @@ import UIKit
 enum DemoData {
     @MainActor static func makeStore() -> MobileLedgerStore {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("FinancesiOS-Demo", isDirectory: true)
-        if CommandLine.arguments.contains("--reset-demo") { try? FileManager.default.removeItem(at: directory) }
+        if CommandLine.arguments.contains("--reset-demo") {
+            try? FileManager.default.removeItem(at: directory)
+            MobileDisplayPreferences.defaults.removePersistentDomain(forName: MobileDisplayPreferences.demoSuiteName)
+        }
         var data = fixture(includeFutureEntries: CommandLine.arguments.contains("--demo-future"), includeRecurringEntries: CommandLine.arguments.contains("--demo-recurring"))
+        if CommandLine.arguments.contains("--demo-hierarchy"), let ledgerID = data.selectedLedgerID {
+            let currencyID = data.commodities.first { $0.ledgerID == ledgerID }?.id
+            let liabilities = Account(ledgerID: ledgerID, commodityID: currencyID, name: "Liabilities", kind: .liability)
+            let cards = Account(ledgerID: ledgerID, parentID: liabilities.id, commodityID: currencyID, name: "Credit Card", kind: .liability)
+            let apple = Account(ledgerID: ledgerID, parentID: cards.id, commodityID: currencyID, name: "Apple Card", kind: .liability, listIndex: 1)
+            let wells = Account(ledgerID: ledgerID, parentID: cards.id, commodityID: currencyID, name: "Wells Fargo", kind: .liability, listIndex: 2)
+            let cashWise = Account(ledgerID: ledgerID, parentID: wells.id, commodityID: currencyID, name: "Wells Fargo Cash Wise", kind: .liability)
+            data.accounts += [liabilities, cards, apple, wells, cashWise]
+        }
         if CommandLine.arguments.contains("--demo-scroll"), let index = data.transactions.indices.min(by: { data.transactions[$0].date < data.transactions[$1].date }) {
             data.transactions[index].note = "Oldest test transaction"
         }

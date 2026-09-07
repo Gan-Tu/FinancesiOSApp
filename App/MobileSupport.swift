@@ -2,6 +2,20 @@ import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// Local display choices persist independently of synced journal contents.
+@MainActor
+enum MobileDisplayPreferences {
+    static let demoSuiteName = "dev.gan.FinancesApp.iOS.demo-display"
+    static let defaults: UserDefaults = {
+        #if DEBUG
+        if CommandLine.arguments.contains("--demo") {
+            return UserDefaults(suiteName: demoSuiteName)!
+        }
+        #endif
+        return .standard
+    }()
+}
+
 enum AppColors {
     static let names = ["gray", "red", "brown", "orange", "yellow", "green", "cyan", "blue", "purple", "pink"]
 

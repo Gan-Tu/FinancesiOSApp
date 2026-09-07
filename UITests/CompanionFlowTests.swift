@@ -1,6 +1,70 @@
 import XCTest
 
 final class CompanionFlowTests: XCTestCase {
+    @MainActor func testChartPreferencePersistsAcrossNavigationAndRelaunch() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--demo", "--reset-demo", "--demo-future"]
+        app.launch()
+        defer { app.terminate() }
+        let personal = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Personal,")).firstMatch
+        personal.tap()
+        app.buttons["All"].tap()
+        app.buttons["Show Chart"].tap()
+        let chart = app.staticTexts["Cash Flow"]
+        wait(for: [expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: chart)], timeout: 5)
+        XCTAssertTrue(app.buttons["Hide Chart"].exists)
+        app.navigationBars["All"].buttons.element(boundBy: 0).tap()
+        app.buttons["All"].tap()
+        wait(for: [expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: chart)], timeout: 5)
+
+        app.terminate(); app.launchArguments = ["--demo"]; app.launch()
+        personal.tap(); app.buttons["All"].tap()
+        wait(for: [expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: chart)], timeout: 5)
+        XCTAssertTrue(app.buttons["Hide Chart"].exists)
+        app.buttons["Hide Chart"].tap()
+        app.terminate(); app.launch()
+        personal.tap(); app.buttons["All"].tap()
+        XCTAssertTrue(app.buttons["Show Chart"].exists)
+        XCTAssertFalse(chart.exists)
+        wait(for: [expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: app.staticTexts["TODAY"])], timeout: 10)
+    }
+
+    @MainActor func testOverviewHierarchyAlignsCategoryAndPersistsExpansion() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--demo", "--reset-demo", "--demo-hierarchy"]
+        app.launch()
+        defer { app.terminate() }
+        let personal = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Personal,")).firstMatch
+        personal.tap()
+        app.buttons["Liabilities"].tap()
+        let heading = app.staticTexts["account-kind-title-1"]
+        let parent = app.staticTexts["Credit Card"]
+        let child = app.staticTexts["Apple Card"]
+        let grandchild = app.staticTexts["Wells Fargo Cash Wise"]
+        XCTAssertTrue(parent.waitForExistence(timeout: 5))
+        XCTAssertEqual(parent.frame.minX, heading.frame.minX, accuracy: 1)
+        XCTAssertEqual(child.frame.minX - parent.frame.minX, 22, accuracy: 1)
+        XCTAssertEqual(grandchild.frame.minX - child.frame.minX, 22, accuracy: 1)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Category and account hierarchy alignment"; screenshot.lifetime = .keepAlways; add(screenshot)
+
+        app.navigationBars["Personal"].buttons["Journals"].tap()
+        personal.tap()
+        XCTAssertTrue(child.exists)
+        app.terminate(); app.launchArguments = ["--demo"]; app.launch()
+        personal.tap()
+        XCTAssertTrue(parent.exists, "Expanded categories persist after relaunch")
+        XCTAssertTrue(child.exists)
+        app.buttons["Liabilities"].tap()
+        app.terminate(); app.launch()
+        personal.tap()
+        XCTAssertFalse(parent.exists, "Collapsed categories persist after relaunch")
+        app.buttons["Liabilities"].tap()
+        XCTAssertTrue(child.exists)
+    }
+
     @MainActor func testSyncProgressShowsTransferDirectionInFooterAndSheet() throws {
         continueAfterFailure = false
         let app = XCUIApplication()

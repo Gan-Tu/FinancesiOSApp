@@ -111,16 +111,69 @@ struct JournalOverviewScreen: View {
     let ledgerID: UUID
     @Binding var navigationPath: [MobileRoute]
     @Binding var route: EditorRoute?
-    @State private var expandedKinds = Set<AccountKind>()
-    @State private var collapsedAccounts = Set<UUID>()
+    @AppStorage private var expandedKindIDs: String
+    @AppStorage private var collapsedAccountIDs: String
     @State private var pendingAccountDelete: Account?
+
+    init(ledgerID: UUID, navigationPath: Binding<[MobileRoute]>, route: Binding<EditorRoute?>) {
+        self.ledgerID = ledgerID
+        _navigationPath = navigationPath
+        _route = route
+        _expandedKindIDs = AppStorage(wrappedValue: "", "display.journal.\(ledgerID).expandedKinds", store: MobileDisplayPreferences.defaults)
+        _collapsedAccountIDs = AppStorage(wrappedValue: "", "display.journal.\(ledgerID).collapsedAccounts", store: MobileDisplayPreferences.defaults)
+    }
+
+    private var expandedKinds: Set<AccountKind> {
+        Set(expandedKindIDs.split(separator: ",").compactMap { Int($0).flatMap(AccountKind.init(rawValue:)) })
+    }
+
+    private var collapsedAccounts: Set<UUID> {
+        Set(collapsedAccountIDs.split(separator: ",").compactMap { UUID(uuidString: String($0)) })
+    }
+
+    private func toggleKind(_ kind: AccountKind) {
+        var expanded = expandedKinds
+        if !expanded.insert(kind).inserted { expanded.remove(kind) }
+        expandedKindIDs = expanded.map { String($0.rawValue) }.sorted().joined(separator: ",")
+    }
+
+    private func toggleAccount(_ id: UUID) {
+        var collapsed = collapsedAccounts
+        if !collapsed.insert(id).inserted { collapsed.remove(id) }
+        collapsedAccountIDs = collapsed.map(\.uuidString).sorted().joined(separator: ",")
+    }
 
     var body: some View {
         List {
             TransactionLinksSection(ledgerID: ledgerID) { navigationPath.append(.templates(ledgerID)) }
             Section {
                 ForEach(AccountKind.allCases) { kind in
-                    DisclosureGroup(isExpanded: Binding(get: { expandedKinds.contains(kind) }, set: { if $0 { expandedKinds.insert(kind) } else { expandedKinds.remove(kind) } })) {
+                    Button { toggleKind(kind) } label: {
+                        HStack {
+                            Text(groupTitle(kind)).fontWeight(.semibold)
+                                .accessibilityIdentifier("account-kind-title-\(kind.rawValue)")
+                            Spacer(minLength: 8)
+                            VStack(alignment: .trailing) {
+                                ForEach((kind == .income || kind == .expense) ? [] : (store.ledgerTotalsByKind(ledgerID: ledgerID)[kind] ?? [])) { row in
+                                    Text(moneyString(row.amount, symbol: row.symbol)).foregroundStyle(.secondary).monospacedDigit().font(.subheadline)
+                                }
+                            }
+                            Image(systemName: expandedKinds.contains(kind) ? "chevron.down" : "chevron.right")
+                                .font(.subheadline.weight(.semibold)).foregroundStyle(.blue)
+                                .accessibilityHidden(true)
+                        }
+                        .foregroundStyle(.primary)
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                    .accessibilityValue(expandedKinds.contains(kind) ? "Expanded" : "Collapsed")
+                    .accessibilityHint("Shows or hides accounts in this category")
+
+                    // Category headings and first-level accounts share an inset.
+                    // Only the account's actual hierarchy depth adds indentation.
+                    if expandedKinds.contains(kind) {
                         ForEach(visibleNodes(kind)) { node in
                             HStack(spacing: 8) {
                                 NavigationLink(value: MobileRoute.account(node.id)) {
@@ -131,11 +184,12 @@ struct JournalOverviewScreen: View {
                                         .labelStyle(.iconOnly).buttonStyle(.borderless)
                                 }
                             }
+                            .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
                             .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
                             .contextMenu {
                                 if node.hasChildren {
                                     Button(collapsedAccounts.contains(node.id) ? "Expand Subaccounts" : "Collapse Subaccounts") {
-                                        if !collapsedAccounts.insert(node.id).inserted { collapsedAccounts.remove(node.id) }
+                                        toggleAccount(node.id)
                                     }
                                 }
 
@@ -153,16 +207,6 @@ struct JournalOverviewScreen: View {
                             let targetIndex = destination > index ? destination - 1 : destination
                             guard nodes.indices.contains(targetIndex) else { return }
                             store.moveAccount(nodes[index].id, relativeTo: nodes[targetIndex].id, placement: destination > index ? .after : .before)
-                        }
-                    } label: {
-                        HStack {
-                            Text(groupTitle(kind)).fontWeight(.semibold)
-                            Spacer()
-                            VStack(alignment: .trailing) {
-                                ForEach((kind == .income || kind == .expense) ? [] : (store.ledgerTotalsByKind(ledgerID: ledgerID)[kind] ?? [])) { row in
-                                    Text(moneyString(row.amount, symbol: row.symbol)).foregroundStyle(.secondary).monospacedDigit().font(.subheadline)
-                                }
-                            }
                         }
                     }
                 }
@@ -289,7 +333,7 @@ struct TransactionListScreen: View {
     @State private var searchText = ""
     @State private var pendingDeletion: LedgerTransaction?
     @State private var pendingDuplication: LedgerTransaction?
-    @State private var showsChart = false
+    @AppStorage("display.showsTransactionChart", store: MobileDisplayPreferences.defaults) private var showsChart = false
     @State private var selectedMonth: Date?
     @State private var presentation = RegisterPresentation(months: [], amounts: [:], balances: [:])
     @State private var positionedInitialRows = false
@@ -321,7 +365,13 @@ struct TransactionListScreen: View {
             .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    if dateInterval == nil { Button("Show Chart", systemImage: showsChart ? "chart.bar.fill" : "chart.bar") { withAnimation { showsChart.toggle() } } }
+                    if dateInterval == nil {
+                        Button(showsChart ? "Hide Chart" : "Show Chart", systemImage: showsChart ? "chart.bar.fill" : "chart.bar") {
+                            withAnimation { showsChart.toggle() }
+                        }
+                        .accessibilityIdentifier("toggle-transaction-chart")
+                        .accessibilityValue(showsChart ? "Shown" : "Hidden")
+                    }
                 }
             }
             .sheet(isPresented: Binding(get: { selectedMonth != nil }, set: { if !$0 { selectedMonth = nil } })) {
@@ -336,11 +386,15 @@ struct TransactionListScreen: View {
             .onChange(of: searchText) { refresh() }
             .task(id: presentation.months.isEmpty) {
                 guard !presentation.months.isEmpty, !positionedInitialRows else { return }
-                positionedInitialRows = true
-                guard dateInterval == nil, searchText.isEmpty,
-                      let day = presentation.initialDay() else { return }
+                guard dateInterval == nil, searchText.isEmpty else { return }
                 await Task.yield()
-                proxy.scrollTo(ScrollTarget.day(day), anchor: .top)
+                guard !Task.isCancelled else { return }
+                positionedInitialRows = true
+                if showsChart {
+                    proxy.scrollTo(ScrollTarget.chart, anchor: .top)
+                } else if let day = presentation.initialDay() {
+                    proxy.scrollTo(ScrollTarget.day(day), anchor: .top)
+                }
             }
             .onChange(of: showsChart) {
                 if showsChart {
@@ -857,7 +911,8 @@ private struct MobileAccountListRow: View {
                     .frame(width: 12, height: 12)
             }
             Text(node.account.name)
-                .fontWeight(node.hasChildren ? .semibold : .regular)
+                .lineLimit(1)
+                .accessibilityIdentifier("overview-account-name-\(node.id)")
             }
             .padding(.leading, CGFloat(node.depth) * 22)
             Spacer()
