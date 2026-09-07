@@ -1,0 +1,17 @@
+{
+  "appName": "Finances Companion",
+  "appStoreConnectID": "6809320145",
+  "bundleID": "dev.gan.FinancesApp.iOS",
+  "version": "1.0.0",
+  "build": "1",
+  "buildID": "f88ccd8c-502b-408e-81e2-b2ff7ec3a8dc",
+  "uploadStatus": "succeeded",
+  "uploadCompletedAt": "2026-09-06T22:07:16-07:00",
+  "externalGroup": "Personal Beta",
+  "externalGroupID": "0fcafa21-7692-4786-91be-543455f9c6e9",
+  "testerCount": 1,
+  "requestedTesterVerified": true,
+  "automaticallyNotifyTesters": true,
+  "externalReviewStatus": "Waiting for Review",
+  "macRecurrenceCommit": "847ecaa70d54ddf091f02f7b57b49950fb758630"
+}

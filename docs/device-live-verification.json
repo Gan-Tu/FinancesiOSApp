@@ -1,0 +1,32 @@
+{
+  "cleanup": "verified-absent",
+  "container": "iCloud.dev.gan.FinanceApp",
+  "durationSeconds": 18.03520691394806,
+  "environment": "Development",
+  "passedScenarios": [
+    "signed-development-configuration",
+    "initial-A-to-empty-B",
+    "offline-edit-and-reenable",
+    "backdated-balances",
+    "receipt-transfer",
+    "conflict-and-explicit-cloud-resolution",
+    "transaction-and-receipt-deletion",
+    "local-store-restart",
+    "post-server-acceptance-cancellation",
+    "recurring-one-off-future-edit-and-deletion",
+    "fresh-replica-recurring-tombstone-and-reopen"
+  ],
+  "physicalMultiDeviceVerified": false,
+  "pushDeliveryVerified": false,
+  "requestCounts": {
+    "accountRequests": 23,
+    "clients": 23,
+    "fetchRequests": 21,
+    "modifyRequests": 9,
+    "prepareRequests": 3
+  },
+  "runID": "56D3DC09-731A-4724-8090-34F6EDBFCA81",
+  "scope": "Three isolated iOS device SQLite stores using real CloudKit",
+  "status": "PASS",
+  "zone": "FinancesQA_56D3DC09-731A-4724-8090-34F6EDBFCA81"
+}

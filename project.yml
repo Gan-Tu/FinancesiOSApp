@@ -1,0 +1,161 @@
+name: FinancesiOS
+options:
+  minimumXcodeGenVersion: 2.46.0
+  xcodeVersion: '26.0'
+  createIntermediateGroups: true
+  deploymentTarget:
+    iOS: '17.0'
+settings:
+  base:
+    SWIFT_VERSION: '6.0'
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: K3URZZFDQP
+    ENABLE_USER_SCRIPT_SANDBOXING: true
+    MARKETING_VERSION: 1.0.0
+    CURRENT_PROJECT_VERSION: '1'
+  configs:
+    Debug:
+      SWIFT_OPTIMIZATION_LEVEL: -Onone
+      DEBUG_INFORMATION_FORMAT: dwarf
+      ONLY_ACTIVE_ARCH: true
+      FINANCES_PUSH_ENVIRONMENT: development
+      FINANCES_CLOUDKIT_ENVIRONMENT: Development
+    Release:
+      SWIFT_OPTIMIZATION_LEVEL: -O
+      SWIFT_COMPILATION_MODE: wholemodule
+      DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
+      ONLY_ACTIVE_ARCH: false
+      FINANCES_PUSH_ENVIRONMENT: production
+      FINANCES_CLOUDKIT_ENVIRONMENT: Production
+targets:
+  FinancesiOS:
+    type: application
+    platform: iOS
+    deploymentTarget: '17.0'
+    sources:
+    - path: App
+      excludes:
+      - Info.plist
+      - FinancesMobile.entitlements
+    - path: Core
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDevelopmentRegion: en
+        CFBundleDisplayName: Finances
+        CFBundleExecutable: $(EXECUTABLE_NAME)
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleInfoDictionaryVersion: '6.0'
+        CFBundleName: $(PRODUCT_NAME)
+        CFBundlePackageType: APPL
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSRequiresIPhoneOS: true
+        NSCameraUsageDescription: Attach receipt photos to transactions.
+        NSPhotoLibraryUsageDescription: Attach receipt images to transactions.
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: true
+        UIApplicationSupportsIndirectInputEvents: true
+        UILaunchScreen: {}
+        UIBackgroundModes:
+        - remote-notification
+        UISupportedInterfaceOrientations:
+        - UIInterfaceOrientationPortrait
+        - UIInterfaceOrientationLandscapeLeft
+        - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+        - UIInterfaceOrientationPortrait
+        - UIInterfaceOrientationPortraitUpsideDown
+        - UIInterfaceOrientationLandscapeLeft
+        - UIInterfaceOrientationLandscapeRight
+        UTExportedTypeDeclarations:
+        - UTTypeIdentifier: dev.gan.FinancesApp.backup
+          UTTypeDescription: Finances Mobile Backup
+          UTTypeConformsTo:
+          - public.json
+          UTTypeTagSpecification:
+            public.filename-extension:
+            - json
+        UTImportedTypeDeclarations:
+        - UTTypeIdentifier: dev.gan.FinancesMacApp.backup
+          UTTypeDescription: Finances Journal Backup
+          UTTypeConformsTo:
+          - com.apple.package
+          UTTypeTagSpecification:
+            public.filename-extension:
+            - fin
+        FinancesCloudKitEnabled: true
+        FinancesCloudKitContainerIdentifier: iCloud.dev.gan.FinanceApp
+        FinancesCloudKitEnvironment: $(FINANCES_CLOUDKIT_ENVIRONMENT)
+        FinancesCloudKitTeamIdentifier: $(DEVELOPMENT_TEAM)
+        ITSAppUsesNonExemptEncryption: false
+        NSFaceIDUsageDescription: Unlock your private financial journals.
+        UIDesignRequiresCompatibility: true
+    entitlements:
+      path: App/FinancesMobile.entitlements
+      properties:
+        com.apple.developer.icloud-container-identifiers:
+        - iCloud.dev.gan.FinanceApp
+        com.apple.developer.icloud-services:
+        - CloudKit
+        com.apple.developer.icloud-container-environment: $(FINANCES_CLOUDKIT_ENVIRONMENT)
+        aps-environment: $(FINANCES_PUSH_ENVIRONMENT)
+    settings:
+      base:
+        PRODUCT_NAME: FinancesiOS
+        PRODUCT_MODULE_NAME: FinancesClone
+        PRODUCT_BUNDLE_IDENTIFIER: dev.gan.FinancesApp.iOS
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: 1,2
+        SUPPORTS_MACCATALYST: false
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: false
+        GENERATE_INFOPLIST_FILE: false
+        LD_RUNPATH_SEARCH_PATHS: $(inherited) @executable_path/Frameworks
+    attributes:
+      SystemCapabilities:
+        com.apple.iCloud:
+          enabled: 1
+        com.apple.Push:
+          enabled: 1
+        com.apple.BackgroundModes:
+          enabled: 1
+    dependencies:
+    - sdk: libsqlite3.tbd
+    - sdk: CloudKit.framework
+  FinancesiOSTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+    - Tests
+    dependencies:
+    - target: FinancesiOS
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+        PRODUCT_BUNDLE_IDENTIFIER: dev.gan.FinancesApp.iOS.Tests
+  FinancesiOSUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+    - UITests
+    dependencies:
+    - target: FinancesiOS
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+        PRODUCT_BUNDLE_IDENTIFIER: dev.gan.FinancesApp.iOS.UITests
+        TEST_TARGET_NAME: FinancesiOS
+schemes:
+  FinancesiOS:
+    build:
+      targets:
+        FinancesiOS: all
+    run:
+      config: Debug
+    archive:
+      config: Release
+    test:
+      config: Debug
+      targets:
+      - FinancesiOSTests
+      - FinancesiOSUITests

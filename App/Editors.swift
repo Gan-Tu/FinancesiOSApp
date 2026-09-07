@@ -1,0 +1,631 @@
+import SwiftUI
+import UIKit
+
+struct TransactionEditorView: View {
+    @EnvironmentObject private var store: MobileLedgerStore
+    @Environment(\.dismiss) private var dismiss
+    var title: String
+    private let initialDraft: TransactionDraft
+    @State private var draft: TransactionDraft
+    @FocusState private var focusedAmount: UUID?
+    @State private var accountPostingID: UUID?
+    @State private var showingRecurringSaveScope = false
+
+    init(title: String, initialDraft: TransactionDraft) {
+        self.title = title
+        self.initialDraft = initialDraft
+        var editable = initialDraft
+        if initialDraft.id == nil {
+            for index in editable.postings.indices where decimalFromInput(editable.postings[index].amount) == 0 {
+                editable.postings[index].amount = ""
+            }
+        }
+        _draft = State(initialValue: editable)
+    }
+
+    private var recurrencePolicy: RecurringTransactionEditPolicy {
+        RecurringTransactionEditPolicy(
+            initialDraft: initialDraft, editedDraft: draft,
+            anchorID: initialDraft.recurrenceRuleID.flatMap { store.recurrenceAnchorID(ruleID: $0) }
+        )
+    }
+
+    var body: some View {
+        NavigationStack {
+            FinanceForm(spacing: 0) {
+                VStack(spacing: 7) {
+                    FinanceFormCard {
+                        ForEach($draft.postings) { $posting in
+                            FinanceFormRow(last: posting.id == draft.postings.last?.id) {
+                                PostingEditorRow(posting: $posting, ledgerID: draft.ledgerID, focusedAmount: $focusedAmount, canRemove: draft.postings.count > 2,
+                                    changeAmount: { text in
+                                        if let index = draft.postings.firstIndex(where: { $0.id == posting.id }) { updateAmount(text, at: index) }
+                                    }, chooseAccount: { focusedAmount = nil; accountPostingID = posting.id }) {
+                                        draft.postings.removeAll { $0.id == posting.id }
+                                    }
+                            }
+                        }
+                    }
+                    HStack {
+                        Button {
+                            draft.postings.append(PostingDraft(accountID: store.leafAccountNodes(ledgerID: draft.ledgerID).first?.account.id, amount: ""))
+                        } label: {
+                            Image(systemName: "plus.circle.fill").font(.system(size: 22)).foregroundStyle(.green)
+                        }
+                        .accessibilityLabel("Posting")
+                        Spacer()
+                        Button("Balance") { balanceLastPosting() }.font(.footnote).foregroundStyle(.tint)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 8)
+                    .frame(height: 28)
+                }
+                .padding(.bottom, 32)
+
+                FinanceFormCard {
+                    FinanceFormRow {
+                        NavigationLink {
+                            TransactionDateEditor(date: $draft.date)
+                        } label: {
+                            FinanceFormLabel(title: "Date", value: compactTransactionDate(draft.date), chevron: false)
+                        }.buttonStyle(.plain)
+                    }
+                    FinanceFormRow {
+                        VStack(alignment: .leading, spacing: 2) {
+                            if !draft.note.isEmpty { Text("Notes").font(.caption).foregroundStyle(.secondary) }
+                            TextField("Notes", text: $draft.note, axis: .vertical).accessibilityLabel("Notes")
+                        }
+                        .frame(minHeight: draft.note.isEmpty ? 0 : 44, alignment: .leading)
+                    }
+                    FinanceFormRow { TextField("Payee", text: $draft.payee).textInputAutocapitalization(.words) }
+                    FinanceFormRow(last: true) { TextField("Number", text: $draft.number) }
+                }
+                .padding(.bottom, 40)
+
+                FinanceFormCard {
+                    FinanceFormRow {
+                        NavigationLink {
+                            RepeatFrequencyEditor(draft: $draft)
+                        } label: { FinanceFormLabel(title: "Repeat", value: repeatDescription(draft)) }
+                        .buttonStyle(.plain)
+                        .disabled(!recurrencePolicy.canEditRepeatSettings)
+                    }
+                    if draft.repeatFrequency != .never {
+                        FinanceFormRow {
+                            NavigationLink {
+                                RepeatEndEditor(draft: $draft)
+                            } label: { FinanceFormLabel(title: "End Repeat", value: repeatEndDescription(draft)) }
+                            .buttonStyle(.plain)
+                            .disabled(!recurrencePolicy.canEditRepeatSettings)
+                        }
+                    }
+                    FinanceFormRow(last: true) { Toggle("Cleared", isOn: $draft.cleared) }
+                }
+                .padding(.bottom, 40)
+                if !recurrencePolicy.canEditRepeatSettings {
+                    Text("Repeat settings belong to the first entry in this series.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+
+                FinanceFormCard {
+                    ForEach(draft.attachments) { asset in
+                        FinanceFormRow {
+                            HStack {
+                                Text(asset.originalFilename).lineLimit(1)
+                                Spacer()
+                                Button("Remove Attachment", systemImage: "minus.circle", role: .destructive) {
+                                    draft.attachments.removeAll { $0.id == asset.id }
+                                }.labelStyle(.iconOnly)
+                            }
+                        }
+                    }
+                    FinanceFormRow(last: true) { ReceiptPicker(assets: $draft.attachments, textOnly: true) }
+                }
+            }
+            .navigationDestination(item: $accountPostingID) { id in
+                if let index = draft.postings.firstIndex(where: { $0.id == id }) {
+                    AccountPickerScreen(ledgerID: draft.ledgerID, selected: $draft.postings[index].accountID)
+                }
+            }
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        if initialDraft.recurrenceRuleID != nil {
+                            showingRecurringSaveScope = true
+                        } else {
+                            save(scope: .occurrence)
+                        }
+                    }
+                    .disabled(draft.postings.count < 2 || draft.postings.contains { $0.accountID == nil || decimalFromInput($0.amount) == nil } || !draft.postings.contains { (decimalFromInput($0.amount) ?? 0) != 0 })
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    if focusedAmount != nil {
+                        Button("±") { calculate(negate: true) }
+                        ForEach(["÷", "×", "−", "+"], id: \.self) { symbol in
+                            Button(symbol) { appendOperator(symbol) }
+                        }
+                        Button("=") { calculate() }
+                    }
+                    Spacer()
+                    Button("Done") { focusedAmount = nil }
+                }
+
+            }
+            .confirmationDialog(
+                recurrencePolicy.requiresScheduleConfirmation ? "Update repeating schedule" : "Save recurring transaction changes",
+                isPresented: $showingRecurringSaveScope,
+                titleVisibility: .visible
+            ) {
+                if recurrencePolicy.requiresScheduleConfirmation {
+                    Button("Update Repeating Schedule") { save(scope: .future) }
+                } else {
+                    Button("This Occurrence Only") { save(scope: .occurrence) }
+                    Button("This and Future Occurrences") { save(scope: .future) }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(recurrencePolicy.requiresScheduleConfirmation
+                    ? "Changing the first entry's date or Repeat settings updates the repeating series and regenerates later occurrences."
+                    : "Choose whether to update only this entry or this entry and later entries in the same series. Other occurrence dates, receipts, and cleared status remain unchanged.")
+            }
+            .alert("Couldn’t Save Transaction", isPresented: Binding(get: { store.validationError != nil }, set: { if !$0 { store.validationError = nil } })) {
+                Button("OK") { store.validationError = nil }
+            } message: { Text(store.validationError?.message ?? "") }
+
+        }
+    }
+
+    private func updateAmount(_ value: String, at index: Int) {
+        draft = PostingBalance.settingAmount(value, at: index, in: draft, accounts: store.data.accounts, commodities: store.data.commodities)
+    }
+
+    private func appendOperator(_ symbol: String) {
+        guard let index = draft.postings.firstIndex(where: { $0.id == focusedAmount }) else { return }
+        updateAmount(draft.postings[index].amount + (symbol == "−" ? "-" : symbol), at: index)
+    }
+
+    private func calculate(negate: Bool = false) {
+        guard let index = draft.postings.firstIndex(where: { $0.id == focusedAmount }),
+              let value = decimalFromInput(draft.postings[index].amount) else { return }
+        updateAmount(decimalInputString(negate ? -value : value), at: index)
+    }
+
+    private func save(scope: RecurringJournalEditor.Scope) {
+        store.saveTransactionAndFlush(draft, scope: scope)
+        guard store.validationError == nil else { return }
+        dismiss()
+    }
+
+    private func balanceLastPosting() {
+        do {
+            let amount = try PostingBalance.amount(forLastPostingIn: draft, accounts: store.data.accounts, commodities: store.data.commodities)
+            draft.postings[draft.postings.count - 1].amount = decimalInputString(amount)
+        } catch { store.validationError = ValidationError(message: error.localizedDescription) }
+    }
+
+}
+
+struct PostingEditorRow: View {
+    @ScaledMetric(relativeTo: .body) private var amountWidth: CGFloat = 82
+    @ScaledMetric(relativeTo: .body) private var currencyWidth: CGFloat = 38
+    @EnvironmentObject private var store: MobileLedgerStore
+    @Binding var posting: PostingDraft
+    let ledgerID: UUID?
+    var focusedAmount: FocusState<UUID?>.Binding
+    let canRemove: Bool
+    let changeAmount: (String) -> Void
+    let chooseAccount: () -> Void
+    let remove: () -> Void
+
+    private var postingSymbol: String {
+        let amount = decimalFromInput(posting.amount) ?? 0
+        return amount == 0 ? "circle.fill" : (amount < 0 ? "arrow.left.circle.fill" : "arrow.right.circle.fill")
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button(action: chooseAccount) {
+                HStack(spacing: 9) {
+                    Image(systemName: postingSymbol)
+                        .font(.system(size: 22))
+                        .foregroundStyle(AppColors.color(store.account(posting.accountID)?.colorName ?? "gray"))
+                    Text(store.account(posting.accountID)?.name ?? "Choose Account")
+                        .foregroundStyle(.primary).lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .layoutPriority(1)
+            TextField("0.00", text: Binding(get: { posting.amount }, set: changeAmount))
+                .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                .focused(focusedAmount, equals: posting.id)
+                .frame(width: amountWidth).monospacedDigit()
+                .accessibilityLabel("Amount for \(store.account(posting.accountID)?.name ?? "account")")
+            Menu {
+                Button("Account Currency") { posting.commodityID = nil }
+                ForEach(ledgerID.map { store.commodities(for: $0) } ?? []) { currency in
+                    Button(currency.symbol) { posting.commodityID = currency.id }
+                }
+            } label: {
+                Text(store.symbol(for: posting.commodityID ?? store.account(posting.accountID)?.commodityID, ledgerID: ledgerID))
+                    .foregroundColor(Color(uiColor: .secondaryLabel))
+                    .lineLimit(1).minimumScaleFactor(0.75)
+                    .frame(width: currencyWidth, alignment: .trailing)
+            }
+            .tint(.secondary)
+            .accessibilityLabel("Currency")
+        }
+        .contextMenu {
+            if canRemove { Button("Remove Posting", role: .destructive, action: remove) }
+        }
+    }
+
+}
+
+struct AccountPickerScreen: View {
+    @EnvironmentObject private var store: MobileLedgerStore
+    let ledgerID: UUID?
+    @Binding var selected: UUID?
+    @State private var search = ""
+    @State private var creating = false
+    var body: some View {
+        List {
+            ForEach(AccountKind.allCases) { kind in
+                let rows = options(for: kind)
+                if !rows.isEmpty {
+                    Section(kind.title) {
+                        ForEach(rows) { node in
+                            AccountPickerChoice(node: node, selected: $selected)
+                                .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
+                        }
+                    }
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .compactGroupedForm(sectionSpacing: 0)
+        .searchable(text: $search, prompt: "Find an account")
+        .navigationTitle("Choose Account").navigationBarTitleDisplayMode(.inline)
+        .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("New Account", systemImage: "plus") { creating = true } } }
+        .sheet(isPresented: $creating) { AccountEditorView(initialDraft: ledgerID.map { store.newAccountDraft(ledgerID: $0) } ?? store.draft(for: nil)) }
+    }
+    private func options(for kind: AccountKind) -> [MobileAccountNode] {
+        store.accountNodes(kind: kind, ledgerID: ledgerID).filter { node in
+            node.account.parentID != nil && (search.isEmpty || node.account.name.localizedCaseInsensitiveContains(search) || node.account.note.localizedCaseInsensitiveContains(search))
+        }
+    }
+
+}
+
+struct AccountEditorView: View {
+    @EnvironmentObject private var store: MobileLedgerStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft: MobileAccountDraft
+
+    init(initialDraft: MobileAccountDraft) {
+        var editable = initialDraft
+        if initialDraft.id == nil { editable.name = "" }
+        _draft = State(initialValue: editable)
+    }
+
+    private var groupName: String {
+        if draft.isGroup { return "No Group" }
+        if let parent = store.account(draft.parentID) { return parent.name }
+        return draft.ledgerID.flatMap { id in store.accounts(for: id).first { $0.parentID == nil && $0.kind == draft.kind }?.name } ?? draft.kind.title
+    }
+
+    var body: some View {
+        NavigationStack {
+            FinanceForm(spacing: 36) {
+                FinanceFormCard {
+                    FinanceFormRow { TextField("Name", text: $draft.name) }
+                    FinanceFormRow(last: true) { TextField("Description", text: $draft.note, axis: .vertical) }
+                }
+                FinanceFormCard {
+                    FinanceFormRow {
+                        NavigationLink {
+                            AccountGroupPicker(draft: $draft)
+                        } label: { FinanceFormLabel(title: "Group In", value: groupName) }
+                        .buttonStyle(.plain)
+                    }
+                    FinanceFormRow(last: true) {
+                        NavigationLink {
+                            AccountCurrencyPicker(draft: $draft)
+                        } label: { FinanceFormLabel(title: "Currency", value: draft.commodityID.flatMap { store.commodity($0)?.name } ?? "") }
+                        .buttonStyle(.plain)
+                    }
+                }
+                FinanceFormCard {
+                    ForEach(AppColors.names, id: \.self) { name in
+                        FinanceFormRow(last: name == AppColors.names.last, separatorLeading: 58) {
+                            Button { draft.colorName = name } label: {
+                                HStack(spacing: 16) {
+                                    Circle().fill(AppColors.color(name)).frame(width: 22, height: 22)
+                                    Text(AppColors.displayName(name)).foregroundColor(Color(uiColor: .label))
+                                    Spacer()
+                                    if draft.colorName == name { Image(systemName: "checkmark").fontWeight(.semibold).foregroundColor(.blue) }
+                                }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                            }.buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+            .navigationTitle(draft.id == nil ? "New Account" : "Edit Account")
+            .navigationBarTitleDisplayMode(.inline)
+            .journalEditorValidation()
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        store.saveAccount(draft)
+                        if store.validationError == nil {
+                            do { try store.flushLocalChanges(); dismiss() }
+                            catch { store.validationError = ValidationError(message: error.localizedDescription) }
+                        }
+                    }
+                    .disabled(draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+
+        }
+    }
+}
+
+struct CurrencyEditorView: View {
+    @EnvironmentObject private var store: MobileLedgerStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft: CurrencyDraft
+
+    init(initialDraft: CurrencyDraft) {
+        _draft = State(initialValue: initialDraft)
+    }
+
+    var body: some View {
+        NavigationStack {
+            FinanceForm {
+                FinanceFormCard {
+                    FinanceFormRow {
+                        NavigationLink {
+                            CurrencyCatalogPicker(selectedName: Binding(get: { draft.name }, set: { draft.name = $0; draft.syncFromCatalogName() }))
+                        } label: { FinanceFormLabel(title: "Currency", value: draft.name) }
+                        .buttonStyle(.plain)
+                    }
+                    FinanceFormRow { TextField("Symbol", text: $draft.symbol).textInputAutocapitalization(.characters) }
+                    FinanceFormRow(last: true) { TextField("Name", text: $draft.name) }
+                }
+            }
+            .navigationTitle(draft.id == nil ? "New Currency" : "Edit Currency")
+            .navigationBarTitleDisplayMode(.inline)
+            .journalEditorValidation()
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        store.saveCurrency(draft)
+                        if store.validationError == nil {
+                            do { try store.flushLocalChanges(); dismiss() }
+                            catch { store.validationError = ValidationError(message: error.localizedDescription) }
+                        }
+                    }.disabled(draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || draft.symbol.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
+}
+
+enum JournalEditorMode {
+    case create
+    case rename(Ledger)
+}
+
+struct JournalEditorView: View {
+    @EnvironmentObject private var store: MobileLedgerStore
+    @Environment(\.dismiss) private var dismiss
+    var mode: JournalEditorMode
+    @State private var name: String
+    @State private var currencyName = "US Dollar"
+    @State private var template = "Personal"
+
+    init(mode: JournalEditorMode) {
+        self.mode = mode
+        switch mode {
+        case .create:
+            _name = State(initialValue: "")
+        case .rename(let ledger):
+            _name = State(initialValue: ledger.name)
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            FinanceForm(spacing: 0, topInset: 4) {
+                FinanceFormCard {
+                    FinanceFormRow(last: true) { TextField("Name", text: $name) }
+                }
+                .padding(.bottom, 40)
+                if case .create = mode {
+                    FinanceFormCard {
+                        FinanceFormRow(last: true) {
+                            NavigationLink {
+                                CurrencyCatalogPicker(selectedName: $currencyName)
+                            } label: { FinanceFormLabel(title: "Currency", value: currencyName) }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.bottom, 36)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("TEMPLATES").font(.footnote).foregroundStyle(.secondary).padding(.leading, 16)
+                        FinanceFormCard {
+                            ForEach(["Personal", "Business"], id: \.self) { option in
+                                FinanceFormRow(last: option == "Business") {
+                                    Button { template = option } label: {
+                                        HStack {
+                                            Text(option).foregroundStyle(.primary)
+                                            Spacer()
+                                            if template == option { Image(systemName: "checkmark").fontWeight(.semibold).foregroundStyle(.tint) }
+                                        }.contentShape(Rectangle())
+                                    }.buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.large)
+            .journalEditorValidation()
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        switch mode {
+                        case .create:
+                            store.addJournal(name: name, currencyName: currencyName, template: template)
+                        case .rename(let ledger):
+                            store.renameJournal(ledger.id, name: name)
+                        }
+                        if store.validationError == nil {
+                            do { try store.flushLocalChanges(); dismiss() }
+                            catch { store.validationError = ValidationError(message: error.localizedDescription) }
+                        }
+                    }
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
+
+    private var title: String {
+        switch mode {
+        case .create: "New Journal"
+        case .rename: "Rename Journal"
+        }
+    }
+}
+
+struct TemplateEditorView: View {
+    @EnvironmentObject private var store: MobileLedgerStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft: TransactionTemplateDraft
+
+    init(initialDraft: TransactionTemplateDraft) {
+        var editable = initialDraft
+        if initialDraft.id == nil { editable.name = "" }
+        _draft = State(initialValue: editable)
+    }
+
+    var body: some View {
+        NavigationStack {
+            FinanceForm {
+                FinanceFormCard {
+                    FinanceFormRow { TextField("Name", text: $draft.name) }
+                    FinanceFormRow { TextField("Payee", text: $draft.payee) }
+                    FinanceFormRow { TextField("Note", text: $draft.note, axis: .vertical) }
+                    FinanceFormRow { Toggle("Cleared", isOn: $draft.cleared) }
+                    FinanceFormRow { Toggle("Enabled", isOn: $draft.enabled) }
+                    FinanceFormRow(last: true) { Toggle("Scan Invoice", isOn: $draft.scanInvoice) }
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("POSTINGS").font(.footnote).foregroundStyle(.secondary).padding(.leading, 16)
+                    FinanceFormCard {
+                        ForEach($draft.postings) { $posting in
+                            FinanceFormRow(last: posting.id == draft.postings.last?.id) {
+                                HStack {
+                                    NavigationLink {
+                                        AccountPickerScreen(ledgerID: draft.ledgerID, selected: $posting.accountID)
+                                    } label: { FinanceFormLabel(title: "Account", value: store.account(posting.accountID)?.name ?? "Choose Account") }
+                                    .buttonStyle(.plain)
+                                    if draft.postings.count > 2 {
+                                        Button("Remove Posting", systemImage: "minus.circle", role: .destructive) {
+                                            draft.postings.removeAll { $0.id == posting.id }
+                                        }.labelStyle(.iconOnly).buttonStyle(.plain).foregroundStyle(.red)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Button {
+                        draft.postings.append(PostingTemplateDraft(accountID: store.leafAccountNodes(ledgerID: draft.ledgerID).first?.id))
+                    } label: {
+                        Image(systemName: "plus.circle.fill").font(.system(size: 22)).foregroundStyle(.green)
+                    }
+                    .buttonStyle(.plain).accessibilityLabel("Posting").padding(.leading, 8)
+                }
+            }
+            .navigationTitle(draft.id == nil ? "New Template" : "Edit Template")
+            .navigationBarTitleDisplayMode(.inline)
+            .journalEditorValidation()
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        store.saveTransactionTemplate(draft)
+                        if store.validationError == nil {
+                            do { try store.flushLocalChanges(); dismiss() }
+                            catch { store.validationError = ValidationError(message: error.localizedDescription) }
+                        }
+                    }.disabled(draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
+}
+
+
+private struct JournalEditorValidation: ViewModifier {
+    @EnvironmentObject private var store: MobileLedgerStore
+    func body(content: Content) -> some View {
+        content.alert("Couldn’t Save", isPresented: Binding(get: { store.validationError != nil }, set: { if !$0 { store.validationError = nil } })) {
+            Button("OK") { store.validationError = nil }
+        } message: { Text(store.validationError?.message ?? "") }
+    }
+}
+
+private extension View {
+    func journalEditorValidation() -> some View { modifier(JournalEditorValidation()) }
+}
+
+private struct AccountPickerChoice: View {
+    @EnvironmentObject private var store: MobileLedgerStore
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.dismissSearch) private var dismissSearch
+    let node: MobileAccountNode
+    @Binding var selected: UUID?
+    var body: some View {
+        Button {
+            dismissSearch()
+            selected = node.id
+            dismiss()
+        } label: {
+            AccountSelectionLabel(account: node.account, depth: max(node.depth - 1, 0), currency: currencySymbol, selected: selected == node.id)
+        }.buttonStyle(.plain)
+    }
+
+    private var currencySymbol: String {
+        node.account.commodityID.flatMap { store.commodity($0)?.symbol } ?? store.commodities(for: node.account.ledgerID).first?.symbol ?? ""
+    }
+}
