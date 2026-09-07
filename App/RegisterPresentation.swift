@@ -42,15 +42,17 @@ struct RegisterCashFlow {
         }
         var income: [UUID: RegisterCashFlowBucket] = [:], expenses: [UUID: RegisterCashFlowBucket] = [:]
         func append(_ posting: Posting, account: Account, currencyID: UUID, transactionID: UUID, to buckets: inout [UUID: RegisterCashFlowBucket]) {
-            var bucket = buckets[account.id] ?? RegisterCashFlowBucket(account: account, amounts: [], transactionIDs: [])
-            if let index = bucket.amounts.firstIndex(where: { $0.id == currencyID }) {
-                bucket.amounts[index].amount -= posting.amount
-            } else {
-                bucket.amounts.append(RegisterMoney(commodityID: currencyID, symbol: currencies[currencyID]?.symbol ?? "", amount: -posting.amount))
+            if buckets[account.id] == nil {
+                buckets[account.id] = RegisterCashFlowBucket(account: account, amounts: [], transactionIDs: [])
             }
-            bucket.transactionIDs.insert(transactionID)
-            bucket.amounts.sort { $0.symbol < $1.symbol }
-            buckets[account.id] = bucket
+            // Mutate through Dictionary's modify accessor. Copying the bucket
+            // first would copy its growing transaction-ID set on every insert.
+            if let index = buckets[account.id]!.amounts.firstIndex(where: { $0.id == currencyID }) {
+                buckets[account.id]!.amounts[index].amount -= posting.amount
+            } else {
+                buckets[account.id]!.amounts.append(RegisterMoney(commodityID: currencyID, symbol: currencies[currencyID]?.symbol ?? "", amount: -posting.amount))
+            }
+            buckets[account.id]!.transactionIDs.insert(transactionID)
         }
         for transaction in rows {
             for posting in transaction.postings {
@@ -62,7 +64,14 @@ struct RegisterCashFlow {
                 if posting.amount > 0 { append(posting, account: account, currencyID: currencyID, transactionID: transaction.id, to: &expenses) }
             }
         }
-        return RegisterCashFlow(income: income.values.sorted { $0.account.name < $1.account.name }, expenses: expenses.values.sorted { $0.account.name < $1.account.name })
+        func ordered(_ buckets: [UUID: RegisterCashFlowBucket]) -> [RegisterCashFlowBucket] {
+            buckets.values.map { bucket in
+                var result = bucket
+                result.amounts.sort { $0.symbol < $1.symbol }
+                return result
+            }.sorted { $0.account.name < $1.account.name }
+        }
+        return RegisterCashFlow(income: ordered(income), expenses: ordered(expenses))
     }
 
     static func totals(_ buckets: [RegisterCashFlowBucket]) -> [RegisterMoney] {
@@ -81,6 +90,13 @@ struct RegisterPresentation {
     let months: [RegisterMonth]
     let amounts: [UUID: [RegisterMoney]]
     let balances: [UUID: [RegisterMoney]]
+
+    /// Sync timestamps, connection preferences, and security state do not change
+    /// register calculations. Array equality is cheap for unchanged COW buffers.
+    static func hasSameContent(_ lhs: JournalData, _ rhs: JournalData) -> Bool {
+        lhs.selectedLedgerID == rhs.selectedLedgerID && lhs.transactions == rhs.transactions &&
+            lhs.accounts == rhs.accounts && lhs.commodities == rhs.commodities
+    }
 
     /// Future occurrences stay reachable above today's entries without becoming
     /// the landing page every time a register opens.
@@ -120,12 +136,20 @@ struct RegisterPresentation {
         var amounts: [UUID: [RegisterMoney]] = [:]
         var balances: [UUID: [RegisterMoney]] = [:]
         var cumulative: [UUID: [UUID: Decimal]] = [:]
+        var scopedTotals: [UUID: Decimal] = [:]
+        var scopeHasMultiCurrencyAccount = false
         let chronological = data.transactions.filter { ledgerIDs.contains($0.ledgerID) }.sorted {
             $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date < $1.date
         }
         for transaction in chronological {
             for posting in transaction.postings {
-                if let id = currency(posting) { cumulative[posting.accountID, default: [:]][id, default: 0] += posting.amount }
+                if let id = currency(posting) {
+                    cumulative[posting.accountID, default: [:]][id, default: 0] += posting.amount
+                    if scopedAccounts.contains(posting.accountID) {
+                        scopedTotals[id, default: 0] += posting.amount
+                        scopeHasMultiCurrencyAccount = scopeHasMultiCurrencyAccount || (cumulative[posting.accountID]?.count ?? 0) > 1
+                    }
+                }
             }
             guard rowIDs.contains(transaction.id) else { continue }
             var displayed: [UUID: Decimal] = [:]
@@ -140,9 +164,15 @@ struct RegisterPresentation {
                 for posting in transaction.postings where scopedAccounts.contains(posting.accountID) {
                     if let id = currency(posting) { displayed[id, default: 0] += posting.amount }
                 }
-                let rowCurrencies = Set(displayed.keys)
-                for accountID in scopedAccounts {
-                    for (id, value) in rowBalances(for: accountID, using: rowCurrencies) { running[id, default: 0] += value }
+                if scopeHasMultiCurrencyAccount {
+                    let rowCurrencies = Set(displayed.keys)
+                    for accountID in scopedAccounts {
+                        for (id, value) in rowBalances(for: accountID, using: rowCurrencies) { running[id, default: 0] += value }
+                    }
+                } else {
+                    // Group totals change only with postings, not with the
+                    // number of descendants displayed in the account outline.
+                    running = scopedTotals
                 }
             } else {
                 let incomeExpense = transaction.postings.filter { p in accounts[p.accountID].map { $0.kind == .income || $0.kind == .expense } ?? false }

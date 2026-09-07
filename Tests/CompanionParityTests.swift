@@ -150,6 +150,61 @@ final class CompanionParityTests: XCTestCase {
 }
 
 final class RegisterBalanceCurrencyTests: XCTestCase {
+    func testSyncOnlyChangesDoNotInvalidateRegisterContent() {
+        let original = makeFixture().data
+        var updated = original
+        updated.lastSyncedAt = Date()
+        updated.syncEnabled.toggle()
+        updated.security = SecuritySettings(passwordHash: "synthetic", passwordSalt: "test")
+        XCTAssertTrue(RegisterPresentation.hasSameContent(original, updated))
+        updated.transactions[0].cleared.toggle()
+        XCTAssertFalse(RegisterPresentation.hasSameContent(original, updated))
+        updated = original; updated.accounts[0].name = "Renamed"
+        XCTAssertFalse(RegisterPresentation.hasSameContent(original, updated))
+        updated = original; updated.commodities[0].symbol = "CAD"
+        XCTAssertFalse(RegisterPresentation.hasSameContent(original, updated))
+        updated = original; updated.selectedLedgerID = UUID()
+        XCTAssertFalse(RegisterPresentation.hasSameContent(original, updated))
+    }
+
+    func testDenseCashFlowKeepsSplitTotalsAndEveryTransactionID() throws {
+        var fixture = makeFixture()
+        let expense = try XCTUnwrap(fixture.data.accounts.first { $0.kind == .expense })
+        fixture.data.transactions = (0..<2000).map { index in
+            let currency = index.isMultiple(of: 2) ? fixture.usd : fixture.eur
+            return LedgerTransaction(ledgerID: fixture.cash.ledgerID, date: Date(timeIntervalSince1970: 1_800_000_000 + Double(index)), payee: "", note: "Split", number: "", cleared: true, postings: [
+                Posting(accountID: fixture.cash.id, commodityID: currency.id, amount: -3),
+                Posting(accountID: expense.id, commodityID: currency.id, amount: 1),
+                Posting(accountID: expense.id, commodityID: currency.id, amount: 2)
+            ])
+        }
+        let result = RegisterCashFlow.build(data: fixture.data, rows: fixture.data.transactions, scope: .all)
+        let bucket = try XCTUnwrap(result.expenses.first)
+        XCTAssertEqual(bucket.transactionIDs, Set(fixture.data.transactions.map(\.id)))
+        XCTAssertEqual(bucket.amounts, [
+            RegisterMoney(commodityID: fixture.eur.id, symbol: "EUR", amount: -3000),
+            RegisterMoney(commodityID: fixture.usd.id, symbol: "USD", amount: -3000)
+        ])
+    }
+
+    func testGroupFastPathPreservesMixedAccountBalancesAfterCurrencyTransition() throws {
+        var fixture = makeFixture()
+        let fixed = Account(ledgerID: fixture.cash.ledgerID, parentID: fixture.group.id, commodityID: fixture.usd.id, name: "USD only", kind: .asset)
+        let expense = try XCTUnwrap(fixture.data.accounts.first { $0.kind == .expense })
+        fixture.data.accounts.append(fixed)
+        fixture.data.transactions.append(LedgerTransaction(ledgerID: fixed.ledgerID, date: Date(timeIntervalSince1970: 1_800_000_001.5), payee: "", note: "Fixed account", number: "", cleared: true, postings: [
+            Posting(accountID: fixed.id, amount: 50), Posting(accountID: expense.id, commodityID: fixture.usd.id, amount: -50)
+        ]))
+        let rows = Array(fixture.data.transactions.prefix(5))
+        let result = RegisterPresentation.build(data: fixture.data, rows: rows, scope: .account(fixture.group.id))
+        XCTAssertEqual(result.balances[rows[0].id], [RegisterMoney(commodityID: fixture.usd.id, symbol: "USD", amount: 1000)])
+        XCTAssertEqual(result.balances[rows[3].id], [
+            RegisterMoney(commodityID: fixture.eur.id, symbol: "EUR", amount: 150),
+            RegisterMoney(commodityID: fixture.usd.id, symbol: "USD", amount: 50)
+        ])
+        XCTAssertEqual(result.balances[rows[4].id], [RegisterMoney(commodityID: fixture.usd.id, symbol: "USD", amount: 1025)])
+    }
+
     func testInterleavedCurrenciesShowOnlyEachTransactionsRunningBalance() throws {
         let fixture = makeFixture()
         for scope in [MobileTransactionScope.all, .account(fixture.cash.id), .account(fixture.group.id)] {

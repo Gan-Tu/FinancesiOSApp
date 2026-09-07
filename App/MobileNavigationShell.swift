@@ -178,6 +178,7 @@ struct JournalOverviewScreen: View {
                             HStack(spacing: 8) {
                                 NavigationLink(value: MobileRoute.account(node.id)) {
                                     MobileAccountListRow(node: node, balances: store.balanceRows(for: node.id))
+                                        .equatable()
                                 }
                                 if editMode?.wrappedValue.isEditing == true {
                                     Button("Edit \(node.account.name)", systemImage: "info.circle") { route = .account(store.draft(for: node.account)) }
@@ -381,9 +382,15 @@ struct TransactionListScreen: View {
             }
             .modifier(TransactionDeletionConfirmation(transaction: $pendingDeletion))
             .modifier(TransactionDuplicateConfirmation(transaction: $pendingDuplication))
-            .task { refresh() }
-            .onReceive(store.$data.debounce(for: .milliseconds(40), scheduler: RunLoop.main)) { _ in refresh() }
-            .onChange(of: searchText) { refresh() }
+            .task(id: searchText) {
+                if !searchText.isEmpty {
+                    do { try await Task.sleep(for: .milliseconds(150)) }
+                    catch { return }
+                }
+                guard !Task.isCancelled else { return }
+                refresh()
+            }
+            .onReceive(store.$data.removeDuplicates(by: RegisterPresentation.hasSameContent).debounce(for: .milliseconds(40), scheduler: RunLoop.main)) { _ in refresh() }
             .task(id: presentation.months.isEmpty) {
                 guard !presentation.months.isEmpty, !positionedInitialRows else { return }
                 guard dateInterval == nil, searchText.isEmpty else { return }
@@ -424,7 +431,8 @@ struct TransactionListScreen: View {
                     Button {
                         openTransaction(transaction.id)
                     } label: {
-                        RegisterRow(transaction: transaction, amounts: presentation.amounts[transaction.id] ?? [], balances: presentation.balances[transaction.id] ?? [])
+                        RegisterRow(transaction: transaction, amounts: presentation.amounts[transaction.id] ?? [], balances: presentation.balances[transaction.id] ?? [], flow: store.accountFlowDisplay(for: transaction), isFuture: RegisterPresentation.isFuture(transaction.date))
+                            .equatable()
                             .padding(.leading, 22).contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -486,11 +494,12 @@ struct TransactionListScreen: View {
     }
 }
 
-struct RegisterRow: View {
-    @EnvironmentObject private var store: MobileLedgerStore
+struct RegisterRow: View, Equatable {
     let transaction: LedgerTransaction
     let amounts: [RegisterMoney]
     let balances: [RegisterMoney]
+    let flow: MobileAccountFlowDisplay
+    let isFuture: Bool
 
     var body: some View {
         HStack(alignment: .top, spacing: 7) {
@@ -499,7 +508,7 @@ struct RegisterRow: View {
                     .lineLimit(1)
                     .accessibilityIdentifier("transaction-title")
                 HStack(spacing: 4) {
-                    AccountFlowText(display: store.accountFlowDisplay(for: transaction))
+                    AccountFlowText(display: flow)
                     if transaction.recurrenceRule != nil { Image(systemName: "arrow.2.squarepath").font(.caption2) }
                 }.font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
             }
@@ -515,7 +524,7 @@ struct RegisterRow: View {
             TransactionGutter(cleared: transaction.cleared, hasAttachment: transaction.attachment?.assets.isEmpty == false)
         }
         .accessibilityValue(transaction.cleared ? "Cleared" : "Uncleared")
-        .opacity(RegisterPresentation.isFuture(transaction.date) ? 0.48 : 1)
+        .opacity(isFuture ? 0.48 : 1)
         .accessibilityElement(children: .combine)
     }
 }
@@ -898,7 +907,7 @@ struct AccountFlowText: View {
     }
 }
 
-private struct MobileAccountListRow: View {
+private struct MobileAccountListRow: View, Equatable {
     let node: MobileAccountNode
     let balances: [MobileBalanceRow]
 

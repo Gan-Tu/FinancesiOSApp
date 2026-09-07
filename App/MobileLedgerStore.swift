@@ -3900,8 +3900,9 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
 
     func cloudKitSyncDidUpdate(_ progress: CloudSyncProgress) {
         cloudSyncProgress = progress
-        // Background outcomes also refresh an initially empty conflict list.
-        refreshCloudSyncConflicts()
+        // Page/batch progress cannot create a conflict. Refresh on the terminal
+        // outcome so scrolling does not wait on SQLite for every progress tick.
+        if !progress.isRunning { refreshCloudSyncConflicts() }
     }
 
     func cloudKitSyncDidFail(_ message: String) {
