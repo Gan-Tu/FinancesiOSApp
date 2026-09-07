@@ -87,13 +87,18 @@ final class CompanionFlowTests: XCTestCase {
             let screenshot = XCTAttachment(screenshot: app.screenshot())
             screenshot.name = title; screenshot.lifetime = .keepAlways; add(screenshot)
             app.navigationBars["Cloud Sync"].buttons["Done"].tap()
-            XCTAssertTrue(app.navigationBars["Journals"].waitForExistence(timeout: 5))
+            wait(for: [expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: footer)], timeout: 10)
+            XCTAssertFalse(app.navigationBars["Cloud Sync"].exists)
             XCTAssertTrue((footer.value as? String)?.contains(detail) == true)
             footer.tap()
             XCTAssertTrue(app.staticTexts[title].waitForExistence(timeout: 5))
-            app.navigationBars["Cloud Sync"].swipeDown()
-            XCTAssertTrue(app.navigationBars["Journals"].waitForExistence(timeout: 5))
-            XCTAssertTrue(footer.isHittable)
+            // A swipe confined to the short navigation bar can miss the sheet's
+            // dismissal threshold on CI. Drag through the visible sheet instead.
+            let start = app.navigationBars["Cloud Sync"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95))
+            start.press(forDuration: 0.1, thenDragTo: end)
+            wait(for: [expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: footer)], timeout: 10)
+            XCTAssertFalse(app.navigationBars["Cloud Sync"].exists)
             XCTAssertTrue((footer.value as? String)?.contains(detail) == true)
             app.terminate()
         }

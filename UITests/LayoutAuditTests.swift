@@ -32,7 +32,7 @@ final class LayoutAuditTests: XCTestCase {
         app.buttons["Monthly Summary"].firstMatch.tap()
         capture("08 Monthly Summary")
         app.navigationBars.buttons["Done"].tap()
-        tap("Show Chart")
+        tap("Hide Chart")
         tapPrefix("Weekly groceries")
         capture("09 Transaction Details")
         app.swipeUp()
