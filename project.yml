@@ -1,5 +1,6 @@
 name: FinancesiOS
 options:
+  postGenCommand: python3 scripts/check_xcode_capabilities.py --repair-generated
   minimumXcodeGenVersion: 2.46.0
   xcodeVersion: '26.0'
   createIntermediateGroups: true
@@ -12,7 +13,7 @@ settings:
     DEVELOPMENT_TEAM: K3URZZFDQP
     ENABLE_USER_SCRIPT_SANDBOXING: true
     MARKETING_VERSION: 1.0.0
-    CURRENT_PROJECT_VERSION: '1'
+    CURRENT_PROJECT_VERSION: '2'
   configs:
     Debug:
       SWIFT_OPTIMIZATION_LEVEL: -Onone

@@ -32,3 +32,5 @@ Initial shared file hashes:
 ```
 
 The shared Models.swift and RecurringJournalEditor.swift were subsequently updated in both repositories with owner authorization to preserve schedule cadence when deleting the first occurrence. The import hashes above identify the original vendoring snapshot, not the final modified files.
+
+The portable Xcode capability validation helper is also vendored from the Mac repository. It repairs XcodeGen’s stringified capability attributes and verifies the generated project against its entitlements.

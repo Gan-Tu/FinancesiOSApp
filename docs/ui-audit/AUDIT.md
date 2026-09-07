@@ -15,7 +15,7 @@ The supplied recording and screenshots were treated as visual references. All sa
 | Details | Inline ancestry and account name, full date, bounded receipt, centered blue footer action | [Details](final/transaction-details.png) |
 | Monthly breakdown | Currency/category scope and signed cash-flow buckets | [Summary](final/08%20Monthly%20Summary.png) |
 | Cloud Sync | Toggle card, one status row and separate actions; help behind the question mark | [Cloud Sync](after/25-cloud-sync.png) |
-| App icon | Supplied green coin artwork, opaque green exterior, no white frame | [Home Screen](final/home-icon.jpg) |
+| App icon | Supplied green coin artwork, full-size circle with white corners, no extra inset or border | [Home Screen](final/home-icon.jpg) |
 
 The complete 18-flow iPhone UI suite passed. The final register/Details interactions and monthly summary flow were rerun after their changes. The broader captures in `after/`, `large-text/` and `ipad/` cover settings, backup, security, templates, search, recurrence and picker sheets. Earlier captures remain in `before/` for comparison; five incomplete transition captures were discarded.
 

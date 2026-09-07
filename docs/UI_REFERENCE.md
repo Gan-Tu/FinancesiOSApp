@@ -41,7 +41,7 @@ The geometry UI test checks that amount edges align, posting rows have the inten
 - The main account list uses the same whole-label indentation. Subaccount collapse remains available from the account context menu without adding a layout-shifting chevron before its label.
 - Transaction text starts at one fixed column. Uncleared gray dots and receipt clips occupy an independent left gutter in registers and Quick Search. Registers no longer reserve space for an automatic trailing navigation chevron.
 - Edit selection uses the same gutter, and the normal sync/compose footer hides while bulk editing so it cannot cover Clear/Unclear controls.
-- The app’s coin icon is green in every asset size; the blue selection tint is unchanged. See `ICON.md` for the supplied source artwork and opaque asset packaging.
+- The green coin fills each icon asset, with neutral white corners outside its circular edge; the blue selection tint is unchanged. See `ICON.md` for the supplied source artwork and opaque asset packaging.
 - Cloud Sync matches the later screenshot: a large toggle/explanation card, one status row, and Synchronize Now/Reset action rows. Help and diagnostic details are behind the question-mark button. Conflicts open a dedicated review sheet.
 - Registers with future scheduled entries start near today; future-only registers start at the nearest scheduled date. Upcoming rows remain reachable above, and the Uncleared badge counts entries through today.
 

@@ -3,7 +3,7 @@
 ## Completed
 
 - **135 tests passed in one complete run** on iPhone 17 Pro Max / iOS 26.5 with Xcode 26.6 (117 domain/protocol tests and 18 UI flows). After the final cash-flow correction, all 11 focused parity/register tests passed, including two new refund/currency/category tests. Result bundles end in `04-53-13-902Z_pid89554_af645276.xcresult` and `05-02-46-504Z_pid89554_8c2b7ffa.xcresult`.
-- The matching Mac recurrence implementation passed 20 focused tests, including its actual store, SQLite reopen, deleted-first-entry month-end cadence and future truncation. Both shared model/editor files are identical between repositories. A signed native Mac build succeeded.
+- The matching Mac recurrence implementation passed all **649 Mac tests**, including its actual store, batch deletion, SQLite reopen, deleted-first-entry month-end cadence and future truncation. TestFlight build **88** completed archiving and internal distribution successfully. Both shared model/editor files are identical between repositories. A signed native Mac build succeeded.
 - UI tests create journals/accounts, search/select currencies and nested accounts, verify 22-point hierarchy indentation and the fixed transaction text column, exercise bulk clearing and split-row removal, show the cash-flow chart, save an exact **25.00** transaction, inspect its detail and verify persistence after relaunch. The two account-focused UI cases were rerun successfully after tightening picker sections and hiding empty groups. Screenshots are in `screenshots/` and use synthetic data only.
 - Regression tests cover Decimal precision/arithmetic, account-context drafts, journal reordering, zero starting balances, durable save/edit/clear/delete, receipt backup/reopen, separate currency totals and search-independent running balances.
 - Shared storage/CloudKit/recurrence tests cover pagination, cancellation, conflicts, tombstones, asset bytes, interrupted writes and schedule editing.
@@ -31,6 +31,12 @@ The build directory is ignored by Git. No financial database, recording, persona
 
 Real receipt-camera capture and iOS background APNs delivery remain unverified. Foreground APNs and the physical iPhone–Mac Development round trip passed. The installed Mac TestFlight build 86 uses Production CloudKit/APNs and its live Sync screen reports everything up to date. iOS TestFlight processing passed; the external build is Waiting for Review.
 
-The existing Xcode account successfully used Apple cloud-managed distribution signing and provisioned a matching App Store profile. A local distribution private key is not required for this path. The independent App Store Connect record and beta review contact are configured. Build 1.0.0 (1) uploaded and processed successfully. The requested Gmail tester is verified in Personal Beta, and the build is Waiting for Review with automatic notification enabled. See `testflight-release.json`. GitHub API-key secrets/first CI run and automatic push delivery remain future setup.
+The existing Xcode account successfully used Apple cloud-managed distribution signing and provisioned a matching App Store profile. A local distribution private key is not required for this path. The independent App Store Connect record and beta review contact are configured. Build **1.0.0 (2)** uploaded and processed successfully. Build 1 was withdrawn to replace its icon. The requested Gmail tester is verified in Personal Beta, and the build is Waiting for Review with automatic notification enabled. See `testflight-release.json`. GitHub API-key secrets/first CI run and automatic push delivery remain future setup.
 
 The project is an independent local Git repository on `codex/ios-companion`, with no remote or push created by this task. Its initial commit contains the independent app, tests, reference audit and release scripts.
+
+## Final icon revision
+
+Build 2 uses the provided circular coin artwork at full size with white corner areas outside the circle. The former green extension is removed. All 18 assets were checked for exact dimensions, opaque RGB pixels and white corners. The Home Screen was inspected again, the updated signed Development build was installed on the physical iPhone, and normal launch with no QA arguments was confirmed. The app’s functional code is unchanged from the passing test runs.
+
+The checked-in Xcode project also preserves iCloud, Push Notifications and Background Modes as typed capability dictionaries after regeneration. The independent preflight validates these against the target’s actual entitlements.

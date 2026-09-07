@@ -3,8 +3,11 @@
 from pathlib import Path
 import plistlib
 import re
+import subprocess
+import sys
 
 root = Path(__file__).resolve().parents[1]
+subprocess.run([sys.executable, str(root / 'scripts/check_xcode_capabilities.py')], check=True)
 project = (root / 'FinancesiOS.xcodeproj/project.pbxproj').read_text()
 assert '/Users/' not in project and 'FinancesAppMock' not in project
 assert '.DS_Store' in (root / '.gitignore').read_text()
