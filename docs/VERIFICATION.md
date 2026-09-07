@@ -31,7 +31,7 @@ The build directory is ignored by Git. No financial database, recording, persona
 
 Real receipt-camera capture remains unverified. Physical foreground and background APNs delivery/convergence passed, with automatic return upload after foreground activation and verified QA-zone cleanup. See `physical-sync-verification.json` and `background-sync-verification.json`.
 
-Build **1.0.0 (3)** is assigned to Internal Testing, with the requested Hotmail tester invited. External Personal Beta is waiting for Apple review. Source is on `main` at `Gan-Tu/FinancesiOSApp`; its first GitHub build/test run succeeded. Xcode Cloud is configured for automatic required tests, archive and internal TestFlight distribution on every push; the first push-triggered release is being verified.
+Build **1.0.0 (3)** is assigned to Internal Testing, with the requested Hotmail tester invited. External Personal Beta is waiting for Apple review. Source is on `main` at `Gan-Tu/FinancesiOSApp`; its first GitHub build/test run succeeded. Xcode Cloud build **90** was triggered by the push of `3c8b87b` and completed required tests, the signed archive and internal TestFlight distribution. The independent GitHub check run `34096886257` also succeeded.
 
 ## Final icon revision
 
@@ -50,3 +50,9 @@ Template accounts now precede the details. Selecting a template with Scan Invoic
 - All five targeted register, template and layout UI checks passed in result bundle `test_sim_2026-09-07T07-23-30-813Z_pid89554_a38aa6ff.xcresult`.
 - A read-only comparison of the physical iPhone Production store snapshot and running production Mac store found identical journals, accounts, currencies, transactions, postings and templates. See `production-sync-verification.json`. The isolated Mac QA app was the apparent source of the data mismatch.
 - Phone display name is Finances v2. The separate Apple listing is Finances v2 for iOS because the Mac listing already reserves the shorter name.
+
+## Completion recheck before independent review
+
+The requested register, swipe, details, form, account hierarchy, currency selection, template order and template management changes were checked against their implementation and regression coverage. Customize Templates was also manually opened in the simulator: Done is on the left, + on the right, and delete/reorder controls remain visible; creating and saving a template from the modal passed. The 64 original FinanceClone file hashes still match the initial snapshot. App display name is Finances v2, with the latest green square icon.
+
+This recheck does not claim actual camera capture was tested or that Apple has approved external beta review. Physical foreground/background CloudKit checks and read-only Production parity are documented separately.
