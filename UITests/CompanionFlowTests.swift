@@ -16,11 +16,12 @@ final class CompanionFlowTests: XCTestCase {
         XCTAssertTrue(app.buttons["Hide Chart"].exists)
         app.navigationBars["All"].buttons.element(boundBy: 0).tap()
         app.buttons["All"].tap()
-        wait(for: [expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: chart)], timeout: 5)
+        wait(for: [expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: app.staticTexts["TODAY"])], timeout: 10)
+        XCTAssertTrue(app.buttons["Hide Chart"].exists)
 
         app.terminate(); app.launchArguments = ["--demo"]; app.launch()
         personal.tap(); app.buttons["All"].tap()
-        wait(for: [expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: chart)], timeout: 5)
+        wait(for: [expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: app.staticTexts["TODAY"])], timeout: 10)
         XCTAssertTrue(app.buttons["Hide Chart"].exists)
         app.buttons["Hide Chart"].tap()
         app.terminate(); app.launch()
@@ -180,6 +181,12 @@ final class CompanionFlowTests: XCTestCase {
         app.buttons["Show Chart"].tap()
         let chart = app.staticTexts["Cash Flow"]
         wait(for: [expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: chart)], timeout: 5)
+        app.navigationBars["All"].buttons.element(boundBy: 0).tap()
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Assets,")).firstMatch.tap()
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Checking,")).firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Checking"].waitForExistence(timeout: 5))
+        wait(for: [expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: app.staticTexts["TODAY"])], timeout: 10)
+        XCTAssertTrue(app.buttons["Hide Chart"].exists)
     }
 
     @MainActor func testJournalRegisterChartAndEditor() throws {

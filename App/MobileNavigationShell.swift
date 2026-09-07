@@ -339,7 +339,7 @@ struct TransactionListScreen: View {
     @State private var presentation = RegisterPresentation(months: [], amounts: [:], balances: [:])
     @State private var positionedInitialRows = false
 
-    private enum ScrollTarget: Hashable { case day(Date), chart }
+    private typealias ScrollTarget = RegisterPresentation.ScrollTarget
 
     private var rows: [LedgerTransaction] {
         store.transactions(scope: scope, ledgerID: ledgerID, search: searchText).filter { row in
@@ -397,10 +397,8 @@ struct TransactionListScreen: View {
                 await Task.yield()
                 guard !Task.isCancelled else { return }
                 positionedInitialRows = true
-                if showsChart {
-                    proxy.scrollTo(ScrollTarget.chart, anchor: .top)
-                } else if let day = presentation.initialDay() {
-                    proxy.scrollTo(ScrollTarget.day(day), anchor: .top)
+                if let target = presentation.initialScrollTarget(showsChart: showsChart) {
+                    proxy.scrollTo(target, anchor: .top)
                 }
             }
             .onChange(of: showsChart) {

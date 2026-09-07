@@ -87,6 +87,11 @@ struct RegisterCashFlow {
 /// All totals keep currencies separate. Account registers include descendants and
 /// running balances include earlier entries even when a search hides those rows.
 struct RegisterPresentation {
+    enum ScrollTarget: Hashable {
+        case day(Date)
+        case chart
+    }
+
     let months: [RegisterMonth]
     let amounts: [UUID: [RegisterMoney]]
     let balances: [UUID: [RegisterMoney]]
@@ -104,6 +109,11 @@ struct RegisterPresentation {
         let days = months.flatMap(\.days).map(\.date)
         guard let newest = days.first, Self.isFuture(newest, now: now, calendar: calendar) else { return nil }
         return days.first { !Self.isFuture($0, now: now, calendar: calendar) } ?? days.last
+    }
+
+    func initialScrollTarget(showsChart: Bool, now: Date = Date(), calendar: Calendar = .current) -> ScrollTarget? {
+        if let day = initialDay(now: now, calendar: calendar) { return .day(day) }
+        return showsChart && !months.isEmpty ? .chart : nil
     }
 
     static func isFuture(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> Bool {

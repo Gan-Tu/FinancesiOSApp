@@ -150,6 +150,33 @@ final class CompanionParityTests: XCTestCase {
 }
 
 final class RegisterBalanceCurrencyTests: XCTestCase {
+    func testInitialPositionPrioritizesTodayOverChartAndDistantFutureEntries() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 9, day: 7, hour: 12)))
+        var fixture = makeFixture()
+        for (index, offset) in [-10, -1, 0, 1, 365, 1095].enumerated() {
+            fixture.data.transactions[index].date = try XCTUnwrap(calendar.date(byAdding: .day, value: offset, to: now))
+        }
+        for scope in [MobileTransactionScope.all, .account(fixture.cash.id), .account(fixture.group.id)] {
+            let result = RegisterPresentation.build(data: fixture.data, rows: fixture.data.transactions, scope: scope, calendar: calendar)
+            for showsChart in [false, true] {
+                XCTAssertEqual(result.initialScrollTarget(showsChart: showsChart, now: now, calendar: calendar), .day(calendar.startOfDay(for: now)))
+            }
+            XCTAssertEqual(result.months.flatMap(\.days).flatMap(\.transactions).count, 6)
+        }
+        let withoutToday = fixture.data.transactions.filter { !calendar.isDate($0.date, inSameDayAs: now) }
+        let recent = RegisterPresentation.build(data: fixture.data, rows: withoutToday, scope: .all, calendar: calendar)
+        XCTAssertEqual(recent.initialScrollTarget(showsChart: true, now: now, calendar: calendar), .day(calendar.startOfDay(for: fixture.data.transactions[1].date)))
+        let future = fixture.data.transactions.filter { $0.date > now }
+        let futureOnly = RegisterPresentation.build(data: fixture.data, rows: future, scope: .all, calendar: calendar)
+        XCTAssertEqual(futureOnly.initialScrollTarget(showsChart: true, now: now, calendar: calendar), .day(calendar.startOfDay(for: fixture.data.transactions[3].date)))
+        let history = fixture.data.transactions.filter { $0.date < now }
+        let historyOnly = RegisterPresentation.build(data: fixture.data, rows: history, scope: .all, calendar: calendar)
+        XCTAssertNil(historyOnly.initialScrollTarget(showsChart: false, now: now, calendar: calendar))
+        XCTAssertEqual(historyOnly.initialScrollTarget(showsChart: true, now: now, calendar: calendar), .chart)
+    }
+
     func testSyncOnlyChangesDoNotInvalidateRegisterContent() {
         let original = makeFixture().data
         var updated = original
