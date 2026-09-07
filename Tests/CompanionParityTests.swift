@@ -148,3 +148,92 @@ final class CompanionParityTests: XCTestCase {
         XCTAssertTrue(store.transactions(scope: .all, ledgerID: second.id).isEmpty)
     }
 }
+
+final class RegisterBalanceCurrencyTests: XCTestCase {
+    func testInterleavedCurrenciesShowOnlyEachTransactionsRunningBalance() throws {
+        let fixture = makeFixture()
+        for scope in [MobileTransactionScope.all, .account(fixture.cash.id), .account(fixture.group.id)] {
+            let result = RegisterPresentation.build(data: fixture.data, rows: fixture.data.transactions, scope: scope)
+            let eurRow = fixture.data.transactions[3]
+            let usdRow = fixture.data.transactions[4]
+            XCTAssertEqual(result.balances[eurRow.id], [RegisterMoney(commodityID: fixture.eur.id, symbol: "EUR", amount: 150)])
+            XCTAssertEqual(result.balances[usdRow.id], [RegisterMoney(commodityID: fixture.usd.id, symbol: "USD", amount: 975)])
+            let zeroRow = fixture.data.transactions[5]
+            XCTAssertEqual(result.balances[zeroRow.id], [RegisterMoney(commodityID: fixture.eur.id, symbol: "EUR", amount: 0)])
+        }
+    }
+
+    func testFilteredRowsRetainHiddenHistoryWithoutOtherCurrencyBalances() throws {
+        let fixture = makeFixture()
+        let row = fixture.data.transactions[3]
+        for scope in [MobileTransactionScope.all, .account(fixture.cash.id), .currency(fixture.eur.id)] {
+            let result = RegisterPresentation.build(data: fixture.data, rows: [row], scope: scope)
+            XCTAssertEqual(result.balances[row.id], [RegisterMoney(commodityID: fixture.eur.id, symbol: "EUR", amount: 150)])
+        }
+    }
+
+    func testMultiCurrencyTransactionKeepsBothUsedCurrenciesButHidesUnrelatedOnes() throws {
+        var fixture = makeFixture()
+        let other = try XCTUnwrap(fixture.data.accounts.first { $0.kind == .expense })
+        let exchange = LedgerTransaction(ledgerID: fixture.cash.ledgerID, date: Date(timeIntervalSince1970: 1_800_000_007), payee: "", note: "Exchange", number: "", cleared: true, postings: [
+            Posting(accountID: fixture.cash.id, commodityID: fixture.usd.id, amount: -100),
+            Posting(accountID: fixture.cash.id, commodityID: fixture.eur.id, amount: 90),
+            Posting(accountID: other.id, commodityID: fixture.usd.id, amount: 100),
+            Posting(accountID: other.id, commodityID: fixture.eur.id, amount: -90)
+        ])
+        fixture.data.transactions.append(exchange)
+        for scope in [MobileTransactionScope.all, .account(fixture.cash.id)] {
+            let result = RegisterPresentation.build(data: fixture.data, rows: [exchange], scope: scope)
+            XCTAssertEqual(result.balances[exchange.id], [
+                RegisterMoney(commodityID: fixture.eur.id, symbol: "EUR", amount: 90),
+                RegisterMoney(commodityID: fixture.usd.id, symbol: "USD", amount: 875)
+            ])
+        }
+    }
+
+    func testSingleCurrencyAccountsAndTheirGroupTotalsStayUnchanged() throws {
+        var fixture = makeFixture()
+        let euroCash = Account(ledgerID: fixture.cash.ledgerID, parentID: fixture.group.id, commodityID: fixture.eur.id, name: "Euro Cash", kind: .asset)
+        let francCash = Account(ledgerID: fixture.cash.ledgerID, parentID: fixture.group.id, commodityID: fixture.chf.id, name: "Franc Cash", kind: .asset)
+        fixture.data.accounts += [euroCash, francCash]
+        for index in fixture.data.transactions.indices {
+            let currency = fixture.data.transactions[index].postings[0].commodityID
+            if currency == fixture.eur.id { fixture.data.transactions[index].postings[0].accountID = euroCash.id }
+            if currency == fixture.chf.id { fixture.data.transactions[index].postings[0].accountID = francCash.id }
+        }
+        let row = fixture.data.transactions[4]
+        let account = RegisterPresentation.build(data: fixture.data, rows: [row], scope: .account(fixture.cash.id))
+        XCTAssertEqual(account.balances[row.id], [RegisterMoney(commodityID: fixture.usd.id, symbol: "USD", amount: 975)])
+        let group = RegisterPresentation.build(data: fixture.data, rows: [row], scope: .account(fixture.group.id))
+        XCTAssertEqual(group.balances[row.id], [
+            RegisterMoney(commodityID: fixture.chf.id, symbol: "CHF", amount: 200),
+            RegisterMoney(commodityID: fixture.eur.id, symbol: "EUR", amount: 150),
+            RegisterMoney(commodityID: fixture.usd.id, symbol: "USD", amount: 975)
+        ])
+    }
+
+    private struct Fixture {
+        var data: JournalData
+        let cash: Account
+        let group: Account
+        let usd: Commodity
+        let eur: Commodity
+        let chf: Commodity
+    }
+
+    private func makeFixture() -> Fixture {
+        let ledger = Ledger(name: "Multi-currency")
+        let currencies = ["USD", "EUR", "CHF", "GBP", "JPY"].map { Commodity(ledgerID: ledger.id, symbol: $0, name: $0) }
+        let group = Account(ledgerID: ledger.id, name: "Assets", kind: .asset)
+        let cash = Account(ledgerID: ledger.id, parentID: group.id, name: "Cash", kind: .asset)
+        let other = Account(ledgerID: ledger.id, name: "Other", kind: .expense)
+        let entries: [(Int, Decimal)] = [(0, 1000), (1, 100), (2, 200), (1, 50), (0, -25), (1, -150)]
+        let transactions = entries.enumerated().map { index, entry in
+            LedgerTransaction(ledgerID: ledger.id, date: Date(timeIntervalSince1970: 1_800_000_000 + Double(index)), payee: "", note: "Entry \(index)", number: "", cleared: true, postings: [
+                Posting(accountID: cash.id, commodityID: currencies[entry.0].id, amount: entry.1),
+                Posting(accountID: other.id, commodityID: currencies[entry.0].id, amount: -entry.1)
+            ])
+        }
+        return Fixture(data: JournalData(ledgers: [ledger], commodities: currencies, accounts: [group, cash, other], transactions: transactions), cash: cash, group: group, usd: currencies[0], eur: currencies[1], chf: currencies[2])
+    }
+}

@@ -130,18 +130,28 @@ struct RegisterPresentation {
             guard rowIDs.contains(transaction.id) else { continue }
             var displayed: [UUID: Decimal] = [:]
             var running: [UUID: Decimal] = [:]
+            func rowBalances(for accountID: UUID, using currencyIDs: Set<UUID>) -> [UUID: Decimal] {
+                let totals = cumulative[accountID] ?? [:]
+                // Only the row projection is narrowed. Keep the complete running
+                // totals for subsequent rows, including currencies now at zero.
+                return totals.count > 1 ? totals.filter { currencyIDs.contains($0.key) } : totals
+            }
             if !scopedAccounts.isEmpty {
                 for posting in transaction.postings where scopedAccounts.contains(posting.accountID) {
                     if let id = currency(posting) { displayed[id, default: 0] += posting.amount }
                 }
+                let rowCurrencies = Set(displayed.keys)
                 for accountID in scopedAccounts {
-                    for (id, value) in cumulative[accountID] ?? [:] { running[id, default: 0] += value }
+                    for (id, value) in rowBalances(for: accountID, using: rowCurrencies) { running[id, default: 0] += value }
                 }
             } else {
                 let incomeExpense = transaction.postings.filter { p in accounts[p.accountID].map { $0.kind == .income || $0.kind == .expense } ?? false }
                 for p in incomeExpense { if let id = currency(p) { displayed[id, default: 0] -= p.amount } }
                 if incomeExpense.isEmpty, let posting = transaction.postings.first(where: { $0.amount > 0 }) ?? transaction.postings.first, let id = currency(posting) { displayed[id] = posting.amount }
-                if let first = transaction.postings.first(where: { accounts[$0.accountID].map { $0.kind == .asset || $0.kind == .liability } ?? false }) { running = cumulative[first.accountID] ?? [:] }
+                if let first = transaction.postings.first(where: { accounts[$0.accountID].map { $0.kind == .asset || $0.kind == .liability } ?? false }) {
+                    let rowCurrencies = Set(transaction.postings.filter { $0.accountID == first.accountID }.compactMap(currency))
+                    running = rowBalances(for: first.accountID, using: rowCurrencies)
+                }
             }
             if case .currency(let id) = scope { displayed = displayed.filter { $0.key == id }; running = running.filter { $0.key == id } }
             amounts[transaction.id] = money(displayed)
