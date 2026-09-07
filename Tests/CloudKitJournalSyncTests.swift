@@ -1,11 +1,71 @@
 import CryptoKit
 import Foundation
+import SwiftUI
+import UIKit
 import XCTest
 @testable import FinancesClone
 
 @MainActor
 final class CloudKitJournalSyncTests: XCTestCase {
     private let context = "iCloud.dev.gan.FinanceApp|Development|FinancesJournal_v1"
+
+    func testDismissingCloudSyncPresentationKeepsRealTransfersRunningAndOffCancels() async throws {
+        let server = try CKJournalTestServer()
+        let network = CKJournalNetwork(server: server, automatic: true)
+        network.hold = { $0.kind == .fetch || $0.kind == .modify }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("SyncSheet-" + UUID().uuidString)
+        let store = MobileLedgerStore(supportDirectory: directory, initialData: CKTestData.make(), cloudKitSyncDependencies: .init(configuration: { CloudKitSyncConfiguration() }, makeClient: { _ in network.makeClient() }, automaticTriggersEnabled: false))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previousWindow = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene: scene)
+        // The presentation host has no scene lifecycle of its own. App-shell
+        // dismissal gestures are covered by the separate UI automation test.
+        let root = UIViewController()
+        window.rootViewController = root
+        window.makeKeyAndVisible()
+        defer {
+            store.setSyncEnabled(false)
+            network.abort()
+            window.isHidden = true
+            window.rootViewController = nil
+            previousWindow?.makeKeyAndVisible()
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        store.setSyncEnabled(true)
+        for kind in [CKJournalCall.Kind.fetch, .modify] {
+            let ready = network.nextExpectation()
+            guard await XCTWaiter.fulfillment(of: [ready], timeout: observationTimeout) == .completed else {
+                XCTFail("Transfer did not start: \(store.cloudSyncProgress)"); return
+            }
+            let call = try XCTUnwrap(network.takeNext())
+            XCTAssertEqual(call.kind, kind)
+            let sheet = UIHostingController(rootView: MobileCloudSyncSheet().environmentObject(store))
+            sheet.modalPresentationStyle = .pageSheet
+            await withCheckedContinuation { continuation in root.present(sheet, animated: false) { continuation.resume() } }
+            XCTAssertTrue(store.cloudSyncProgress.isRunning)
+            await withCheckedContinuation { continuation in root.dismiss(animated: false) { continuation.resume() } }
+            XCTAssertNil(root.presentedViewController)
+            XCTAssertTrue(store.cloudSyncProgress.isRunning, "Dismissing the sync UI must not cancel the store-owned transfer")
+            XCTAssertFalse(network.canceledSessions.contains(call.session))
+            network.reply(call, try server.answer(call))
+        }
+        await store.waitForCloudKitSyncIdle()
+        XCTAssertEqual(store.cloudSyncProgress.state, .succeeded)
+
+        store.synchronizeNow()
+        let ready = network.nextExpectation()
+        guard await XCTWaiter.fulfillment(of: [ready], timeout: observationTimeout) == .completed else {
+            XCTFail("Second sync did not start"); return
+        }
+        let held = try XCTUnwrap(network.takeNext())
+        store.setSyncEnabled(false)
+        XCTAssertTrue(network.canceledSessions.contains(held.session))
+        network.reply(held, try server.answer(held))
+        await store.waitForCloudKitSyncIdle()
+        XCTAssertFalse(store.data.syncEnabled)
+        XCTAssertEqual(store.cloudSyncProgress, .idle, "A late transfer response must not restart disabled sync")
+    }
 
     func testUploadProgressAdvancesAfterAcknowledgmentAndIncludesConcurrentEdits() async throws {
         let fixture = try fixture(transactionCount: 120)

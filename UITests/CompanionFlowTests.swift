@@ -22,6 +22,15 @@ final class CompanionFlowTests: XCTestCase {
             XCTAssertFalse(app.buttons["Synchronize Now"].isEnabled)
             let screenshot = XCTAttachment(screenshot: app.screenshot())
             screenshot.name = title; screenshot.lifetime = .keepAlways; add(screenshot)
+            app.navigationBars["Cloud Sync"].buttons["Done"].tap()
+            XCTAssertTrue(app.navigationBars["Journals"].waitForExistence(timeout: 5))
+            XCTAssertTrue((footer.value as? String)?.contains(detail) == true)
+            footer.tap()
+            XCTAssertTrue(app.staticTexts[title].waitForExistence(timeout: 5))
+            app.navigationBars["Cloud Sync"].swipeDown()
+            XCTAssertTrue(app.navigationBars["Journals"].waitForExistence(timeout: 5))
+            XCTAssertTrue(footer.isHittable)
+            XCTAssertTrue((footer.value as? String)?.contains(detail) == true)
             app.terminate()
         }
     }

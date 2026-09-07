@@ -1262,6 +1262,8 @@ private struct MobileQuickSearchResults {
 struct MobileCloudSyncSheet: View {
     @Environment(\.dismiss) private var dismiss
 
+    // Sync belongs to MobileLedgerStore, not this presentation. Dismissing
+    // the sheet must never cancel its task; the Cloud Sync toggle owns that.
     var body: some View {
         NavigationStack {
             CloudSyncManagementView()
