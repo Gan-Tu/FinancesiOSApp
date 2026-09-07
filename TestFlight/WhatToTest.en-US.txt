@@ -2,6 +2,8 @@ Finances v2 for iOS
 
 First-level accounts now align with their category heading, with only true subaccounts indented. Chart visibility and each journal's account expansion choices persist across navigation and relaunch. Long account names stay on one line. Toggle Show/Hide Chart and confirm the chart opens visibly next time until you turn it off.
 
+If an account, currency, template or its journal is deleted while its editor is open, saving should show an error and preserve the deletion.
+
 Swipe journals or accounts left: Delete should be red, while Rename/Edit stays blue. Settings action menus have larger tap targets and descriptive accessibility labels.
 
 Sync now shows Uploading or Downloading in the journal footer and Cloud Sync screen. Upload progress counts completed changes; downloads show an activity bar and changes received because iCloud does not supply a download total. Close the Cloud Sync sheet with Done or by swiping down and confirm sync continues in the footer. Turning Cloud Sync off should cancel it; finishing or turning it off should hide the progress bar.

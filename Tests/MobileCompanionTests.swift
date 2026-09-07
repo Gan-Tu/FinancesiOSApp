@@ -5,6 +5,75 @@ import CryptoKit
 
 @MainActor
 final class MobileCompanionTests: XCTestCase {
+    func testTemplateDraftCannotOutliveItsDeletedJournal() throws {
+        for editing in [false, true] {
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            let store = MobileLedgerStore(supportDirectory: folder, initialData: DemoData.fixture())
+            var draft = store.templateDraft(for: nil)
+            draft.name = "Stale template"
+            draft.postings = []
+            let owner = try XCTUnwrap(draft.ledgerID)
+            if editing {
+                store.saveTransactionTemplate(draft)
+                XCTAssertNil(store.validationError)
+                draft = store.templateDraft(for: try XCTUnwrap(store.data.transactionTemplates.first { $0.name == draft.name }))
+            }
+            store.deleteJournal(owner)
+            try store.flushLocalChanges()
+            let before = store.data.transactionTemplates
+            store.saveTransactionTemplate(draft)
+            XCTAssertNotNil(store.validationError)
+            XCTAssertEqual(store.data.transactionTemplates, before)
+            try store.flushLocalChanges()
+            let reopened = MobileLedgerStore(supportDirectory: folder)
+            XCTAssertFalse(reopened.requiresJournalRecovery)
+            XCTAssertFalse(reopened.data.ledgers.contains { $0.id == owner })
+            XCTAssertEqual(reopened.data.transactionTemplates, before)
+        }
+    }
+
+    func testDeletedEditorsCannotRecreateAccountsCurrenciesOrTemplates() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = MobileLedgerStore(supportDirectory: folder, initialData: DemoData.fixture())
+        let cash = try XCTUnwrap(store.data.accounts.first { $0.name == "Cash" })
+        let accountDraft = store.draft(for: cash)
+        store.deleteAccount(cash.id)
+        XCTAssertNil(store.validationError)
+        let accounts = store.data.accounts
+        store.saveAccount(accountDraft)
+        XCTAssertNotNil(store.validationError)
+        XCTAssertEqual(store.data.accounts, accounts)
+
+        let eur = try XCTUnwrap(store.data.commodities.first { $0.symbol == "EUR" })
+        let currencyDraft = store.draft(for: eur)
+        store.deleteCurrency(eur.id)
+        XCTAssertNil(store.validationError)
+        let currencies = store.data.commodities
+        store.saveCurrency(currencyDraft)
+        XCTAssertNotNil(store.validationError)
+        XCTAssertEqual(store.data.commodities, currencies)
+
+        var templateDraft = store.templateDraft(for: nil)
+        templateDraft.name = "Deleted template"
+        store.saveTransactionTemplate(templateDraft)
+        XCTAssertNil(store.validationError)
+        let template = try XCTUnwrap(store.data.transactionTemplates.first { $0.name == templateDraft.name })
+        templateDraft = store.templateDraft(for: template)
+        store.deleteTransactionTemplate(template.id)
+        let templates = store.data.transactionTemplates
+        store.saveTransactionTemplate(templateDraft)
+        XCTAssertNotNil(store.validationError)
+        XCTAssertEqual(store.data.transactionTemplates, templates)
+        try store.flushLocalChanges()
+        let reopened = MobileLedgerStore(supportDirectory: folder)
+        XCTAssertFalse(reopened.requiresJournalRecovery)
+        XCTAssertEqual(reopened.data.accounts.sorted { $0.id.uuidString < $1.id.uuidString }, accounts.sorted { $0.id.uuidString < $1.id.uuidString })
+        XCTAssertEqual(reopened.data.commodities, currencies)
+        XCTAssertEqual(reopened.data.transactionTemplates, templates)
+    }
+
     func testNestedReceiptsSurviveRestoreReopenAndOtherReceiptDeletion() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }

@@ -1784,7 +1784,14 @@ final class MobileLedgerStore: ObservableObject {
     func saveAccount(_ draft: MobileAccountDraft) {
         guard allowJournalMutation() else { return }
         validationError = nil
-        guard let ledgerID = draft.ledgerID ?? selectedLedgerID, ledger(ledgerID) != nil else { return }
+        guard let ledgerID = draft.ledgerID ?? selectedLedgerID, ledger(ledgerID) != nil else {
+            validationError = ValidationError(message: "This journal no longer exists.")
+            return
+        }
+        if let id = draft.id, !data.accounts.contains(where: { $0.id == id && $0.ledgerID == ledgerID }) {
+            validationError = ValidationError(message: "This account no longer exists in this journal. Create a new account instead.")
+            return
+        }
         let trimmed = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             validationError = ValidationError(message: "Account name is required.")
@@ -1910,7 +1917,14 @@ final class MobileLedgerStore: ObservableObject {
     func saveCurrency(_ draft: CurrencyDraft) {
         guard allowJournalMutation() else { return }
         validationError = nil
-        guard let ledgerID = draft.ledgerID ?? selectedLedgerID, ledger(ledgerID) != nil else { return }
+        guard let ledgerID = draft.ledgerID ?? selectedLedgerID, ledger(ledgerID) != nil else {
+            validationError = ValidationError(message: "This journal no longer exists.")
+            return
+        }
+        if let id = draft.id, !data.commodities.contains(where: { $0.id == id && $0.ledgerID == ledgerID }) {
+            validationError = ValidationError(message: "This currency no longer exists in this journal. Create a new currency instead.")
+            return
+        }
         let symbol = draft.symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !symbol.isEmpty else {
@@ -2265,8 +2279,16 @@ final class MobileLedgerStore: ObservableObject {
     }
 
     func saveTransactionTemplate(_ draft: TransactionTemplateDraft) {
+        guard allowJournalMutation() else { return }
         validationError = nil
-        guard let ledgerID = draft.ledgerID ?? selectedLedgerID else { return }
+        guard let ledgerID = draft.ledgerID ?? selectedLedgerID, ledger(ledgerID) != nil else {
+            validationError = ValidationError(message: "This journal no longer exists.")
+            return
+        }
+        if let id = draft.id, !data.transactionTemplates.contains(where: { $0.id == id && $0.ledgerID == ledgerID }) {
+            validationError = ValidationError(message: "This template no longer exists in this journal. Create a new template instead.")
+            return
+        }
         let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else {
             validationError = ValidationError(message: "Template name cannot be blank.")
