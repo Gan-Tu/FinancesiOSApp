@@ -225,6 +225,44 @@ final class RecurringJournalEditorTests: XCTestCase {
         XCTAssertEqual(f.rows(changed).count, 4)
     }
 
+    func testLongFiniteDailyScheduleReachesItsEndAndDoesNotStopAtOldWorkWindow() throws {
+        let f = Fixture()
+        var anchor = f.anchor
+        anchor.date = f.day(2010, 1, 1)
+        anchor.recurrenceRule?.frequency = .daily
+        anchor.recurrenceRule?.endDate = f.day(2030, 1, 1)
+        let reference = f.day(2026, 9, 7)
+        let materialized = try RecurringJournalEditor.apply(anchor, replacing: nil, in: f.journal, referenceDate: reference, calendar: f.calendar)
+        let expected = try XCTUnwrap(f.calendar.dateComponents([.day], from: anchor.date, to: f.day(2030, 1, 1)).day) + 1
+        XCTAssertEqual(f.rows(materialized).count, expected)
+        XCTAssertEqual(f.rows(materialized).last?.date, f.day(2030, 1, 1))
+        XCTAssertEqual(RecurringJournalEditor.materialized(materialized, referenceDate: f.day(2026, 9, 8), calendar: f.calendar).transactions, materialized.transactions)
+    }
+
+    func testLongCountedWorkdaySchedulePreservesDeletedAndMovedSlotsWhenExtended() throws {
+        let f = Fixture()
+        var anchor = f.anchor
+        anchor.recurrenceRule?.frequency = .daily
+        anchor.recurrenceRule?.onWorkdays = true
+        anchor.recurrenceRule?.occurrenceCount = 3005
+        var journal = try RecurringJournalEditor.apply(anchor, replacing: nil, in: f.journal, referenceDate: f.day(2026, 1, 1), calendar: f.calendar)
+        XCTAssertEqual(f.rows(journal).count, 3005)
+        let initial = f.rows(journal)
+        let deleted = initial[3]
+        journal = try RecurringJournalEditor.deleting(deleted.id, scope: .occurrence, in: journal, calendar: f.calendar).journal
+        var moved = initial[10]
+        moved.date = f.day(2040, 1, 1)
+        journal = try RecurringJournalEditor.apply(moved, replacing: moved.id, in: journal, referenceDate: f.day(2026, 1, 1), calendar: f.calendar, deletedIDs: [deleted.id])
+        for index in journal.transactions.indices { journal.transactions[index].recurrenceRule?.occurrenceCount = 3010 }
+        let extended = RecurringJournalEditor.materialized(journal, referenceDate: f.day(2026, 9, 7), calendar: f.calendar, deletedIDs: [deleted.id])
+        XCTAssertEqual(f.rows(extended).count, 3009)
+        XCTAssertFalse(extended.transactions.contains { $0.id == deleted.id })
+        XCTAssertEqual(extended.transactions.first { $0.id == moved.id }?.date, moved.date)
+        XCTAssertFalse(extended.transactions.contains { $0.date == initial[10].date })
+        XCTAssertEqual(Set(extended.transactions.map { f.calendar.startOfDay(for: $0.date) }).count, extended.transactions.count)
+        XCTAssertEqual(RecurringJournalEditor.materialized(extended, referenceDate: f.day(2026, 9, 8), calendar: f.calendar, deletedIDs: [deleted.id]).transactions, extended.transactions)
+    }
+
     private func roundTrip(_ journal: JournalData) throws -> JournalData {
         try JSONDecoder().decode(JournalData.self, from: JSONEncoder().encode(journal))
     }

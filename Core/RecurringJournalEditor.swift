@@ -180,8 +180,14 @@ enum RecurringJournalEditor {
     }
 
     private static func materialize(ruleID: UUID, in journal: inout JournalData, referenceDate: Date, calendar: Calendar, deletedIDs: Set<UUID>) {
+        // Complete finite schedules in bounded allocation chunks. Replaying known
+        // slots is necessary to preserve moved identities and deleted-slot counts.
+        while materializeBatch(ruleID: ruleID, in: &journal, referenceDate: referenceDate, calendar: calendar, deletedIDs: deletedIDs) {}
+    }
+
+    private static func materializeBatch(ruleID: UUID, in journal: inout JournalData, referenceDate: Date, calendar: Calendar, deletedIDs: Set<UUID>) -> Bool {
         guard let first = anchor(ruleID: ruleID, in: journal.transactions), let rule = first.recurrenceRule,
-              rule.frequency != .never, rule.frequency != .custom else { return }
+              rule.frequency != .never, rule.frequency != .custom else { return false }
         let scheduleAnchor = rule.templateHistory?.scheduleAnchorDate ?? first.date
         let referenceDay = calendar.startOfDay(for: referenceDate)
         let horizonDay = max(horizon(referenceDate, calendar: calendar), journal.transactions
@@ -200,19 +206,21 @@ enum RecurringJournalEditor {
         case .weekly: component = .weekOfYear
         case .monthly: component = .month
         case .yearly: component = .year
-        case .never, .custom: return
+        case .never, .custom: return false
         }
         var occurrenceIndex = 1
-        // Unlimited projections skip elapsed slots without exhausting the Mac
-        // engine's 2,400-attempt work bound before reaching the current year.
+        // Unlimited schedules omit elapsed slots and project from the current day.
         if limit == nil && rule.endDate == nil {
             let elapsed = calendar.dateComponents([component], from: scheduleAnchor, to: referenceDay).value(for: component) ?? 0
             occurrenceIndex = max(1, elapsed / max(rule.intervalValue, 1) - 2)
         }
-        for _ in 0..<2400 {
+        var appended = 0
+        while true {
             if let limit { if count >= limit { break } }
             else if let latestFutureDay, latestFutureDay >= horizonDay { break }
-            guard var next = calendar.date(byAdding: component, value: max(rule.intervalValue, 1) * occurrenceIndex, to: scheduleAnchor) else { break }
+            let (offset, overflow) = max(rule.intervalValue, 1).multipliedReportingOverflow(by: occurrenceIndex)
+            guard !overflow, occurrenceIndex < Int.max,
+                  var next = calendar.date(byAdding: component, value: offset, to: scheduleAnchor) else { break }
             occurrenceIndex += 1
             if rule.onWorkdays {
                 while calendar.isDateInWeekend(next), let following = calendar.date(byAdding: .day, value: 1, to: next) { next = following }
@@ -230,6 +238,7 @@ enum RecurringJournalEditor {
                 if day >= referenceDay { latestFutureDay = max(latestFutureDay ?? day, day) }
                 continue
             }
+            guard appended < 2400 else { return true }
             var row = first
             rule.templateHistory?.template(on: day).apply(to: &row)
             row.id = allIDs.contains(id) ? UUID() : id
@@ -239,9 +248,11 @@ enum RecurringJournalEditor {
                         commodityID: posting.commodityID, amount: posting.amount, listIndex: index)
             }
             journal.transactions.append(row)
+            appended += 1
             allIDs.insert(row.id); days.insert(day); count += 1
             if day >= referenceDay { latestFutureDay = max(latestFutureDay ?? day, day) }
         }
+        return false
     }
 
     static func occurrenceID(ruleID: UUID, day: Date) -> UUID {

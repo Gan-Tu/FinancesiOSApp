@@ -180,10 +180,13 @@ private struct MobileLedgerDerivedCache {
             account.parentID == nil ? nil : account
         }, by: { $0.parentID! })
         var descendantMemo: [UUID: Set<UUID>] = [:]
+        var visitingDescendants = Set<UUID>()
         func descendants(of accountID: UUID) -> Set<UUID> {
             if let memo = descendantMemo[accountID] {
                 return memo
             }
+            guard visitingDescendants.insert(accountID).inserted else { return [] }
+            defer { visitingDescendants.remove(accountID) }
             let children = childrenByParent[accountID] ?? []
             let result = children.reduce(Set(children.map(\.id))) { partial, child in
                 partial.union(descendants(of: child.id))
@@ -2129,11 +2132,7 @@ final class MobileLedgerStore: ObservableObject {
                 deletedIDs: deletedTransactionTombstoneIDs
             )
             try Self.validateCandidateData(candidate, operation: "Transaction")
-            let previousPaths = Set(data.transactions.flatMap { attachmentPaths(in: $0.attachment) })
             data = candidate
-            if previousPaths != Set(data.transactions.flatMap { attachmentPaths(in: $0.attachment) }) {
-                scheduleDeferredUnreferencedAttachmentCleanup()
-            }
             if previous?.recurrenceRule == nil && transaction.recurrenceRule == nil,
                candidate.transactions.count == expectedSingleRowCount {
                 refreshDerivedCacheForTransactionReplacement(previous: previous, updated: transaction)
@@ -2171,9 +2170,6 @@ final class MobileLedgerStore: ObservableObject {
         let removed = data.transactions.filter { ids.contains($0.id) }
         deletedTransactionTombstoneIDs.formUnion(ids)
         data = deletion.journal
-        if removed.contains(where: { !($0.attachment?.assets.isEmpty ?? true) }) {
-            scheduleDeferredUnreferencedAttachmentCleanup()
-        }
         if removed.count == 1, !deletion.scheduleChanged, let row = removed.first {
             refreshDerivedCacheForTransactionDeletion(row)
         } else { refreshDerivedCache() }
@@ -2639,10 +2635,8 @@ final class MobileLedgerStore: ObservableObject {
             data = previousData
             refreshDerivedCache()
             refreshCloudKitForegroundTriggers()
-            removeUnreferencedAttachmentFiles()
             throw error
         }
-        removeUnreferencedAttachmentFiles()
         deletedTransactionTombstoneIDs = []
         scheduleDeferredRemoteReplacementSave(data)
         refreshDerivedCache()
@@ -3010,12 +3004,15 @@ final class MobileLedgerStore: ObservableObject {
         try requireWritableJournal()
         let databaseURL = sqliteStore.databaseURL
         let baseline = persistenceBaseline
+        let supportDirectory = supportDirectory
         try Self.deferredPersistenceQueue.sync {
             do {
+                let previous = baseline.snapshot
                 try SQLiteJournalStore(databaseURL: databaseURL).persist(
-                    snapshot, previous: baseline.snapshot, trackSyncChanges: trackSyncChanges
+                    snapshot, previous: previous, trackSyncChanges: trackSyncChanges
                 )
                 baseline.snapshot = snapshot
+                Self.removeObsoleteAttachmentFiles(supportDirectory: supportDirectory, previous: previous, data: snapshot)
             } catch {
                 baseline.snapshot = nil
                 throw error
@@ -3032,14 +3029,17 @@ final class MobileLedgerStore: ObservableObject {
         let snapshot = data
         let databaseURL = sqliteStore.databaseURL
         let baseline = persistenceBaseline
+        let supportDirectory = supportDirectory
         Self.deferredPersistenceQueue.async { [weak self, snapshot, databaseURL, baseline, trackSyncChanges, validateSnapshot] in
             do {
                 if validateSnapshot {
                     try Self.validateCandidateData(snapshot, operation: "Journal")
                 }
                 let store = SQLiteJournalStore(databaseURL: databaseURL)
-                try store.persist(snapshot, previous: baseline.snapshot, trackSyncChanges: trackSyncChanges)
+                let previous = baseline.snapshot
+                try store.persist(snapshot, previous: previous, trackSyncChanges: trackSyncChanges)
                 baseline.snapshot = snapshot
+                Self.removeObsoleteAttachmentFiles(supportDirectory: supportDirectory, previous: previous, data: snapshot)
                 Task { @MainActor [weak self] in
                     self?.refreshCloudSyncDataAvailability()
                 }
@@ -3061,16 +3061,16 @@ final class MobileLedgerStore: ObservableObject {
         guard allowJournalMutation() else { return }
         let databaseURL = sqliteStore.databaseURL
         let baseline = persistenceBaseline
+        let supportDirectory = supportDirectory
         Self.deferredPersistenceQueue.async { [snapshot, databaseURL, baseline] in
             do {
                 let store = SQLiteJournalStore(databaseURL: databaseURL)
                 // This is the explicit import/restore boundary, not a routine
                 // save. Preserve account binding and queue its local changes.
-                try store.replaceData(snapshot, trackSyncChanges: true)
-                if let key = try store.cloudKitBoundContextKey() {
-                    try store.resetCloudKitSyncState(contextKey: key)
-                }
+                let previous = baseline.snapshot
+                try store.replaceData(snapshot, trackSyncChanges: true, resetCloudKitState: true)
                 baseline.snapshot = snapshot
+                Self.removeObsoleteAttachmentFiles(supportDirectory: supportDirectory, previous: previous, data: snapshot)
                 Task { @MainActor [weak self] in
                     self?.refreshCloudSyncDataAvailability()
                 }
@@ -3154,27 +3154,98 @@ final class MobileLedgerStore: ObservableObject {
 
     private func applyBackupImportReadResult(_ result: MobileBackupImportReadResult) throws {
         try requireWritableJournal()
+        var imported: JournalData
+        var payloadFiles: [String: Data]? = nil
+        var packageDirectory: URL? = nil
         switch result {
-        case .package(var journalData, let backupURL):
-            try restorePackageAttachments(from: journalData, backupDirectory: backupURL)
-            try replaceDataFromBackup(&journalData)
+        case .package(let journal, let directory):
+            imported = journal
+            packageDirectory = directory
         case .mobilePayload(let payload):
-            try importMobileBackupPayload(payload)
-        case .journalData(var journalData):
-            try replaceDataFromBackup(&journalData)
+            guard payload.formatVersion == 1 else { throw ValidationError(message: "Unsupported backup format.") }
+            imported = payload.journalData
+            var files: [String: Data] = [:]
+            for file in payload.attachments {
+                let path = try validatedAttachmentRelativePath(file.storedPath)
+                if let previous = files[path], previous != file.data {
+                    throw ValidationError(message: "Backup contains conflicting attachment paths.")
+                }
+                files[path] = file.data
+            }
+            payloadFiles = files
+        case .journalData(let journal):
+            imported = journal
         }
-    }
-
-    private func importMobileBackupPayload(_ payload: MobileBackupPayload) throws {
-        try requireWritableJournal()
-        guard payload.formatVersion == 1 else {
-            throw ValidationError(message: "Unsupported backup format.")
+        imported.syncEnabled = false
+        imported.lastSyncedAt = nil
+        if let selectedLedgerID = imported.selectedLedgerID,
+           !imported.ledgers.contains(where: { $0.id == selectedLedgerID }) {
+            imported.selectedLedgerID = imported.ledgers.sorted { $0.listIndex < $1.listIndex }.first?.id
+        }
+        if imported.selectedLedgerID == nil {
+            imported.selectedLedgerID = imported.ledgers.sorted { $0.listIndex < $1.listIndex }.first?.id
         }
 
-        try writeMobileBackupAttachments(payload.attachments)
-        var journalData = payload.journalData
-        try ensureBackupContainsReferencedAttachments(journalData, payloadAttachments: payload.attachments)
-        try replaceDataFromBackup(&journalData)
+        // Validate before writing even temporary receipt data.
+        try Self.validateCandidateData(imported, operation: "Imported backup")
+        let restoreID = UUID().uuidString
+        let staging = supportDirectory.appendingPathComponent(".restore-" + restoreID, isDirectory: true)
+        let stagedReceipts = staging.appendingPathComponent("receipts", isDirectory: true)
+        let relativeDirectory = "Attachments/Restore-" + restoreID
+        let destination = attachmentFileURL(forRelativePath: relativeDirectory)
+        var movedReceipts = false
+        var committed = false
+        defer {
+            try? FileManager.default.removeItem(at: staging)
+            if movedReceipts && !committed { try? FileManager.default.removeItem(at: destination) }
+        }
+        var relocated: [String: String] = [:]
+        for transactionIndex in imported.transactions.indices {
+            guard var attachment = imported.transactions[transactionIndex].attachment else { continue }
+            for assetIndex in attachment.assets.indices {
+                let asset = attachment.assets[assetIndex]
+                let path = try validatedAttachmentRelativePath(asset.storedPath)
+                if let replacement = relocated[path] {
+                    attachment.assets[assetIndex].storedPath = replacement
+                    continue
+                }
+                let filename = UUID().uuidString + "-" + sanitizedAttachmentFilename(asset.originalFilename)
+                let stagedFile = stagedReceipts.appendingPathComponent(filename)
+                try FileManager.default.createDirectory(at: stagedReceipts, withIntermediateDirectories: true)
+                if let payloadFiles {
+                    guard let bytes = payloadFiles[path] else {
+                        throw ValidationError(message: "Backup is missing attachment file: \(asset.originalFilename)")
+                    }
+                    try bytes.write(to: stagedFile, options: .atomic)
+                } else {
+                    let source: URL
+                    if let packageDirectory {
+                        source = packageDirectory.appendingPathComponent(path)
+                    } else {
+                        source = attachmentFileURL(forRelativePath: path)
+                    }
+                    guard (try? source.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
+                        throw ValidationError(message: "Backup is missing attachment file: \(asset.originalFilename)")
+                    }
+                    try FileManager.default.copyItem(at: source, to: stagedFile)
+                }
+                let replacement = relativeDirectory + "/" + filename
+                relocated[path] = replacement
+                attachment.assets[assetIndex].storedPath = replacement
+            }
+            imported.transactions[transactionIndex].attachment = attachment
+        }
+        if !relocated.isEmpty {
+            // Drain previously queued cleanup before making the new receipt set visible.
+            let attachmentsDirectory = attachmentsDirectory
+            try Self.deferredPersistenceQueue.sync {
+                try FileManager.default.createDirectory(at: attachmentsDirectory, withIntermediateDirectories: true)
+                try FileManager.default.moveItem(at: stagedReceipts, to: destination)
+            }
+            movedReceipts = true
+        }
+        try replaceDataFromBackup(&imported)
+        committed = true
     }
 
     private func bankCounterPostings(for row: BankStatementRow, ledgerID: UUID, commodityID: UUID?) throws -> [Posting] {
@@ -3209,24 +3280,23 @@ final class MobileLedgerStore: ObservableObject {
 
     private func replaceDataFromBackup(_ importedData: inout JournalData) throws {
         try requireWritableJournal()
-        importedData.syncEnabled = false
-        importedData.lastSyncedAt = nil
-        if let selectedLedgerID = importedData.selectedLedgerID,
-           !importedData.ledgers.contains(where: { $0.id == selectedLedgerID }) {
-            importedData.selectedLedgerID = importedData.ledgers.sorted { $0.listIndex < $1.listIndex }.first?.id
-        }
-        if importedData.selectedLedgerID == nil {
-            importedData.selectedLedgerID = importedData.ledgers.sorted { $0.listIndex < $1.listIndex }.first?.id
-        }
-
         try Self.validateCandidateData(importedData, operation: "Imported backup")
-        data = importedData
+        cancelCloudSync()
+        let snapshot = importedData
+        let databaseURL = sqliteStore.databaseURL
+        let baseline = persistenceBaseline
+        let supportDirectory = supportDirectory
+        try Self.deferredPersistenceQueue.sync {
+            let previous = baseline.snapshot
+            try SQLiteJournalStore(databaseURL: databaseURL).replaceData(snapshot, trackSyncChanges: true, resetCloudKitState: true)
+            baseline.snapshot = snapshot
+            Self.removeObsoleteAttachmentFiles(supportDirectory: supportDirectory, previous: previous, data: snapshot)
+        }
+        data = snapshot
         refreshDerivedCache()
         deletedTransactionTombstoneIDs = []
-        cancelCloudSync()
         cloudSyncProgress = .idle
-        removeUnreferencedAttachmentFiles()
-        scheduleDeferredRemoteReplacementSave(data)
+        refreshCloudSyncDataAvailability()
         refreshUnlockStateForLoadedData()
     }
 
@@ -3291,6 +3361,22 @@ final class MobileLedgerStore: ObservableObject {
                     throw ValidationError(message: "\(operation) contains an invalid account currency.")
                 }
             }
+        }
+        guard accountIDs.count == candidate.accounts.count else {
+            throw ValidationError(message: "\(operation) contains duplicate account identifiers.")
+        }
+        let parents = Dictionary(uniqueKeysWithValues: candidate.accounts.map { ($0.id, $0.parentID) })
+        var validatedAccounts = Set<UUID>()
+        for account in candidate.accounts {
+            var path = Set<UUID>()
+            var current: UUID? = account.id
+            while let id = current, !validatedAccounts.contains(id) {
+                guard path.insert(id).inserted else {
+                    throw ValidationError(message: "\(operation) contains a circular account group.")
+                }
+                current = parents[id] ?? nil
+            }
+            validatedAccounts.formUnion(path)
         }
         for transaction in candidate.transactions {
             guard ledgerIDs.contains(transaction.ledgerID) else {
@@ -3458,10 +3544,6 @@ final class MobileLedgerStore: ObservableObject {
         return "Attachments/\(asset.id.uuidString)-\(sanitizedAttachmentFilename(asset.originalFilename))"
     }
 
-    private func attachmentPaths(in attachment: AttachmentContainer?) -> Set<String> {
-        Set(attachment?.assets.compactMap { validatedAttachmentRelativePathIfPresent($0.storedPath) } ?? [])
-    }
-
     private nonisolated static func backupRelativePath(for asset: AttachmentAsset, supportDirectory: URL) -> String {
         if let relativePath = validatedAttachmentRelativePathIfPresent(asset.storedPath, supportDirectory: supportDirectory) {
             return relativePath
@@ -3565,57 +3647,6 @@ final class MobileLedgerStore: ObservableObject {
         }
     }
 
-    private func writeMobileBackupAttachments(_ attachments: [MobileBackupAttachment]) throws {
-        try FileManager.default.createDirectory(at: attachmentsDirectory, withIntermediateDirectories: true)
-        for attachment in attachments {
-            let relativePath = try validatedAttachmentRelativePath(attachment.storedPath)
-            let destination = attachmentFileURL(forRelativePath: relativePath)
-            try FileManager.default.createDirectory(
-                at: destination.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            try attachment.data.write(to: destination, options: .atomic)
-        }
-    }
-
-    private func ensureBackupContainsReferencedAttachments(
-        _ journalData: JournalData,
-        payloadAttachments: [MobileBackupAttachment]
-    ) throws {
-        let availablePaths = Set(payloadAttachments.map(\.storedPath))
-        for transaction in journalData.transactions {
-            guard let attachment = transaction.attachment else { continue }
-            for asset in attachment.assets {
-                let relativePath = try validatedAttachmentRelativePath(asset.storedPath)
-                guard availablePaths.contains(relativePath) || FileManager.default.fileExists(atPath: attachmentFileURL(forRelativePath: relativePath).path) else {
-                    throw ValidationError(message: "Backup is missing attachment file: \(asset.originalFilename)")
-                }
-            }
-        }
-    }
-
-    private func restorePackageAttachments(from backupData: JournalData, backupDirectory: URL) throws {
-        for transaction in backupData.transactions {
-            guard let attachment = transaction.attachment else { continue }
-            for asset in attachment.assets {
-                let relativePath = try validatedAttachmentRelativePath(asset.storedPath)
-                let source = backupDirectory.appending(path: relativePath)
-                guard FileManager.default.fileExists(atPath: source.path) else {
-                    throw ValidationError(message: "Attachment file is missing: \(asset.originalFilename)")
-                }
-                let destination = attachmentFileURL(forRelativePath: relativePath)
-                try FileManager.default.createDirectory(
-                    at: destination.deletingLastPathComponent(),
-                    withIntermediateDirectories: true
-                )
-                if FileManager.default.fileExists(atPath: destination.path) {
-                    try FileManager.default.removeItem(at: destination)
-                }
-                try FileManager.default.copyItem(at: source, to: destination)
-            }
-        }
-    }
-
     @discardableResult
     private func localizeImportedAttachments() -> AttachmentLocalizationSummary {
         var summary = AttachmentLocalizationSummary()
@@ -3683,7 +3714,8 @@ final class MobileLedgerStore: ObservableObject {
         return summary
     }
 
-    private func refreshUnlockStateForLoadedData() {
+    private func refreshUnlockStateForLoadedData(previousSecurity: SecuritySettings? = nil) {
+        guard previousSecurity != data.security else { return }
         isUnlocked = !data.security.passwordLockEnabled
     }
 
@@ -3692,53 +3724,22 @@ final class MobileLedgerStore: ObservableObject {
         return SHA256.hash(data: payload).map { String(format: "%02x", Int($0)) }.joined()
     }
 
-    private func removeUnreferencedAttachmentFiles() {
-        guard !requiresJournalRecovery else { return }
-        Self.removeUnreferencedAttachmentFiles(supportDirectory: supportDirectory, data: data)
-    }
-
-    private func scheduleDeferredUnreferencedAttachmentCleanup() {
-        guard !requiresJournalRecovery else { return }
-        let snapshot = data
-        let supportDirectory = supportDirectory
-        Self.deferredPersistenceQueue.async { [snapshot, supportDirectory] in
-            Self.removeUnreferencedAttachmentFiles(supportDirectory: supportDirectory, data: snapshot)
+    private nonisolated static func removeObsoleteAttachmentFiles(supportDirectory: URL, previous: JournalData?, data: JournalData) {
+        guard let previous else { return }
+        func paths(in snapshot: JournalData) -> Set<String> {
+            Set(snapshot.transactions.flatMap { transaction in
+                transaction.attachment?.assets.compactMap {
+                    validatedAttachmentRelativePathIfPresent($0.storedPath, supportDirectory: supportDirectory)
+                } ?? []
+            })
         }
-    }
-
-    private nonisolated static func removeUnreferencedAttachmentFiles(supportDirectory: URL, data: JournalData) {
-        let attachmentsDirectory = supportDirectory.appending(path: "Attachments", directoryHint: .isDirectory)
-        guard FileManager.default.fileExists(atPath: attachmentsDirectory.path),
-              let enumerator = FileManager.default.enumerator(
-                at: attachmentsDirectory,
-                includingPropertiesForKeys: [.isRegularFileKey],
-                options: [.skipsHiddenFiles]
-              ) else {
-            return
-        }
-        let referenced = Set(data.transactions.flatMap { transaction in
-            transaction.attachment?.assets.compactMap {
-                validatedAttachmentRelativePathIfPresent($0.storedPath, supportDirectory: supportDirectory)
-            } ?? []
-        })
-        for case let url as URL in enumerator {
-            guard let relative = relativeAttachmentPath(for: url, supportDirectory: supportDirectory),
-                  !referenced.contains(relative) else {
-                continue
-            }
+        for path in paths(in: previous).subtracting(paths(in: data)) {
+            let url = attachmentFileURL(forRelativePath: path, supportDirectory: supportDirectory)
+            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
             try? FileManager.default.removeItem(at: url)
         }
     }
 
-    private func relativeAttachmentPath(for url: URL) -> String? {
-        Self.relativeAttachmentPath(for: url, supportDirectory: supportDirectory)
-    }
-
-    private nonisolated static func relativeAttachmentPath(for url: URL, supportDirectory: URL) -> String? {
-        guard let base = canonicalAttachmentPath(supportDirectory),
-              let path = canonicalAttachmentPath(url), path.hasPrefix(base + "/") else { return nil }
-        return String(path.dropFirst(base.count + 1))
-    }
 
     private func seedBaseAccounts(
         for ledger: Ledger,
@@ -3844,9 +3845,10 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
                 throw error
             }
         }
+        let previousSecurity = data.security
         data = candidate
         refreshDerivedCache()
-        refreshUnlockStateForLoadedData()
+        refreshUnlockStateForLoadedData(previousSecurity: previousSecurity)
         reloadDeletedTransactionTombstones()
         cloudSyncDataAvailable = true
     }
@@ -3877,9 +3879,10 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
                 throw error
             }
         }
+        let previousSecurity = data.security
         data = candidate
         refreshDerivedCache()
-        refreshUnlockStateForLoadedData()
+        refreshUnlockStateForLoadedData(previousSecurity: previousSecurity)
         reloadDeletedTransactionTombstones()
         refreshCloudSyncDataAvailability()
     }

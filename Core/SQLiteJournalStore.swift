@@ -568,7 +568,7 @@ final class SQLiteJournalStore: @unchecked Sendable {
         return order.map { transactions[$0] }
     }
 
-    func replaceData(_ data: JournalData, trackSyncChanges: Bool = true) throws {
+    func replaceData(_ data: JournalData, trackSyncChanges: Bool = true, resetCloudKitState: Bool = false) throws {
         Self.accessLock.lock()
         defer { Self.accessLock.unlock() }
         let database = try open()
@@ -582,6 +582,13 @@ final class SQLiteJournalStore: @unchecked Sendable {
             try replaceAppRows(data, envelopes: envelopes, database: database)
             if trackSyncChanges {
                 try updateSyncRows(envelopes: envelopes, previousRows: previousSyncRows, database: database)
+            }
+            if resetCloudKitState {
+                let bindings = try cloudKitBindings(database)
+                guard bindings.count <= 1 else { throw cloudKitError("Multiple CloudKit bindings require recovery.") }
+                if let contextKey = bindings.first?.0 {
+                    try resetCloudKitSyncState(contextKey: contextKey, database: database)
+                }
             }
             try execute("COMMIT", database)
         } catch {
@@ -1333,14 +1340,17 @@ final class SQLiteJournalStore: @unchecked Sendable {
 
     func resetCloudKitSyncState(contextKey: String) throws {
         try withCloudKitDatabase(contextKey: contextKey) { database in
-            guard try readMetadata(database)?.syncEnabled != true else { throw cloudKitError("Turn Cloud Sync off before resetting its metadata.") }
-            for table in ["cloudkit_records", "cloudkit_conflicts"] {
-                try executePrepared("DELETE FROM \(table) WHERE context_key = ?", database) { try bind(contextKey, to: $0, at: 1, database) }
-            }
-            try executePrepared("UPDATE cloudkit_contexts SET change_token = NULL, initial_prepared = 0 WHERE context_key = ?", database) { try bind(contextKey, to: $0, at: 1, database) }
-            // Binding, mutation receipts, frozen receipt claims, and outbox
-            // survive reset. Reusing a mutation ID must remain safe afterward.
+            try resetCloudKitSyncState(contextKey: contextKey, database: database)
         }
+    }
+
+    private func resetCloudKitSyncState(contextKey: String, database: OpaquePointer) throws {
+        guard try readMetadata(database)?.syncEnabled != true else { throw cloudKitError("Turn Cloud Sync off before resetting its metadata.") }
+        for table in ["cloudkit_records", "cloudkit_conflicts"] {
+            try executePrepared("DELETE FROM \(table) WHERE context_key = ?", database) { try bind(contextKey, to: $0, at: 1, database) }
+        }
+        try executePrepared("UPDATE cloudkit_contexts SET change_token = NULL, initial_prepared = 0 WHERE context_key = ?", database) { try bind(contextKey, to: $0, at: 1, database) }
+        // Binding, mutation receipts, frozen receipt claims, and outbox survive reset.
     }
 
     private func withCloudKitDatabase<T>(contextKey: String? = nil, _ action: (OpaquePointer) throws -> T) throws -> T {

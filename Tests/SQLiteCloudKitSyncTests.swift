@@ -8,6 +8,22 @@ final class SQLiteCloudKitSyncTests: XCTestCase {
     private let context = "iCloud.example.test|Development|Journal"
     private let account = "synthetic-user-record"
 
+    func testImportReplacementAndCloudResetCommitOrRollbackTogether() throws {
+        let f = try fixture()
+        try f.store.persistCloudKitPull([], data: f.data, previous: f.data, contextKey: context, changeToken: Data([7]))
+        var replacement = f.data
+        replacement.ledgers[0].name = "Restored journal"
+        replacement.syncEnabled = true
+        XCTAssertThrowsError(try f.store.replaceData(replacement, resetCloudKitState: true))
+        XCTAssertEqual(try f.store.loadData()?.ledgers, f.data.ledgers)
+        XCTAssertEqual(try f.store.cloudKitChangeToken(contextKey: context), Data([7]))
+        replacement.syncEnabled = false
+        try f.store.replaceData(replacement, resetCloudKitState: true)
+        XCTAssertEqual(try f.store.loadData()?.ledgers, replacement.ledgers)
+        XCTAssertNil(try f.store.cloudKitChangeToken(contextKey: context))
+        XCTAssertEqual(try f.store.cloudKitBoundContextKey(), context)
+    }
+
     func testAccountAndContextBindingCannotSilentlySwitchOrChangeJournal() throws {
         let f = try fixture(bind: false)
         XCTAssertTrue(try f.store.bindCloudKitAccount(contextKey: context, accountID: account))

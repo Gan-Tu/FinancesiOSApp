@@ -1,8 +1,165 @@
 import XCTest
+import SQLite3
+import CryptoKit
 @testable import FinancesClone
 
 @MainActor
 final class MobileCompanionTests: XCTestCase {
+    func testNestedReceiptsSurviveRestoreReopenAndOtherReceiptDeletion() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = MobileLedgerStore(supportDirectory: folder, initialData: DemoData.fixture())
+        var journal = store.data
+        let receipts = [Data("First receipt".utf8), Data("Second receipt".utf8)]
+        var files: [MobileBackupAttachment] = []
+        for index in 0..<2 {
+            let path = "Attachments/scans/2026/receipt-\(index).txt"
+            let asset = AttachmentAsset(originalFilename: "receipt-\(index).txt", storedPath: path, mimeType: "text/plain", sizeBytes: Int64(receipts[index].count))
+            journal.transactions[index].attachment = AttachmentContainer(assets: [asset])
+            files.append(MobileBackupAttachment(storedPath: path, originalFilename: asset.originalFilename, data: receipts[index]))
+        }
+        files.append(files[0])
+        let backup = folder.appendingPathComponent("nested.json")
+        try JSONEncoder.appEncoder.encode(MobileBackupPayload(journalData: journal, attachments: files)).write(to: backup)
+        store.importBackup(from: backup)
+        XCTAssertNil(store.validationError)
+        let reopened = MobileLedgerStore(supportDirectory: folder)
+        let remaining = try XCTUnwrap(reopened.transaction(journal.transactions[1].id)?.attachment?.assets.first)
+        XCTAssertEqual(try Data(contentsOf: reopened.attachmentURL(for: remaining)), receipts[1])
+        reopened.deleteTransaction(journal.transactions[0].id)
+        XCTAssertNil(reopened.validationError)
+        XCTAssertEqual(try Data(contentsOf: reopened.attachmentURL(for: remaining)), receipts[1])
+    }
+
+    func testRejectedBackupsPreserveOriginalReceiptBytesAndJournal() throws {
+        for mode in ["missing-payload", "missing-package", "invalid-journal", "database-failure"] {
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            let store = MobileLedgerStore(supportDirectory: folder, initialData: DemoData.fixture())
+            let originalBytes = Data("Original receipt that must survive".utf8)
+            let input = folder.appendingPathComponent("original.txt")
+            try originalBytes.write(to: input)
+            let asset = try store.importAttachment(from: input)
+            var draft = store.draft(for: try XCTUnwrap(store.data.transactions.first))
+            draft.attachments = [asset]
+            store.saveTransactionAndFlush(draft)
+            XCTAssertNil(store.validationError)
+            let original = store.data
+            let durableBefore = try XCTUnwrap(store.cloudKitSQLiteStore.loadData())
+            var candidate = original
+            candidate.ledgers[0].name = "Restored journal"
+            let newBytes = Data("Replacement bytes".utf8)
+            var files = [MobileBackupAttachment(storedPath: asset.storedPath, originalFilename: asset.originalFilename, data: newBytes)]
+            if mode.hasPrefix("missing") {
+                candidate.transactions[1].attachment = AttachmentContainer(assets: [AttachmentAsset(originalFilename: "missing.txt", storedPath: "Attachments/missing.txt", mimeType: "text/plain", sizeBytes: 1)])
+            }
+            if mode == "invalid-journal" { candidate.transactions[0].postings[0].accountID = UUID() }
+            if mode == "database-failure" {
+                try executeReviewSQL("CREATE TRIGGER reject_restore BEFORE DELETE ON ledgers BEGIN SELECT RAISE(ABORT, 'Synthetic restore failure'); END", at: store.cloudKitSQLiteStore.databaseURL)
+            }
+            let backup: URL
+            if mode == "missing-package" {
+                backup = folder.appendingPathComponent("backup.fin", isDirectory: true)
+                let file = backup.appendingPathComponent(asset.storedPath)
+                try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try newBytes.write(to: file)
+                try JSONEncoder.appEncoder.encode(candidate).write(to: backup.appendingPathComponent("Journal.json"))
+            } else {
+                backup = folder.appendingPathComponent("backup.json")
+                // Duplicate equal paths can legitimately occur in exported shared receipts.
+                if mode == "database-failure" { files.append(files[0]) }
+                try JSONEncoder.appEncoder.encode(MobileBackupPayload(journalData: candidate, attachments: files)).write(to: backup)
+            }
+            store.importBackup(from: backup)
+            XCTAssertNotNil(store.validationError, mode)
+            XCTAssertEqual(store.data.transactions, original.transactions, mode)
+            XCTAssertEqual(store.data.ledgers, original.ledgers, mode)
+            XCTAssertEqual(try store.cloudKitSQLiteStore.loadData()?.transactions, durableBefore.transactions, mode)
+            XCTAssertEqual(try Data(contentsOf: store.attachmentURL(for: asset)), originalBytes, mode)
+            let restoredFolders = try FileManager.default.contentsOfDirectory(atPath: folder.appendingPathComponent("Attachments").path).filter { $0.hasPrefix("Restore-") }
+            XCTAssertTrue(restoredFolders.isEmpty, mode)
+        }
+    }
+
+    func testDeletingReceiptDoesNotRemovePendingEditorAttachment() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = MobileLedgerStore(supportDirectory: folder, initialData: DemoData.fixture())
+        let input = folder.appendingPathComponent("receipt.txt")
+        try Data("Saved receipt".utf8).write(to: input)
+        let savedAsset = try store.importAttachment(from: input)
+        let row = try XCTUnwrap(store.data.transactions.first)
+        var draft = store.draft(for: row); draft.attachments = [savedAsset]
+        store.saveTransactionAndFlush(draft)
+        let pendingBytes = Data("Receipt in another unsaved editor".utf8)
+        try pendingBytes.write(to: input)
+        let pendingAsset = try store.importAttachment(from: input)
+        store.deleteTransaction(row.id)
+        XCTAssertNil(store.validationError)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.attachmentURL(for: savedAsset).path))
+        XCTAssertEqual(try Data(contentsOf: store.attachmentURL(for: pendingAsset)), pendingBytes)
+    }
+
+    func testSyncPreservesUnlockedSessionAndExplicitLock() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = MobileLedgerStore(supportDirectory: folder, initialData: DemoData.fixture())
+        store.setPasswordLock(password: "synthetic-password", confirmation: "synthetic-password")
+        store.lockApp(); store.unlock(password: "synthetic-password")
+        let context = "synthetic-unlock-context"
+        _ = try store.cloudKitSQLiteStore.bindCloudKitAccount(contextKey: context, accountID: "synthetic-account")
+        try store.cloudKitCommitRemote([], data: store.data, contextKey: context, changeToken: Data([1]))
+        XCTAssertFalse(store.requiresUnlock)
+        var changed = store.data
+        changed.transactions[0].note = "Unrelated remote note"
+        let bytes = try JSONEncoder.appEncoder.encode(changed.transactions[0])
+        let remote = CloudKitSyncRecord(recordType: "transaction", recordID: changed.transactions[0].id.uuidString, contentHash: SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined(), payloadJSON: String(decoding: bytes, as: UTF8.self), clientChangeID: UUID().uuidString, systemFields: Data([2]))
+        try store.cloudKitCommitRemote([remote], data: changed, contextKey: context, changeToken: Data([2]))
+        XCTAssertFalse(store.requiresUnlock)
+        var conflictRemote = remote
+        conflictRemote.clientChangeID = UUID().uuidString
+        conflictRemote.systemFields = Data([3])
+        try store.cloudKitSQLiteStore.saveCloudKitConflict(local: remote, remote: conflictRemote, contextKey: context)
+        let conflict = try XCTUnwrap(store.cloudKitSQLiteStore.unresolvedCloudKitConflicts(contextKey: context).first)
+        try store.cloudKitCommitConflictResolution(id: conflict.id, keepLocal: true, data: store.data, contextKey: context)
+        XCTAssertFalse(store.requiresUnlock)
+        store.lockApp()
+        try store.cloudKitCommitRemote([], data: store.data, contextKey: context, changeToken: Data([4]))
+        XCTAssertTrue(store.requiresUnlock)
+    }
+
+    func testCyclicAccountPullIsRejectedBeforeJournalOrCheckpointChanges() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = MobileLedgerStore(supportDirectory: folder, initialData: DemoData.fixture())
+        let context = "synthetic-cycle-context"
+        _ = try store.cloudKitSQLiteStore.bindCloudKitAccount(contextKey: context, accountID: "synthetic-account")
+        try store.cloudKitCommitRemote([], data: store.data, contextKey: context, changeToken: Data([1]))
+        let original = store.data
+        var candidate = original
+        let first = try XCTUnwrap(candidate.accounts.firstIndex { $0.name == "Checking" })
+        let second = try XCTUnwrap(candidate.accounts.firstIndex { $0.name == "Cash" })
+        candidate.accounts[first].parentID = candidate.accounts[second].id
+        candidate.accounts[second].parentID = candidate.accounts[first].id
+        XCTAssertThrowsError(try store.cloudKitCommitRemote([], data: candidate, contextKey: context, changeToken: Data([2])))
+        XCTAssertEqual(store.data.accounts, original.accounts)
+        XCTAssertEqual(Set(try XCTUnwrap(store.cloudKitSQLiteStore.loadData()).accounts), Set(original.accounts))
+        XCTAssertEqual(try store.cloudKitSQLiteStore.cloudKitChangeToken(contextKey: context), Data([1]))
+        // Previously saved invalid data must enter recovery instead of rebuilding a cyclic cache.
+        try store.cloudKitSQLiteStore.replaceData(candidate, trackSyncChanges: false)
+        let reopened = MobileLedgerStore(supportDirectory: folder)
+        XCTAssertTrue(reopened.requiresJournalRecovery)
+    }
+
+    private func executeReviewSQL(_ sql: String, at url: URL) throws {
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(url.path, &database), SQLITE_OK)
+        defer { sqlite3_close(database) }
+        guard let database, sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK else {
+            throw NSError(domain: "SyntheticSQLiteTest", code: 1)
+        }
+    }
+
     func testDuplicatePreservesDateOrUsesTodayAsSelected() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
