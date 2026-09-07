@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 enum EditorRoute: Identifiable {
-    case transaction(TransactionDraft, String)
+    case transaction(TransactionDraft, String, scanInvoice: Bool = false)
     case account(MobileAccountDraft)
     case currency(CurrencyDraft)
     case journalNew
@@ -11,8 +11,8 @@ enum EditorRoute: Identifiable {
 
     var id: String {
         switch self {
-        case .transaction(let draft, let title):
-            "transaction-\(draft.id?.uuidString ?? "new")-\(title)"
+        case .transaction(let draft, let title, let scanInvoice):
+            "transaction-\(draft.id?.uuidString ?? "new")-\(title)-\(scanInvoice)"
         case .account(let draft):
             "account-\(draft.id?.uuidString ?? "new")"
         case .currency(let draft):
@@ -94,7 +94,7 @@ struct AppShellView: View {
                 Button(kind.rawValue) { route = .transaction(store.makeTransactionDraft(kind: kind, ledgerID: currentLedgerID, accountID: currentAccountID), "New Transaction") }
             }
             ForEach((currentLedgerID.map { store.transactionTemplates(for: $0) } ?? []).filter(\.enabled)) { template in
-                Button(template.name) { route = .transaction(store.draft(for: template), "New Transaction") }
+                Button(template.name) { route = .transaction(store.draft(for: template), "New Transaction", scanInvoice: template.scanInvoice) }
             }
             if let ledgerID = currentLedgerID {
                 Button("Customize Templates…") { navigationPath.append(.templates(ledgerID)) }
@@ -210,7 +210,7 @@ struct EditorSheet: View {
     let route: EditorRoute
     var body: some View {
         switch route {
-        case .transaction(let draft, let title): TransactionEditorView(title: title, initialDraft: draft)
+        case .transaction(let draft, let title, let scanInvoice): TransactionEditorView(title: title, initialDraft: draft, scanInvoice: scanInvoice)
         case .account(let draft): AccountEditorView(initialDraft: draft)
         case .currency(let draft): CurrencyEditorView(initialDraft: draft)
         case .journalNew: JournalEditorView(mode: .create)

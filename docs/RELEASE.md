@@ -1,6 +1,6 @@
 # Release setup
 
-The standalone Xcode project includes an iPhone/iPad app target, shared build/test/archive scheme, app icon, privacy manifest, version/build settings, CloudKit and APNs entitlements, background notification mode, usage descriptions and export configuration. The current release candidate is **1.0.0 (2)**. Its existing registered iOS identifier is **dev.gan.FinancesApp.iOS**, under team **K3URZZFDQP**.
+The standalone Xcode project includes an iPhone/iPad app target, shared build/test/archive scheme, app icon, privacy manifest, version/build settings, CloudKit and APNs entitlements, background notification mode, usage descriptions and export configuration. The current release candidate is **1.0.0 (3)**. Its existing registered iOS identifier is **dev.gan.FinancesApp.iOS**, under team **K3URZZFDQP**.
 
 ## Apple configuration
 
@@ -32,4 +32,4 @@ Open Xcode, select the FinancesiOS scheme and Any iOS Device, then Product → A
 
 Alternatively, `scripts/archive.sh` creates an archive in `build/`. `ExportOptions.plist` is for an automatically signed local archive. CI uses the same automatic export settings with explicit App Store Connect API authentication. Locally, run `scripts/archive.sh -allowProvisioningUpdates` followed by `scripts/export_app_store.sh -allowProvisioningUpdates` to reuse the Xcode account. Apple describes this flow in [cloud-managed certificates](https://developer.apple.com/help/account/certificates/cloud-managed-certificates/) and [automated cloud signing](https://developer.apple.com/videos/play/wwdc2021/10204/).
 
-The owner authorized TestFlight distribution to the Gmail tester on September 6, 2026. Build 1 was withdrawn to replace its icon; build 2 contains the full-size circular artwork with neutral white corners. `scripts/upload_testflight.sh -allowProvisioningUpdates` uploads the reviewed archive using the existing Xcode account. Apple processing and external beta review follow upload. See `VERIFICATION.md` for current release evidence. GitHub remote creation, API-key secrets and automatic delivery on push remain future setup.
+The owner authorized TestFlight distribution to the Gmail tester on September 6, 2026. Builds 1 and 2 were withdrawn for the owner’s icon refinements. Build 3 uses the latest green square reference and places template accounts above the details. `scripts/upload_testflight.sh -allowProvisioningUpdates` uploads the reviewed archive using the existing Xcode account. Apple processing and external beta review follow upload. See `VERIFICATION.md` for current release evidence. GitHub remote creation, API-key secrets and automatic delivery on push remain future setup.

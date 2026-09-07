@@ -121,11 +121,10 @@ final class LayoutAuditTests: XCTestCase {
         capture("33 Empty Templates")
         tap("New Template")
         capture("34 New Template")
-        let name = app.textFields["Name"]
-        name.tap(); name.typeText("Household shopping and supplies")
-        app.swipeUp()
         tap("Posting")
         capture("35 Template Postings")
+        let name = app.textFields["Name"]
+        name.tap(); name.typeText("Household shopping and supplies")
         tap("Save")
         capture("36 Saved Template")
         back("Templates")

@@ -29,7 +29,7 @@ The build directory is ignored by Git. No financial database, recording, persona
 
 ## Not yet established
 
-Real receipt-camera capture and iOS background APNs delivery remain unverified. Foreground APNs and the physical iPhone–Mac Development round trip passed. The installed Mac TestFlight build 86 uses Production CloudKit/APNs and its live Sync screen reports everything up to date. iOS TestFlight processing passed; the external build is Waiting for Review.
+Real receipt-camera capture remains unverified. A physical-device UI test verified background APNs delivery and convergence, followed by automatic return upload after foreground activation. Mac readback and owned-zone cleanup passed; see `background-sync-verification.json`. Foreground APNs and the physical iPhone–Mac Development round trip passed. The installed Mac TestFlight build 86 uses Production CloudKit/APNs and its live Sync screen reports everything up to date. iOS TestFlight processing passed; the external build is Waiting for Review.
 
 The existing Xcode account successfully used Apple cloud-managed distribution signing and provisioned a matching App Store profile. A local distribution private key is not required for this path. The independent App Store Connect record and beta review contact are configured. Build **1.0.0 (2)** uploaded and processed successfully. Build 1 was withdrawn to replace its icon. The requested Gmail tester is verified in Personal Beta, and the build is Waiting for Review with automatic notification enabled. See `testflight-release.json`. GitHub API-key secrets/first CI run and automatic push delivery remain future setup.
 
@@ -37,6 +37,10 @@ The project is an independent local Git repository on `codex/ios-companion`, wit
 
 ## Final icon revision
 
-Build 2 uses the provided circular coin artwork at full size with white corner areas outside the circle. The former green extension is removed. All 18 assets were checked for exact dimensions, opaque RGB pixels and white corners. The Home Screen was inspected again, the updated signed Development build was installed on the physical iPhone, and normal launch with no QA arguments was confirmed. The app’s functional code is unchanged from the passing test runs.
+Build 2 uses the provided circular coin artwork at full size with white corner areas outside the circle. The former green extension is removed. All 18 assets were checked for exact dimensions, opaque RGB pixels and white corners. The Home Screen was inspected again, the updated signed Development build was installed on the physical iPhone, and normal launch with no QA arguments was confirmed. This icon-only revision did not change functional code.
 
 The checked-in Xcode project also preserves iCloud, Push Notifications and Background Modes as typed capability dictionaries after regeneration. The independent preflight validates these against the target’s actual entitlements.
+
+## Build 3 follow-up
+
+Template accounts now precede the details. Selecting a template with Scan Invoice enabled requests the native receipt scanner; the template form flow and scanner request UI tests passed. The app icon now matches the latest reference: a full green square and white dollar symbol, without a circle, white corners, label or badge. Build 3 uploaded and was submitted for external review. Installation on the physical phone succeeded; automatic launch was blocked by the phone’s lock, so the user can open it normally after unlocking.

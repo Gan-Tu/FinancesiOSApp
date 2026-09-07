@@ -6,14 +6,16 @@ struct TransactionEditorView: View {
     @Environment(\.dismiss) private var dismiss
     var title: String
     private let initialDraft: TransactionDraft
+    private let scanInvoice: Bool
     @State private var draft: TransactionDraft
     @FocusState private var focusedAmount: UUID?
     @State private var accountPostingID: UUID?
     @State private var showingRecurringSaveScope = false
 
-    init(title: String, initialDraft: TransactionDraft) {
+    init(title: String, initialDraft: TransactionDraft, scanInvoice: Bool = false) {
         self.title = title
         self.initialDraft = initialDraft
+        self.scanInvoice = scanInvoice
         var editable = initialDraft
         if initialDraft.id == nil {
             for index in editable.postings.indices where decimalFromInput(editable.postings[index].amount) == 0 {
@@ -119,7 +121,7 @@ struct TransactionEditorView: View {
                             }
                         }
                     }
-                    FinanceFormRow(last: true) { ReceiptPicker(assets: $draft.attachments, textOnly: true) }
+                    FinanceFormRow(last: true) { ReceiptPicker(assets: $draft.attachments, textOnly: true, startWithScan: scanInvoice) }
                 }
             }
             .navigationDestination(item: $accountPostingID) { id in
@@ -537,14 +539,6 @@ struct TemplateEditorView: View {
     var body: some View {
         NavigationStack {
             FinanceForm {
-                FinanceFormCard {
-                    FinanceFormRow { TextField("Name", text: $draft.name) }
-                    FinanceFormRow { TextField("Payee", text: $draft.payee) }
-                    FinanceFormRow { TextField("Note", text: $draft.note, axis: .vertical) }
-                    FinanceFormRow { Toggle("Cleared", isOn: $draft.cleared) }
-                    FinanceFormRow { Toggle("Enabled", isOn: $draft.enabled) }
-                    FinanceFormRow(last: true) { Toggle("Scan Invoice", isOn: $draft.scanInvoice) }
-                }
                 VStack(alignment: .leading, spacing: 8) {
                     Text("POSTINGS").font(.footnote).foregroundStyle(.secondary).padding(.leading, 16)
                     FinanceFormCard {
@@ -570,6 +564,14 @@ struct TemplateEditorView: View {
                         Image(systemName: "plus.circle.fill").font(.system(size: 22)).foregroundStyle(.green)
                     }
                     .buttonStyle(.plain).accessibilityLabel("Posting").padding(.leading, 8)
+                }
+                FinanceFormCard {
+                    FinanceFormRow { TextField("Name", text: $draft.name) }
+                    FinanceFormRow { TextField("Payee", text: $draft.payee) }
+                    FinanceFormRow { TextField("Note", text: $draft.note, axis: .vertical) }
+                    FinanceFormRow { Toggle("Cleared", isOn: $draft.cleared) }
+                    FinanceFormRow { Toggle("Enabled", isOn: $draft.enabled) }
+                    FinanceFormRow(last: true) { Toggle("Scan Invoice", isOn: $draft.scanInvoice) }
                 }
             }
             .navigationTitle(draft.id == nil ? "New Template" : "Edit Template")

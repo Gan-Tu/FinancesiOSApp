@@ -8,6 +8,8 @@ struct ReceiptPicker: View {
     @EnvironmentObject private var store: MobileLedgerStore
     @Binding var assets: [AttachmentAsset]
     var textOnly = false
+    var startWithScan = false
+    @State private var didStartInitialScan = false
     @State private var files = false
     @State private var photos = false
     @State private var scan = false
@@ -28,6 +30,12 @@ struct ReceiptPicker: View {
             else { Label("Add Attachment", systemImage: "paperclip") }
         }
         .disabled(importing)
+        .task {
+            guard startWithScan, !didStartInitialScan else { return }
+            didStartInitialScan = true
+            if VNDocumentCameraViewController.isSupported { scan = true }
+            else { errorMessage = "Receipt scanning is unavailable on this device. Choose a file or photo instead." }
+        }
         .fileImporter(isPresented: $files, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             switch result {
             case .success(let urls): Task { await importURLs(urls) }

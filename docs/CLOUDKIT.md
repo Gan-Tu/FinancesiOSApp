@@ -32,7 +32,7 @@ The repository’s fake-transport tests exercise storage and protocol behavior w
 
 The signed iOS app was installed and launched on a physical iPhone 17 Pro Max (iOS 27.0). The signed Mac app and iPhone completed the staged producer/consumer round trip in a run-specific Development zone. Foreground APNs, automatic download and upload, receipt bytes and a recurring one-off edit matched on Mac readback. The producer removed its owned QA zone and verified absence.
 
-`physical-sync-verification.json` matches the independently executed device/Mac reports; the reports themselves deliberately do not infer physical provenance from random instance IDs. `device-live-verification.json` records all 11 real-service scenarios on the iPhone, including conflicts, offline editing, deletion and restart. Neither entry point opened the normal journal. Background push and Production/TestFlight checks remain separate.
+`physical-sync-verification.json` matches the independently executed device/Mac reports; the reports themselves deliberately do not infer physical provenance from random instance IDs. `device-live-verification.json` records all 11 real-service scenarios on the iPhone, including conflicts, offline editing, deletion and restart. Neither entry point opened the normal journal. Background push and convergence subsequently passed on the physical iPhone with matching Mac readback and cleanup; see `background-sync-verification.json`. Production iOS/TestFlight checks remain separate.
 
 ## Current Production and recurrence compatibility
 

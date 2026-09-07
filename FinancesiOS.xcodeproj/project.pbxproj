@@ -26,6 +26,7 @@
 		47DA318440C8FCE147C03954 /* ReceiptViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13AFB6B6FB83278C098593CD /* ReceiptViews.swift */; };
 		49C0F05C848647CC3492E383 /* PostingBalance.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBEB774D3AC950CDC6B21DD9 /* PostingBalance.swift */; };
 		4FA54855F8AE4E2DFDAFB437 /* RegisterChart.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DE0CFA8C0041BA407E81FE4 /* RegisterChart.swift */; };
+		59E732B1F05F91F8CCAD4907 /* PhysicalSyncAcceptanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3F02023F256143383A56756 /* PhysicalSyncAcceptanceTests.swift */; };
 		5AC7DB54D9BC1FB5DDD0B99C /* FinancesMobileApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B106AB2E1A34CB2428A021A /* FinancesMobileApp.swift */; };
 		5D241D3949D95C224F8AAC81 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E2F3511E87504E00AF3ED52 /* Models.swift */; };
 		5E6DD6EDE47AB531A3EC6986 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B5CD3AA6662EAAD3753AF40F /* Assets.xcassets */; };
@@ -35,6 +36,7 @@
 		7907CF83EEDD0EFD77BFCBA2 /* SQLiteJournalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 646414B7AA5605EC2E6D0932 /* SQLiteJournalStore.swift */; };
 		7950D92F754A06CE3EE55E6D /* RegisterPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 914E2B57753B6A7E96E4D302 /* RegisterPresentation.swift */; };
 		7D01CE82ED79EF15147DBEB8 /* BankStatementImporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7199A10D2421537D2FC6537E /* BankStatementImporter.swift */; };
+		9527ECB173193231DCBF4951 /* TemplateInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E28F07BC584CD2DDD3519C8B /* TemplateInteractionTests.swift */; };
 		95BA27FC95A9553680156841 /* SQLiteCloudKitSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD57D4F7D32FD381F1F005DC /* SQLiteCloudKitSyncTests.swift */; };
 		9F31014BB5272FB0FC30CF3B /* CloudKitJournalSyncCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24ED3D7B11C16498B8799B27 /* CloudKitJournalSyncCoordinator.swift */; };
 		A0514262A1EB9BF115FA4E62 /* CloudKitLiveVerificationScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25974F9B7E22B3998E791C21 /* CloudKitLiveVerificationScene.swift */; };
@@ -132,8 +134,10 @@
 		DB8DF5EB928FCD56673D262B /* RegisterEditingPreference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RegisterEditingPreference.swift; sourceTree = "<group>"; };
 		DCDEF59CF1ECC61824DD7109 /* AmountExpressionEvaluatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AmountExpressionEvaluatorTests.swift; sourceTree = "<group>"; };
 		E06C3C3000BC78FFEFC1832F /* DemoData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoData.swift; sourceTree = "<group>"; };
+		E28F07BC584CD2DDD3519C8B /* TemplateInteractionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemplateInteractionTests.swift; sourceTree = "<group>"; };
 		E544C7CCCB40D25685656BDD /* NativeJournalStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeJournalStorage.swift; sourceTree = "<group>"; };
 		F0117BB6E878EA57F13889AB /* AppShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppShellView.swift; sourceTree = "<group>"; };
+		F3F02023F256143383A56756 /* PhysicalSyncAcceptanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhysicalSyncAcceptanceTests.swift; sourceTree = "<group>"; };
 		F479A4FC0F82E7BCD578DB19 /* MobileSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileSupport.swift; sourceTree = "<group>"; };
 		F560DDCB2842B7A051249C4E /* UUIDOrderingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UUIDOrderingTests.swift; sourceTree = "<group>"; };
 		F6F4FE5138DED8F860CEC9BF /* MobileNavigationShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileNavigationShell.swift; sourceTree = "<group>"; };
@@ -190,7 +194,9 @@
 			children = (
 				D0D118369FA26512CA22031E /* CompanionFlowTests.swift */,
 				CCBDFF5A7BA12D148161FF03 /* LayoutAuditTests.swift */,
+				F3F02023F256143383A56756 /* PhysicalSyncAcceptanceTests.swift */,
 				A810A2B1087ABD369EDA29D1 /* RegisterInteractionTests.swift */,
+				E28F07BC584CD2DDD3519C8B /* TemplateInteractionTests.swift */,
 			);
 			path = UITests;
 			sourceTree = "<group>";
@@ -400,7 +406,9 @@
 			files = (
 				DCAD9703EB32255EBA0D507B /* CompanionFlowTests.swift in Sources */,
 				36A1CBF3A99B7A6D1A5BAB86 /* LayoutAuditTests.swift in Sources */,
+				59E732B1F05F91F8CCAD4907 /* PhysicalSyncAcceptanceTests.swift in Sources */,
 				B7200DC3EF48C81180A477F7 /* RegisterInteractionTests.swift in Sources */,
+				9527ECB173193231DCBF4951 /* TemplateInteractionTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -517,7 +525,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = K3URZZFDQP;
 				ENABLE_NS_ASSERTIONS = NO;
@@ -618,7 +626,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = K3URZZFDQP;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;

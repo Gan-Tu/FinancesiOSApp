@@ -145,7 +145,7 @@ struct SettingsView: View {
                                     Label("Edit", systemImage: "pencil")
                                 }
                                 Button {
-                                    editorRoute = .transaction(store.draft(for: template), "New From Template")
+                                    editorRoute = .transaction(store.draft(for: template), "New From Template", scanInvoice: template.scanInvoice)
                                 } label: {
                                     Label("Use", systemImage: "plus.circle")
                                 }
@@ -179,20 +179,7 @@ struct SettingsView: View {
             }
         }
         .sheet(item: $editorRoute) { route in
-            switch route {
-            case .transaction(let draft, let title):
-                TransactionEditorView(title: title, initialDraft: draft)
-            case .account(let draft):
-                AccountEditorView(initialDraft: draft)
-            case .currency(let draft):
-                CurrencyEditorView(initialDraft: draft)
-            case .journalNew:
-                JournalEditorView(mode: .create)
-            case .journalRename(let ledger):
-                JournalEditorView(mode: .rename(ledger))
-            case .template(let draft):
-                TemplateEditorView(initialDraft: draft)
-            }
+            EditorSheet(route: route)
         }
         .confirmationDialog("Delete Journal?", isPresented: Binding(
             get: { confirmingJournalDelete != nil },

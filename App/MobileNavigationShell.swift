@@ -514,7 +514,7 @@ struct TemplateListScreen: View {
                     ForEach(templates) { template in
                         Button {
                             store.selectLedger(template.ledgerID)
-                            route = .transaction(store.draft(for: template), "New From Template")
+                            route = .transaction(store.draft(for: template), "New From Template", scanInvoice: template.scanInvoice)
                         } label: {
                             TemplateListRow(template: template, subtitle: subtitle(for: template))
                         }
@@ -1269,7 +1269,7 @@ struct QuickSearchSheet: View {
 
     private func useTemplate(_ template: TransactionTemplate) {
         store.selectLedger(template.ledgerID)
-        route = .transaction(store.draft(for: template), "New From Template")
+        route = .transaction(store.draft(for: template), "New From Template", scanInvoice: template.scanInvoice)
         dismissSheet()
     }
 

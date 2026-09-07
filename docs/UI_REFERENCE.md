@@ -41,7 +41,7 @@ The geometry UI test checks that amount edges align, posting rows have the inten
 - The main account list uses the same whole-label indentation. Subaccount collapse remains available from the account context menu without adding a layout-shifting chevron before its label.
 - Transaction text starts at one fixed column. Uncleared gray dots and receipt clips occupy an independent left gutter in registers and Quick Search. Registers no longer reserve space for an automatic trailing navigation chevron.
 - Edit selection uses the same gutter, and the normal sync/compose footer hides while bulk editing so it cannot cover Clear/Unclear controls.
-- The green coin fills each icon asset, with neutral white corners outside its circular edge; the blue selection tint is unchanged. See `ICON.md` for the supplied source artwork and opaque asset packaging.
+- The latest iOS icon is a full green square with the white dollar symbol and no inner circle; the blue selection tint is unchanged. See `ICON.md` for the supplied source artwork and opaque asset packaging.
 - Cloud Sync matches the later screenshot: a large toggle/explanation card, one status row, and Synchronize Now/Reset action rows. Help and diagnostic details are behind the question-mark button. Conflicts open a dedicated review sheet.
 - Registers with future scheduled entries start near today; future-only registers start at the nearest scheduled date. Upcoming rows remain reachable above, and the Uncleared badge counts entries through today.
 
@@ -52,3 +52,5 @@ Month headings scroll as ordinary rows. The bottom toolbar participates in each 
 Details use an inline, wrapping gray ancestry prefix with a regular black account name, gray amounts, full weekday dates and 24-hour time. Receipt thumbnails occupy a bounded 210-point preview with a subtle border. The footer has a left action menu and centered blue Delete Transaction. Monthly summaries now bucket refunds and spending by cash-flow sign, resolve default currencies, and preserve currency/category filters in account breakdowns.
 
 Final synthetic captures are in `ui-audit/final/`; the broader iPhone, large-text and iPad audit captures are in the adjacent folders.
+
+Template account rows now appear first, followed by name, payee, note and options. Scan Invoice is connected to the receipt scanner when the template is used.
