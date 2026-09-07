@@ -1,4 +1,4 @@
-# Finances for iOS
+# Finances v2 for iOS
 
 An independent SwiftUI iPhone and iPad companion to Gan Tu’s CloudKit-enabled Finances Mac app. Requires iOS 17 or later; builds with Xcode 26.6. This repository contains every source file it needs. The original FinanceClone project is unchanged. The Mac companion received the matching, owner-authorized recurrence update so either device can delete one occurrence without changing the remaining schedule.
 
@@ -31,6 +31,6 @@ For a local demonstration, add `--demo --reset-demo` to the scheme’s launch ar
 
 ## Distribution
 
-GitHub CI builds and tests pushes to `main` and pull requests. TestFlight preparation/upload is **manual** and requires the signing secrets documented in [Release Setup](docs/RELEASE.md). No upload is enabled by a normal push yet.
+Source lives at [Gan-Tu/FinancesiOSApp](https://github.com/Gan-Tu/FinancesiOSApp). Every push to `main` starts the **iOS TestFlight** Xcode Cloud workflow: required iPhone tests, a signed archive, and delivery to the **Internal Testing** group. GitHub Actions also runs tests on pushes and pull requests. See [Release Setup](docs/RELEASE.md) for the workflow and tester details.
 
 See [UI reference and parity](docs/UI_REFERENCE.md), [CloudKit compatibility](docs/CLOUDKIT.md), [verification](docs/VERIFICATION.md), and [source provenance](docs/SOURCE_PROVENANCE.md).

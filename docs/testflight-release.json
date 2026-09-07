@@ -1,5 +1,5 @@
 {
-  "appName": "Finances Companion",
+  "appName": "Finances v2 for iOS",
   "appStoreConnectID": "6809320145",
   "bundleID": "dev.gan.FinancesApp.iOS",
   "version": "1.0.0",
@@ -12,7 +12,7 @@
   "testerCount": 1,
   "requestedTesterVerified": true,
   "automaticallyNotifyTesters": true,
-  "externalReviewStatus": "Submitted for Review",
+  "externalReviewStatus": "Waiting for Review",
   "macRecurrenceCommit": "54e63a99d95101d43ba275641e1719707058078c",
   "macBuild": "88",
   "macBuildStatus": "TestFlight internal distribution succeeded",
@@ -27,5 +27,15 @@
       "status": "Removed from Review",
       "reason": "Latest square icon reference and template form ordering."
     }
-  ]
+  ],
+  "homeScreenName": "Finances v2",
+  "internalGroup": "Internal Testing",
+  "internalGroupID": "dab76ac6-fee0-4017-9348-8287ff48c3b9",
+  "internalTesterCount": 1,
+  "internalTesterStatus": "Invited",
+  "internalBuildAssigned": true,
+  "repository": "https://github.com/Gan-Tu/FinancesiOSApp",
+  "releaseBranch": "main",
+  "cloudWorkflowID": "C33DA8C1-4329-46D0-AABA-2EA88BF8D3F1",
+  "automaticReleaseStatus": "Workflow configured; first push-triggered run pending"
 }

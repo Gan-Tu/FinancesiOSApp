@@ -35,7 +35,6 @@ struct AppShellView: View {
     @State private var navigationPath: [MobileRoute] = []
     @State private var presentedSheet: ShellSheet?
     @State private var showingNewTransactionDialog = false
-    @State private var registerIsEditing = false
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
@@ -66,7 +65,6 @@ struct AppShellView: View {
                 }
         }
         .tint(.blue)
-        .onPreferenceChange(RegisterEditingPreference.self) { registerIsEditing = $0 }
         .sheet(item: $route) { route in
             EditorSheet(route: route)
         }
@@ -76,6 +74,8 @@ struct AppShellView: View {
                 SettingsView(route: $route)
             case .cloudSync:
                 MobileCloudSyncSheet()
+            case .templates(let ledgerID):
+                TemplateManagementSheet(ledgerID: ledgerID)
             case .quickSearch:
                 QuickSearchSheet(navigationPath: $navigationPath, presentedSheet: $presentedSheet, route: $route, contextLedgerID: currentLedgerID)
             }
@@ -97,7 +97,7 @@ struct AppShellView: View {
                 Button(template.name) { route = .transaction(store.draft(for: template), "New Transaction", scanInvoice: template.scanInvoice) }
             }
             if let ledgerID = currentLedgerID {
-                Button("Customize Templates…") { navigationPath.append(.templates(ledgerID)) }
+                Button("Customize Templates…") { presentedSheet = .templates(ledgerID) }
             }
         }
         .onChange(of: scenePhase, initial: true) {
@@ -126,12 +126,11 @@ struct AppShellView: View {
     }
 
     private var showsGlobalBottomBar: Bool {
-        if registerIsEditing { return false }
         guard let lastRoute = navigationPath.last else { return true }
         switch lastRoute {
-        case .transaction, .settings:
+        case .transaction, .settings, .templates:
             return false
-        case .journals, .journal, .transactions, .templates, .account, .currency:
+        case .journals, .journal, .transactions, .account, .currency:
             return true
         }
     }

@@ -40,7 +40,6 @@
 		95BA27FC95A9553680156841 /* SQLiteCloudKitSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD57D4F7D32FD381F1F005DC /* SQLiteCloudKitSyncTests.swift */; };
 		9F31014BB5272FB0FC30CF3B /* CloudKitJournalSyncCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24ED3D7B11C16498B8799B27 /* CloudKitJournalSyncCoordinator.swift */; };
 		A0514262A1EB9BF115FA4E62 /* CloudKitLiveVerificationScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25974F9B7E22B3998E791C21 /* CloudKitLiveVerificationScene.swift */; };
-		A651955A4102C555654B0457 /* RegisterEditingPreference.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB8DF5EB928FCD56673D262B /* RegisterEditingPreference.swift */; };
 		AADCECC96B8EDF240467EE08 /* CloudKitLiveVerification.swift in Sources */ = {isa = PBXBuildFile; fileRef = B699F730EDBC2E09BA478486 /* CloudKitLiveVerification.swift */; };
 		AB26A21DF842505D1576DD4E /* Editors.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3288B0BA96F43F72A89C35CC /* Editors.swift */; };
 		AFE69CF50D37424E491D7D63 /* MobileNavigationShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6F4FE5138DED8F860CEC9BF /* MobileNavigationShell.swift */; };
@@ -131,7 +130,6 @@
 		D0D118369FA26512CA22031E /* CompanionFlowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionFlowTests.swift; sourceTree = "<group>"; };
 		D113778288FA0C199C1BF6A0 /* FinanceFormLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinanceFormLayout.swift; sourceTree = "<group>"; };
 		D5F296A3FA7118E5D32C8CB5 /* MobileLedgerStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileLedgerStore.swift; sourceTree = "<group>"; };
-		DB8DF5EB928FCD56673D262B /* RegisterEditingPreference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RegisterEditingPreference.swift; sourceTree = "<group>"; };
 		DCDEF59CF1ECC61824DD7109 /* AmountExpressionEvaluatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AmountExpressionEvaluatorTests.swift; sourceTree = "<group>"; };
 		E06C3C3000BC78FFEFC1832F /* DemoData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoData.swift; sourceTree = "<group>"; };
 		E28F07BC584CD2DDD3519C8B /* TemplateInteractionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemplateInteractionTests.swift; sourceTree = "<group>"; };
@@ -179,7 +177,6 @@
 				C3FE4DE9349447E40CA9A063 /* PrivacyInfo.xcprivacy */,
 				13AFB6B6FB83278C098593CD /* ReceiptViews.swift */,
 				0DE0CFA8C0041BA407E81FE4 /* RegisterChart.swift */,
-				DB8DF5EB928FCD56673D262B /* RegisterEditingPreference.swift */,
 				914E2B57753B6A7E96E4D302 /* RegisterPresentation.swift */,
 				CEB4BFC9144352620F8B0F32 /* SettingsView.swift */,
 				15B92CC9B01C0FC2447DE2CC /* TransactionDeletion.swift */,
@@ -461,7 +458,6 @@
 				3821F420F8AAA79FF41E767D /* RecurringJournalEditor.swift in Sources */,
 				DFAA3797ECAAE3598D60097F /* RecurringTransactionEditPolicy.swift in Sources */,
 				4FA54855F8AE4E2DFDAFB437 /* RegisterChart.swift in Sources */,
-				A651955A4102C555654B0457 /* RegisterEditingPreference.swift in Sources */,
 				7950D92F754A06CE3EE55E6D /* RegisterPresentation.swift in Sources */,
 				D6C06657CDFD81A31A043990 /* SQLiteImporter.swift in Sources */,
 				7907CF83EEDD0EFD77BFCBA2 /* SQLiteJournalStore.swift in Sources */,

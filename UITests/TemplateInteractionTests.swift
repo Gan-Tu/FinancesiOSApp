@@ -25,7 +25,9 @@ final class TemplateInteractionTests: XCTestCase {
         app.buttons["Save"].tap()
         let template = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Scan template")).firstMatch
         XCTAssertTrue(template.waitForExistence(timeout: 5))
-        template.tap()
+        app.navigationBars["Templates"].buttons.element(boundBy: 0).tap()
+        app.buttons["New Transaction"].tap()
+        app.buttons["Scan template"].tap()
         // Recent Simulator runtimes expose the document scanner even without
         // a real camera. Verify the actual UI rather than assuming unsupported.
         let permission = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
@@ -36,7 +38,7 @@ final class TemplateInteractionTests: XCTestCase {
             let alert = app.alerts["Couldn’t Add Receipt"]
             XCTAssertTrue(alert.staticTexts["Receipt scanning is unavailable on this device. Choose a file or photo instead."].exists)
             alert.buttons["OK"].tap()
-            XCTAssertTrue(app.navigationBars["New From Template"].exists)
+            XCTAssertTrue(app.navigationBars["New Transaction"].exists)
         } else {
             XCTAssertTrue(app.buttons["Auto"].waitForExistence(timeout: 5), "The template should present the native document scanner.")
         }

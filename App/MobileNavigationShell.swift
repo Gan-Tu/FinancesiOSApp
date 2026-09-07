@@ -26,12 +26,14 @@ enum ShellSheet: Identifiable {
     case settings
     case cloudSync
     case quickSearch
+    case templates(UUID)
 
     var id: String {
         switch self {
         case .settings: "settings"
         case .cloudSync: "cloud-sync"
         case .quickSearch: "quick-search"
+        case .templates(let id): "templates-\(id.uuidString)"
         }
     }
 }
@@ -287,8 +289,6 @@ struct TransactionListScreen: View {
     @State private var searchText = ""
     @State private var pendingDeletion: LedgerTransaction?
     @State private var pendingDuplication: LedgerTransaction?
-    @State private var selectedTransactions = Set<UUID>()
-    @State private var editMode: EditMode = .inactive
     @State private var showsChart = false
     @State private var selectedMonth: Date?
     @State private var presentation = RegisterPresentation(months: [], amounts: [:], balances: [:])
@@ -315,7 +315,6 @@ struct TransactionListScreen: View {
             }
             .listStyle(.plain)
             .contentMargins(.bottom, 24, for: .scrollContent)
-            .preference(key: RegisterEditingPreference.self, value: editMode.isEditing)
             .environment(\.defaultMinListRowHeight, 0)
             .searchable(text: $searchText, prompt: "Notes, payee, account or amount")
             .overlay { if presentation.months.isEmpty { ContentUnavailableView(searchText.isEmpty ? "No Transactions" : "No Results", systemImage: searchText.isEmpty ? "arrow.left.arrow.right" : "magnifyingglass", description: Text(searchText.isEmpty ? "Use the compose button to add your first transaction." : "Try a different search.")) } }
@@ -323,19 +322,6 @@ struct TransactionListScreen: View {
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     if dateInterval == nil { Button("Show Chart", systemImage: showsChart ? "chart.bar.fill" : "chart.bar") { withAnimation { showsChart.toggle() } } }
-                    Button(editMode.isEditing ? "Done" : "Edit") { editMode = editMode.isEditing ? .inactive : .active; selectedTransactions.removeAll() }
-                }
-            }
-            .safeAreaInset(edge: .bottom) {
-                if editMode.isEditing && !selectedTransactions.isEmpty {
-                    HStack {
-                        Text("\(selectedTransactions.count) Selected").font(.subheadline)
-                        Spacer()
-                        Button("Clear") { setSelectedCleared(true) }
-                            .accessibilityIdentifier("bulk-clear").frame(minHeight: 44)
-                        Button("Unclear") { setSelectedCleared(false) }
-                            .accessibilityIdentifier("bulk-unclear").frame(minHeight: 44)
-                    }.padding().background(.regularMaterial)
                 }
             }
             .sheet(isPresented: Binding(get: { selectedMonth != nil }, set: { if !$0 { selectedMonth = nil } })) {
@@ -364,7 +350,6 @@ struct TransactionListScreen: View {
                     }
                 }
             }
-            .onDisappear { editMode = .inactive; selectedTransactions.removeAll() }
         }
     }
 
@@ -380,14 +365,12 @@ struct TransactionListScreen: View {
                     .font(.subheadline.weight(.bold)).foregroundColor(Color(uiColor: .label))
                     .padding(.top, 14).padding(.bottom, 10)
                     .listRowInsets(EdgeInsets(top: 0, leading: 28, bottom: 0, trailing: 20))
-                    .listRowSeparator(.hidden).selectionDisabled()
+                    .listRowSeparator(.hidden)
                 ForEach(day.transactions) { transaction in
                     Button {
-                        if editMode.isEditing {
-                            if !selectedTransactions.insert(transaction.id).inserted { selectedTransactions.remove(transaction.id) }
-                        } else { openTransaction(transaction.id) }
+                        openTransaction(transaction.id)
                     } label: {
-                        RegisterRow(transaction: transaction, amounts: presentation.amounts[transaction.id] ?? [], balances: presentation.balances[transaction.id] ?? [], selection: editMode.isEditing ? selectedTransactions.contains(transaction.id) : nil)
+                        RegisterRow(transaction: transaction, amounts: presentation.amounts[transaction.id] ?? [], balances: presentation.balances[transaction.id] ?? [])
                             .padding(.leading, 22).contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -431,12 +414,6 @@ struct TransactionListScreen: View {
         else { store.deleteTransaction(row.id, scope: .occurrence) }
     }
 
-    private func setSelectedCleared(_ cleared: Bool) {
-        let ids = selectedTransactions
-        selectedTransactions.removeAll()
-        for id in ids { store.setTransactionCleared(id, cleared: cleared) }
-    }
-
     private func registerDayTitle(_ date: Date) -> String {
         if Calendar.current.isDateInToday(date) { return "TODAY" }
         if Calendar.current.isDateInYesterday(date) { return "YESTERDAY" }
@@ -460,7 +437,6 @@ struct RegisterRow: View {
     let transaction: LedgerTransaction
     let amounts: [RegisterMoney]
     let balances: [RegisterMoney]
-    var selection: Bool? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 7) {
@@ -482,12 +458,7 @@ struct RegisterRow: View {
         .padding(.vertical, 3)
         .contentShape(Rectangle())
         .overlay(alignment: .topLeading) {
-            if let selection {
-                Image(systemName: selection ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(.blue).frame(width: 18, height: 20).offset(x: -22, y: 3)
-            } else {
-                TransactionGutter(cleared: transaction.cleared, hasAttachment: transaction.attachment?.assets.isEmpty == false)
-            }
+            TransactionGutter(cleared: transaction.cleared, hasAttachment: transaction.attachment?.assets.isEmpty == false)
         }
         .accessibilityValue(transaction.cleared ? "Cleared" : "Uncleared")
         .opacity(RegisterPresentation.isFuture(transaction.date) ? 0.48 : 1)
@@ -499,121 +470,85 @@ struct TemplateListScreen: View {
     @EnvironmentObject private var store: MobileLedgerStore
     let ledgerID: UUID
     @Binding var route: EditorRoute?
-    @State private var confirmingDelete: TransactionTemplate?
 
-    private var templates: [TransactionTemplate] {
-        store.transactionTemplates(for: ledgerID)
-    }
+    private var templates: [TransactionTemplate] { store.transactionTemplates(for: ledgerID) }
+    private var included: [TransactionTemplate] { templates.filter(\.enabled) }
+    private var excluded: [TransactionTemplate] { templates.filter { !$0.enabled } }
 
     var body: some View {
         List {
             if templates.isEmpty {
                 ContentUnavailableView("No Templates", systemImage: "doc.text", description: Text("Create reusable transaction templates for this journal."))
-            } else {
-                Section {
-                    ForEach(templates) { template in
+            }
+            if !included.isEmpty {
+                Section("Include") {
+                    ForEach(included) { template in
+                        Button { route = .template(store.templateDraft(for: template)) } label: {
+                            Text(template.name).foregroundStyle(.primary).frame(maxWidth: .infinity, alignment: .leading)
+                        }.buttonStyle(.plain)
+                    }
+                    .onDelete { offsets in
+                        let ids = offsets.map { included[$0].id }
+                        for id in ids { store.deleteTransactionTemplate(id) }
+                    }
+                    .onMove { offsets, destination in
+                        let sourceIDs = Set(offsets.map { included[$0].id })
+                        let all = templates
+                        let source = IndexSet(all.indices.filter { sourceIDs.contains(all[$0].id) })
+                        let target = destination < included.count ? all.firstIndex { $0.id == included[destination].id } ?? all.count : all.count
+                        store.moveTransactionTemplates(ledgerID: ledgerID, from: source, to: target)
+                    }
+                }
+            }
+            if !excluded.isEmpty {
+                Section("More Templates") {
+                    ForEach(excluded) { template in
                         Button {
-                            store.selectLedger(template.ledgerID)
-                            route = .transaction(store.draft(for: template), "New From Template", scanInvoice: template.scanInvoice)
+                            var draft = store.templateDraft(for: template)
+                            draft.enabled = true
+                            store.saveTransactionTemplate(draft)
                         } label: {
-                            TemplateListRow(template: template, subtitle: subtitle(for: template))
+                            HStack(spacing: 16) {
+                                Image(systemName: "plus.circle.fill").foregroundStyle(.green).font(.title3)
+                                Text(template.name).foregroundStyle(.primary)
+                            }
                         }
                         .buttonStyle(.plain)
-                        .swipeActions(edge: .trailing) {
-                            Button(role: .destructive) {
-                                confirmingDelete = template
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
-                            Button {
-                                route = .template(store.templateDraft(for: template))
-                            } label: {
-                                Label("Edit", systemImage: "pencil")
-                            }
-                            .tint(.blue)
-                        }
-                    }
-                    .onMove { offsets, destination in store.moveTransactionTemplates(ledgerID: ledgerID, from: offsets, to: destination) }
-                    .onDelete { offsets in
-                        for offset in offsets {
-                            store.deleteTransactionTemplate(templates[offset].id)
+                        .contextMenu {
+                            Button("Edit Template") { route = .template(store.templateDraft(for: template)) }
+                            Button("Delete Template", role: .destructive) { store.deleteTransactionTemplate(template.id) }
                         }
                     }
                 }
             }
         }
         .listStyle(.insetGrouped)
-        .navigationTitle("Templates")
         .compactGroupedForm()
+        .environment(\.editMode, .constant(.active))
+        .navigationTitle("Templates")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
+            ToolbarItem(placement: .topBarTrailing) {
                 Button {
+                    store.selectLedger(ledgerID)
                     route = .template(store.templateDraft(for: nil))
-                } label: {
-                    Image(systemName: "plus")
-                }
+                } label: { Image(systemName: "plus") }
                 .accessibilityLabel("New Template")
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                EditButton()
-            }
         }
-        .onAppear {
-            store.selectLedger(ledgerID)
-        }
-        .confirmationDialog("Delete Template?", isPresented: Binding(
-            get: { confirmingDelete != nil },
-            set: { if !$0 { confirmingDelete = nil } }
-        ), titleVisibility: .visible) {
-            Button("Delete Template", role: .destructive) {
-                if let template = confirmingDelete {
-                    store.deleteTransactionTemplate(template.id)
-                }
-                confirmingDelete = nil
-            }
-            Button("Cancel", role: .cancel) {}
-        }
-    }
-
-    private func subtitle(for template: TransactionTemplate) -> String {
-        let accounts = template.postings
-            .compactMap { $0.accountID.flatMap { store.account($0)?.name } }
-            .joined(separator: " -> ")
-        if !template.payee.isEmpty {
-            return accounts.isEmpty ? template.payee : "\(template.payee) · \(accounts)"
-        }
-        if !template.note.isEmpty {
-            return accounts.isEmpty ? template.note : "\(template.note) · \(accounts)"
-        }
-        return accounts.isEmpty ? "New transaction template" : accounts
     }
 }
 
-private struct TemplateListRow: View {
-    let template: TransactionTemplate
-    let subtitle: String
-
+struct TemplateManagementSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let ledgerID: UUID
+    @State private var route: EditorRoute?
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "doc.text")
-                .font(.body.weight(.semibold))
-                .foregroundStyle(.blue)
-                .frame(width: 26)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(template.name)
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Text(subtitle)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer()
-            Image(systemName: "plus.circle")
-                .foregroundStyle(.secondary)
+        NavigationStack {
+            TemplateListScreen(ledgerID: ledgerID, route: $route)
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
         }
-        .padding(.vertical, 4)
+        .sheet(item: $route) { EditorSheet(route: $0) }
     }
 }
 

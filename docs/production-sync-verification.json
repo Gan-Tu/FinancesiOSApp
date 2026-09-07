@@ -1,0 +1,45 @@
+{
+  "verifiedAt": "2026-09-07T07:42:42.917811+00:00",
+  "scope": "Read-only comparison of the physical iPhone Production store snapshot and the running production Mac store.",
+  "container": "iCloud.dev.gan.FinanceApp",
+  "environment": "Production",
+  "zone": "FinancesJournal_v1",
+  "tables": {
+    "ledgers": {
+      "phoneCount": 1,
+      "macCount": 1,
+      "equal": true
+    },
+    "accounts": {
+      "phoneCount": 22,
+      "macCount": 22,
+      "equal": true
+    },
+    "commodities": {
+      "phoneCount": 1,
+      "macCount": 1,
+      "equal": true
+    },
+    "transactions": {
+      "phoneCount": 1,
+      "macCount": 1,
+      "equal": true
+    },
+    "postings": {
+      "phoneCount": 3,
+      "macCount": 3,
+      "equal": true
+    },
+    "transaction_templates": {
+      "phoneCount": 1,
+      "macCount": 1,
+      "equal": true
+    },
+    "posting_templates": {
+      "phoneCount": 2,
+      "macCount": 2,
+      "equal": true
+    }
+  },
+  "status": "PASS"
+}

@@ -149,24 +149,6 @@ final class CompanionFlowTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["UI Income"].waitForExistence(timeout: 5))
     }
 
-    @MainActor func testBulkClearFromUnclearedRegister() throws {
-        let app = XCUIApplication()
-        app.launchArguments = ["--demo", "--reset-demo"]
-        app.launch()
-        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Personal,")).firstMatch.tap()
-        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Uncleared,")).firstMatch.tap()
-        XCTAssertTrue(app.navigationBars["Uncleared"].waitForExistence(timeout: 5))
-        app.buttons["Edit"].tap()
-        let dinner = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Dinner with friends")).firstMatch
-        XCTAssertTrue(dinner.waitForExistence(timeout: 5)); dinner.tap()
-        XCTAssertTrue(app.staticTexts["1 Selected"].waitForExistence(timeout: 5))
-        app.buttons["bulk-clear"].tap()
-        XCTAssertTrue(app.staticTexts["1 Selected"].waitForNonExistence(timeout: 5))
-        app.buttons["Done"].tap()
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(app.buttons["Uncleared, 5"].waitForExistence(timeout: 5))
-    }
-
     @MainActor func testSplitPostingBalanceAndRemoval() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--demo", "--reset-demo"]

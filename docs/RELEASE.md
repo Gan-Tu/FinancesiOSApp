@@ -1,35 +1,36 @@
 # Release setup
 
-The standalone Xcode project includes an iPhone/iPad app target, shared build/test/archive scheme, app icon, privacy manifest, version/build settings, CloudKit and APNs entitlements, background notification mode, usage descriptions and export configuration. The current release candidate is **1.0.0 (3)**. Its existing registered iOS identifier is **dev.gan.FinancesApp.iOS**, under team **K3URZZFDQP**.
+The app displays **Finances v2** on iPhone and iPad. Its separate App Store Connect listing is **Finances v2 for iOS** (Apple ID **6809320145**); Apple reserves the exact Finances v2 listing name for the existing Mac app. The iOS bundle ID remains **dev.gan.FinancesApp.iOS**, under team **K3URZZFDQP**. Version is **1.0.0**.
 
-## Apple configuration
+## Automatic releases
 
-Use the existing iOS App ID, associated with `iCloud.dev.gan.FinanceApp` and Push Notifications. App Store Connect record **Finances Companion** (Apple ID **6809320145**) uses this identifier, English (U.S.), Finance category and SKU `finances-companion-ios`. The Home Screen name remains Finances.
+The independent repository is [Gan-Tu/FinancesiOSApp](https://github.com/Gan-Tu/FinancesiOSApp), with `main` as the release branch. Xcode Cloud workflow **iOS TestFlight** (`C33DA8C1-4329-46D0-AABA-2EA88BF8D3F1`) is enabled with:
 
-The existing Xcode account successfully used Apple cloud-managed signing to create an App Store-signed IPA and a matching iOS Team Store provisioning profile. A local distribution private key is not required for this path. Ensure the existing container’s schema is deployed to Production before testing a Release/TestFlight build. The signing profile has been provisioned and verified. App Store listing metadata and Production schema promotion are separate steps, not performed by the export script.
+- Primary repository `https://github.com/Gan-Tu/FinancesiOSApp.git` and project `FinancesiOS.xcodeproj`.
+- Branch Changes on `main`, triggered by any changed file; superseded runs may be canceled.
+- Required iPhone tests using scheme `FinancesiOS`.
+- An iOS archive prepared for App Store Connect, using Apple-managed signing.
+- TestFlight Internal Testing delivery to **Internal Testing** (`dab76ac6-fee0-4017-9348-8287ff48c3b9`).
 
-Complete the beta description, contact and review details, age rating, support URL and privacy policy URL in App Store Connect. The app stores financial data locally and, when enabled, in the user’s private iCloud database. It includes no advertising or analytics SDK. Review the final distribution privacy answers against the actual app behavior.
+The next cloud build number was **90** when configured, continuing the existing cloud product counter. Do not reset it to the local build number or reuse earlier uploaded numbers. The Mac workflow is separate and remains unchanged.
 
-## GitHub preparation
+The owner-requested Hotmail tester was invited to Internal Testing and build **1.0.0 (3)** was assigned. The Gmail tester remains in external **Personal Beta**; build 3 is waiting for Apple's beta review with automatic notification enabled. Internal builds do not require that external review. Accept the TestFlight invitation with the corresponding Apple Account.
 
-Create a repository from this folder when ready and push the generated Xcode project and sources. CI runs tests on pushes to `main` and pull requests. Set up a GitHub environment named **app-store** with these secrets:
+GitHub Actions independently builds and tests pushes and pull requests. Xcode Cloud performs release signing and upload; no GitHub signing secrets or App Store Connect API key are required. The obsolete manual GitHub upload workflow has been removed.
 
-| Secret | Value |
-| --- | --- |
-| `APP_STORE_CONNECT_API_KEY` | Contents of the App Store Connect API `.p8` key |
-| `APP_STORE_CONNECT_KEY_ID` | API key ID |
-| `APP_STORE_CONNECT_ISSUER_ID` | API issuer ID |
+## CloudKit and signing
 
-The manual **Prepare or Upload TestFlight Build** workflow runs tests, authenticates to Apple with the API key, requests cloud-managed signing, archives with a unique build number, and exports an IPA. The key’s role must permit Certificates, Identifiers & Profiles and cloud-managed distribution signing for this team. The same local signing path has passed with the existing Xcode account; the GitHub API-key path still requires the repository secrets and a first CI run. Leave **upload** unchecked to prepare the artifact only. Check it to upload after configuring the App Store Connect app and Production schema. Processing, beta review and tester distribution happen in App Store Connect afterward.
+Both released apps use the user's private `iCloud.dev.gan.FinanceApp` container, Production environment and `FinancesJournal_v1` zone. Debug builds use Development and a separate local store. Use the production **Finances v2.app** on Mac when comparing with TestFlight; isolated QA apps intentionally have different data. Read-only Production data comparison passed; see `production-sync-verification.json`.
 
-The workflow uses GitHub’s [macOS 26 image with Xcode 26.6](https://github.com/actions/runner-images/blob/main/images/macos/macos-26-Readme.md). See Apple’s [upload builds guide](https://developer.apple.com/help/app-store-connect/manage-builds/upload-builds/) for processing and supported toolchains.
-
-Automatic TestFlight delivery on push is deliberately not enabled yet. To enable it later, add a `push` trigger for `main` to the release workflow and change the upload condition to `github.event_name == 'push' || inputs.upload`. Keep the environment protection and passing tests in place.
+The project includes CloudKit/APNs entitlements, background notifications, privacy manifest, usage descriptions, an opaque app icon and a shared test/archive scheme. Apple-managed signing and App Store IPA export have passed. No private signing key is stored in this repository.
 
 ## Local archive
 
-Open Xcode, select the FinancesiOS scheme and Any iOS Device, then Product → Archive. Choose the configured team for signing. Organizer can distribute to App Store Connect using automatic signing.
+Open `FinancesiOS.xcodeproj`, select the FinancesiOS scheme and Any iOS Device, then Product → Archive. Alternatively run:
 
-Alternatively, `scripts/archive.sh` creates an archive in `build/`. `ExportOptions.plist` is for an automatically signed local archive. CI uses the same automatic export settings with explicit App Store Connect API authentication. Locally, run `scripts/archive.sh -allowProvisioningUpdates` followed by `scripts/export_app_store.sh -allowProvisioningUpdates` to reuse the Xcode account. Apple describes this flow in [cloud-managed certificates](https://developer.apple.com/help/account/certificates/cloud-managed-certificates/) and [automated cloud signing](https://developer.apple.com/videos/play/wwdc2021/10204/).
+```sh
+scripts/archive.sh -allowProvisioningUpdates
+scripts/export_app_store.sh -allowProvisioningUpdates
+```
 
-The owner authorized TestFlight distribution to the Gmail tester on September 6, 2026. Builds 1 and 2 were withdrawn for the owner’s icon refinements. Build 3 uses the latest green square reference and places template accounts above the details. `scripts/upload_testflight.sh -allowProvisioningUpdates` uploads the reviewed archive using the existing Xcode account. Apple processing and external beta review follow upload. See `VERIFICATION.md` for current release evidence. GitHub remote creation, API-key secrets and automatic delivery on push remain future setup.
+`scripts/upload_testflight.sh -allowProvisioningUpdates` uploads a local archive using the existing Xcode account. Choose a new unique build number before a manual release. Apple processing and external beta review are separate from successful upload. See `VERIFICATION.md` and `testflight-release.json` for release evidence.

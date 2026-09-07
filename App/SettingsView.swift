@@ -144,11 +144,6 @@ struct SettingsView: View {
                                 } label: {
                                     Label("Edit", systemImage: "pencil")
                                 }
-                                Button {
-                                    editorRoute = .transaction(store.draft(for: template), "New From Template", scanInvoice: template.scanInvoice)
-                                } label: {
-                                    Label("Use", systemImage: "plus.circle")
-                                }
                                 Button(role: .destructive) {
                                     confirmingTemplateDelete = template
                                 } label: {
