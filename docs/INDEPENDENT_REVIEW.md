@@ -25,3 +25,11 @@ A fresh reviewer verified the original fixes and reproduced two additional recei
 A separate UI lifecycle regression also confirmed that the old lock overlay did not cover an already-presented editor. A scene-local lock window now covers every presentation, blocks underlying interaction/accessibility, and preserves the unsaved editor. It displays an opaque background and handles incorrect passwords in the lock view. The new lock test failed before the fix and passed afterward.
 
 All 23 focused mobile and lock-UI checks passed after these changes. A further independent review and complete suite follow before the final push.
+
+## Round 3
+
+The third independent reviewer reproduced one remaining issue: a remote deletion guarded receipt identity but could delete a file still shared by another surviving asset. The coordinator now checks retained canonical file paths, including active upload attempts, before moving/deleting a receipt. Remote receipt relocation also collects only obsolete files after a successful database commit. Regression cases cover a shared file surviving a remote asset deletion and a relocated receipt surviving reopen without leaving the old copy behind.
+
+The complete suite at `d3a654c` passed **148 tests**, with the opt-in physical-device acceptance test skipped. After the final receipt-reference changes, all **131 domain/storage tests** passed. The synthetic remote-deletion test initially reused an already-acknowledged mutation identifier; correcting the fixture to create a new remote mutation made the intended deletion scenario valid.
+
+Final independent re-review follows on the committed receipt-reference fix before release.

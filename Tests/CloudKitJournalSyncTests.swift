@@ -46,6 +46,35 @@ final class CloudKitJournalSyncTests: XCTestCase {
         XCTAssertNil(reopened.transaction(row.id))
     }
 
+    func testRemoteReceiptDeletionPreservesAFileSharedByAnotherAsset() async throws {
+        let fixture = try fixture(receipt: true)
+        let first = try XCTUnwrap(fixture.host.data.transactions[0].attachment?.assets.first)
+        var second = first
+        second.id = UUID()
+        fixture.host.data.transactions[0].attachment?.assets.append(second)
+        let file = fixture.directory.appendingPathComponent(first.storedPath)
+        let bytes = try Data(contentsOf: file)
+        fixture.enable(); try await settled(fixture)
+        XCTAssertEqual(fixture.host.progress.state, .succeeded, fixture.host.failure ?? "")
+        var deletion = try XCTUnwrap(fixture.server.records["attachment_asset:\(first.id.uuidString)"])
+        deletion.operation = "delete"
+        deletion.clientChangeID = UUID().uuidString
+        deletion.payloadJSON = nil
+        deletion.contentHash = nil
+        deletion.assetSHA256 = nil
+        deletion.assetFileURL = nil
+        try fixture.server.inject(deletion)
+        fixture.coordinator.synchronize(); try await settled(fixture)
+        XCTAssertEqual(fixture.host.progress.state, .succeeded, fixture.host.failure ?? "")
+        let remaining = fixture.host.data.transactions.flatMap { $0.attachment?.assets ?? [] }
+        XCTAssertFalse(remaining.contains { $0.id == first.id })
+        XCTAssertTrue(remaining.contains { $0.id == second.id })
+        XCTAssertEqual(try Data(contentsOf: file), bytes)
+        let persisted = try XCTUnwrap(fixture.host.sqlite.loadData()).transactions.flatMap { $0.attachment?.assets ?? [] }
+        XCTAssertTrue(persisted.contains { $0.id == second.id })
+        XCTAssertEqual(try Data(contentsOf: fixture.directory.appendingPathComponent(second.storedPath)), bytes)
+    }
+
     func testOffDuringAccountRejectsLateResultAndRemainsOffAfterReopen() async throws {
         let fixture = try fixture(controlled: true)
         fixture.enable()

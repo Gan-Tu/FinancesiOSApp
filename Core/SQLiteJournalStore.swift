@@ -1137,11 +1137,11 @@ final class SQLiteJournalStore: @unchecked Sendable {
     }
 
     /// Receipt bytes remain necessary until immutable upload attempts are acknowledged.
-    func attachmentFileRetention(includeCompletedClaims: Bool = false) throws -> (pending: Set<String>, completed: Set<String>) {
+    func attachmentFileRetention(includeCompletedClaims: Bool = false) throws -> (pending: Set<String>, completed: Set<String>, pendingAssets: [AttachmentAsset]) {
         try withCloudKitDatabase { database in
             let pending = try rows("SELECT payload_json FROM sync_outbox WHERE record_type = 'attachment_asset' AND operation = 'upsert' AND state IN ('pending', 'in_flight')", database: database) { statement in
                 guard let json = columnText(statement, 0)?.data(using: .utf8) else { throw cloudKitError("Pending receipt metadata is missing.") }
-                return try JSONDecoder.appDecoder.decode(AttachmentAsset.self, from: json).storedPath
+                return try JSONDecoder.appDecoder.decode(AttachmentAsset.self, from: json)
             }
             var completed = Set<String>()
             if includeCompletedClaims {
@@ -1153,7 +1153,7 @@ final class SQLiteJournalStore: @unchecked Sendable {
                     completed.insert(try JSONDecoder.appDecoder.decode(AttachmentAsset.self, from: json).storedPath)
                 }
             }
-            return (Set(pending), completed)
+            return (Set(pending.map(\.storedPath)), completed, pending)
         }
     }
 

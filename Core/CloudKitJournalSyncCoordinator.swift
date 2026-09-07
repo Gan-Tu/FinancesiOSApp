@@ -393,8 +393,8 @@ final class CloudKitJournalSyncCoordinator {
             try host.cloudKitFlushLocalChanges()
             let candidate = try CloudKitJournalMerger.applying([remote], to: host.cloudKitJournalData)
             try host.cloudKitValidate(candidate)
-            let retained = Set(candidate.transactions.flatMap { $0.attachment?.assets.map(\.id) ?? [] })
-            try withInstalledReceipts([remote], retainedAssetIDs: retained, knownRecords: [:], gate: gate) {
+            let retained = candidate.transactions.flatMap { $0.attachment?.assets ?? [] }
+            try withInstalledReceipts([remote], retainedAssets: retained, knownRecords: [:], gate: gate) {
                 try check(id, gate: gate)
                 try host.cloudKitCommitConflictResolution(id: conflict.id, keepLocal: false, data: candidate, contextKey: context)
             }
@@ -641,8 +641,9 @@ final class CloudKitJournalSyncCoordinator {
         let previous = host.cloudKitJournalData
         let candidate = try CloudKitJournalMerger.applying(applicable, to: previous)
         try host.cloudKitValidate(candidate)
-        let retained = Set(candidate.transactions.flatMap { $0.attachment?.assets.map(\.id) ?? [] })
-        try withInstalledReceipts(applicable, retainedAssetIDs: retained, knownRecords: known, gate: gate) {
+        let retainedAssets = candidate.transactions.flatMap { $0.attachment?.assets ?? [] }
+        let retained = Set(retainedAssets.map(\.id))
+        try withInstalledReceipts(applicable, retainedAssets: retainedAssets, knownRecords: known, gate: gate) {
             try check(id, gate: gate)
             try host.cloudKitCommitRemote(records, data: candidate, contextKey: context, changeToken: token)
         }
@@ -665,12 +666,21 @@ final class CloudKitJournalSyncCoordinator {
             || SQLiteSyncedJournalMetadata(data: lhs) != SQLiteSyncedJournalMetadata(data: rhs)
     }
 
-    private func withInstalledReceipts(_ records: [CloudKitSyncRecord], retainedAssetIDs: Set<UUID>, knownRecords: [String: CloudKitSyncRecord], gate: CloudKitPersistenceGate, commit: () throws -> Void) throws {
+    private func withInstalledReceipts(_ records: [CloudKitSyncRecord], retainedAssets: [AttachmentAsset], knownRecords: [String: CloudKitSyncRecord], gate: CloudKitPersistenceGate, commit: () throws -> Void) throws {
         guard let host else { throw CancellationError() }
         // Receipt replacements are reversible until SQLite commits. Network
         // staging is client-owned; moving it avoids copying an entire receipt
         // library on the UI actor during the first sync.
         var installations: [(destination: URL, backup: URL?)] = []
+        let retainedAssetIDs = Set(retainedAssets.map(\.id))
+        let hasDeletions = records.contains { $0.recordType == "attachment_asset" && $0.operation == "delete" }
+        var retainedFilePaths = Set<String>()
+        if hasDeletions {
+            let queuedAssets = try host.cloudKitSQLiteStore.attachmentFileRetention().pendingAssets
+            retainedFilePaths = Set(try (retainedAssets + queuedAssets).map {
+                try host.cloudKitAttachmentURL(for: $0).resolvingSymlinksInPath().standardizedFileURL.path
+            })
+        }
         let localAssets = host.cloudKitJournalData.transactions.flatMap { $0.attachment?.assets ?? [] }
             .reduce(into: [UUID: AttachmentAsset]()) { $0[$1.id] = $1 }
         do {
@@ -680,7 +690,8 @@ final class CloudKitJournalSyncCoordinator {
                     .flatMap { try? JSONDecoder.appDecoder.decode(AttachmentAsset.self, from: $0) }
                 guard let asset = localAssets[id] ?? knownAsset else { continue }
                 let destination = try host.cloudKitAttachmentURL(for: asset)
-                guard FileManager.default.fileExists(atPath: destination.path) else { continue }
+                guard FileManager.default.fileExists(atPath: destination.path),
+                      !retainedFilePaths.contains(destination.resolvingSymlinksInPath().standardizedFileURL.path) else { continue }
                 let backup = destination.deletingLastPathComponent().appendingPathComponent(".icloud-deleted-\(UUID().uuidString)")
                 try gate.whileActive { try FileManager.default.moveItem(at: destination, to: backup) }
                 installations.append((destination, backup))

@@ -234,6 +234,29 @@ final class MobileCompanionTests: XCTestCase {
         }
     }
 
+    func testRemoteReceiptRelocationCleansTheOldFileAfterCommit() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let oldFile = folder.appendingPathComponent("Attachments/old.txt")
+        let newFile = folder.appendingPathComponent("Attachments/new.txt")
+        try FileManager.default.createDirectory(at: oldFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let bytes = Data("Receipt restored on another device".utf8)
+        try bytes.write(to: oldFile); try bytes.write(to: newFile)
+        var data = DemoData.fixture()
+        data.transactions[0].attachment = AttachmentContainer(assets: [AttachmentAsset(originalFilename: "receipt.txt", storedPath: "Attachments/old.txt", mimeType: "text/plain", sizeBytes: Int64(bytes.count))])
+        let store = MobileLedgerStore(supportDirectory: folder, initialData: data)
+        let context = "synthetic-relocation-context"
+        _ = try store.cloudKitSQLiteStore.bindCloudKitAccount(contextKey: context, accountID: "synthetic-account")
+        var moved = store.data
+        moved.transactions[0].attachment?.assets[0].storedPath = "Attachments/new.txt"
+        try store.cloudKitCommitRemote([], data: moved, contextKey: context, changeToken: Data([1]))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: oldFile.path))
+        XCTAssertEqual(try Data(contentsOf: newFile), bytes)
+        let reopened = MobileLedgerStore(supportDirectory: folder)
+        let asset = try XCTUnwrap(reopened.transaction(moved.transactions[0].id)?.attachment?.assets.first)
+        XCTAssertEqual(try Data(contentsOf: reopened.attachmentURL(for: asset)), bytes)
+    }
+
     private func executeReviewSQL(_ sql: String, at url: URL) throws {
         var database: OpaquePointer?
         XCTAssertEqual(sqlite3_open(url.path, &database), SQLITE_OK)

@@ -3806,8 +3806,10 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
         try cloudKitValidate(candidate)
         let databaseURL = sqliteStore.databaseURL
         let baseline = persistenceBaseline
+        let supportDirectory = supportDirectory
         try Self.deferredPersistenceQueue.sync {
             do {
+                let previous = baseline.snapshot
                 try SQLiteJournalStore(databaseURL: databaseURL).persistCloudKitPull(
                     records,
                     data: candidate,
@@ -3816,6 +3818,7 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
                     changeToken: changeToken
                 )
                 baseline.snapshot = candidate
+                Self.removeObsoleteAttachmentFiles(supportDirectory: supportDirectory, previous: previous, data: candidate)
             } catch {
                 baseline.snapshot = nil
                 throw error
@@ -3840,8 +3843,10 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
         try cloudKitValidate(candidate)
         let databaseURL = sqliteStore.databaseURL
         let baseline = persistenceBaseline
+        let supportDirectory = supportDirectory
         try Self.deferredPersistenceQueue.sync {
             do {
+                let previous = baseline.snapshot
                 try SQLiteJournalStore(databaseURL: databaseURL).resolveCloudKitConflict(
                     id: id,
                     keepLocal: keepLocal,
@@ -3850,6 +3855,7 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
                     previous: baseline.snapshot
                 )
                 baseline.snapshot = candidate
+                Self.removeObsoleteAttachmentFiles(supportDirectory: supportDirectory, previous: previous, data: candidate)
             } catch {
                 baseline.snapshot = nil
                 throw error
