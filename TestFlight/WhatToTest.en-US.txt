@@ -1,5 +1,7 @@
 Finances v2 for iOS
 
+Sync now shows Uploading or Downloading in the journal footer and Cloud Sync screen. Upload progress counts completed changes; downloads show an activity bar and changes received because iCloud does not supply a download total. Check that the indicator disappears when sync finishes or is turned off.
+
 Please test the simplified All Transactions view and Templates customization: no batch Edit button, permanent delete/reorder controls, and + at the top right. Check left-swipe Duplicate/Delete, duplicate date choices, recurring deletion scopes, and right-swipe cleared status.
 
 Check receipt previews, backup restore, and iPhone/Mac sync after offline changes. Receipt files should survive restores, interrupted uploads, and shared-file deletions. Check long repeating schedules and nested accounts.

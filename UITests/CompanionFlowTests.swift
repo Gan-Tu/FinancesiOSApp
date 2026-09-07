@@ -1,6 +1,31 @@
 import XCTest
 
 final class CompanionFlowTests: XCTestCase {
+    @MainActor func testSyncProgressShowsTransferDirectionInFooterAndSheet() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        for (argument, title, detail) in [
+            ("--demo-sync-upload", "Uploading changes to iCloud", "50 of 200 changes uploaded"),
+            ("--demo-sync-download", "Downloading iCloud changes", "150 changes received")
+        ] {
+            app.launchArguments = ["--demo", "--reset-demo", argument]
+            app.launch()
+            let footer = app.buttons["iCloud Sync"]
+            XCTAssertTrue(footer.waitForExistence(timeout: 10))
+            XCTAssertTrue((footer.value as? String)?.contains(detail) == true)
+            XCTAssertTrue(footer.isHittable)
+            footer.tap()
+            XCTAssertTrue(app.staticTexts[title].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.staticTexts[detail].exists)
+            let bar = app.descendants(matching: .any)["cloud-sync-status"].descendants(matching: .any)["cloud-sync-progress-bar"].firstMatch
+            XCTAssertTrue(bar.exists)
+            XCTAssertFalse(app.buttons["Synchronize Now"].isEnabled)
+            let screenshot = XCTAttachment(screenshot: app.screenshot())
+            screenshot.name = title; screenshot.lifetime = .keepAlways; add(screenshot)
+            app.terminate()
+        }
+    }
+
     @MainActor func testPasswordLockCoversOpenEditorAndPreservesDraft() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -44,6 +69,7 @@ final class CompanionFlowTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Cloud Sync"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.switches["cloud-sync-toggle"].exists)
         XCTAssertTrue(app.staticTexts["Sync Disabled"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["cloud-sync-progress-bar"].firstMatch.exists)
         XCTAssertFalse(app.buttons["Synchronize Now"].isEnabled)
         XCTAssertFalse(app.buttons["Reset..."].isEnabled)
         XCTAssertFalse(app.buttons["About iCloud Sync"].exists)

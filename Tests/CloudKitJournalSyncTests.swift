@@ -7,6 +7,52 @@ import XCTest
 final class CloudKitJournalSyncTests: XCTestCase {
     private let context = "iCloud.dev.gan.FinanceApp|Development|FinancesJournal_v1"
 
+    func testUploadProgressAdvancesAfterAcknowledgmentAndIncludesConcurrentEdits() async throws {
+        let fixture = try fixture(transactionCount: 120)
+        fixture.network.hold = { $0.kind == .modify }
+        fixture.enable()
+        let first = try await next(fixture, .modify)
+        let total = try fixture.host.sqlite.remainingCloudKitChangeCount(contextKey: context)
+        XCTAssertEqual(first.records.count, 50)
+        XCTAssertEqual(fixture.host.progress.phase, .uploading)
+        XCTAssertEqual(fixture.host.progress.fractionCompleted, 0)
+        XCTAssertEqual(fixture.host.progress.detail, "0 of \(total) changes uploaded")
+
+        fixture.host.data.transactions[0].note = "An edit during the upload"
+        try fixture.host.cloudKitFlushLocalChanges()
+        fixture.network.reply(first, try fixture.server.answer(first))
+        let second = try await next(fixture, .modify)
+        let remaining = try fixture.host.sqlite.remainingCloudKitChangeCount(contextKey: context)
+        XCTAssertEqual(fixture.host.progress.detail, "50 of \(50 + remaining) changes uploaded")
+        XCTAssertEqual(try XCTUnwrap(fixture.host.progress.fractionCompleted), 50.0 / Double(50 + remaining), accuracy: 0.0001)
+        XCTAssertGreaterThan(remaining, 0)
+
+        fixture.network.hold = nil
+        fixture.network.reply(second, try fixture.server.answer(second))
+        try await settled(fixture)
+        XCTAssertEqual(fixture.host.progress.state, .succeeded, fixture.host.failure ?? "")
+        XCTAssertEqual(try fixture.host.sqlite.remainingCloudKitChangeCount(contextKey: context), 0)
+        XCTAssertFalse(fixture.host.progress.isRunning)
+    }
+
+    func testDownloadProgressCountsPagesWithoutInventingATotalAndClearsOnCancel() async throws {
+        let fixture = try fixture(empty: true, controlled: true)
+        fixture.enable()
+        try await completeInitialHandshake(fixture)
+        let first = try await next(fixture, .fetch)
+        XCTAssertEqual(fixture.host.progress.phase, .downloading)
+        XCTAssertNil(fixture.host.progress.fractionCompleted)
+        let records = try CKTestData.records(CKTestData.make())
+        fixture.network.reply(first, .page(CloudKitSyncPage(records: records, changeToken: Data("progress-page".utf8), moreComing: true)))
+        let second = try await next(fixture, .fetch)
+        XCTAssertEqual(fixture.host.progress.detail, "\(records.count) changes received")
+        XCTAssertNil(fixture.host.progress.fractionCompleted)
+        try fixture.disable()
+        fixture.network.reply(second, .page(CloudKitSyncPage(records: [], changeToken: Data("done".utf8), moreComing: false)))
+        try await settled(fixture)
+        XCTAssertEqual(fixture.host.progress, .idle)
+    }
+
     func testActualMobileStoresExchangeReceiptEditAndDeletionThroughSharedProtocol() async throws {
         let server = try CKJournalTestServer()
         let networkA = CKJournalNetwork(server: server, automatic: true)

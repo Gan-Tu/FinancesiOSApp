@@ -258,10 +258,10 @@ struct CloudSyncManagementView: View {
                 FinanceFormCard {
                     FinanceFormRow(last: true) {
                         if store.cloudSyncConflicts.isEmpty {
-                            HStack {
+                            if store.cloudSyncProgress.isRunning {
+                                CloudSyncRunningStatus(progress: store.cloudSyncProgress)
+                            } else {
                                 Text(cloudSyncStatusText).foregroundStyle(.primary)
-                                Spacer()
-                                if store.cloudSyncProgress.isRunning { ProgressView() }
                             }
                         } else {
                             Button { showingConflicts = true } label: {
@@ -270,6 +270,7 @@ struct CloudSyncManagementView: View {
                         }
                     }
                 }
+                .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("cloud-sync-status")
             }
 
@@ -316,7 +317,7 @@ struct CloudSyncManagementView: View {
     private var cloudSyncStatusText: String {
         switch store.cloudSyncProgress.state {
         case .idle: store.data.syncEnabled ? "Ready to Sync" : "Sync Disabled"
-        case .running: "Synchronizing..."
+        case .running: store.cloudSyncProgress.phase.title
         case .succeeded: "Up to date"
         case .failed: "Sync failed"
         }
@@ -608,12 +609,16 @@ struct FinancesForMacView: View {
     var body: some View {
         Form {
             Section("iCloud Sync") {
-                Label(syncStatusTitle, systemImage: syncStatusIcon)
-                    .foregroundStyle(syncStatusColor)
-                if let detail = store.cloudSyncProgress.detail {
-                    Text(detail)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                if store.cloudSyncProgress.isRunning {
+                    CloudSyncRunningStatus(progress: store.cloudSyncProgress)
+                } else {
+                    Label(syncStatusTitle, systemImage: syncStatusIcon)
+                        .foregroundStyle(syncStatusColor)
+                    if let detail = store.cloudSyncProgress.detail {
+                        Text(detail)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Button {
                     store.synchronizeNow()
@@ -658,7 +663,7 @@ struct FinancesForMacView: View {
         case .failed:
             "icloud.slash"
         case .running:
-            "icloud.and.arrow.up"
+            store.cloudSyncProgress.phase.symbol
         case .idle, .succeeded:
             store.data.syncEnabled ? "icloud" : "icloud.slash"
         }

@@ -22,6 +22,12 @@ enum DemoData {
                 try? FileManager.default.removeItem(at: receipt)
             } catch { store.validationError = ValidationError(message: error.localizedDescription) }
         }
+        // UI fixtures report progress without connecting to an iCloud account.
+        if CommandLine.arguments.contains("--demo-sync-upload") {
+            store.cloudKitSyncDidUpdate(.running(message: "Uploading changes to iCloud", detail: "50 of 200 changes uploaded", fractionCompleted: 0.25, phase: .uploading))
+        } else if CommandLine.arguments.contains("--demo-sync-download") {
+            store.cloudKitSyncDidUpdate(.running(message: "Downloading iCloud changes", detail: "150 changes received", phase: .downloading))
+        }
         return store
     }
 

@@ -381,7 +381,7 @@ final class CloudKitJournalSyncCoordinator {
             try check(id, gate: gate)
             _ = try await database(gate: gate) { try $0.bindCloudKitAccount(contextKey: context, accountID: account) }
             try check(id, gate: gate)
-            progress(id, "Downloading the selected iCloud receipt")
+            progress(id, "Downloading the selected iCloud receipt", phase: .downloading)
             let remote = try await client.fetchRecord(recordType: conflict.remote.recordType, recordID: conflict.remote.recordID)
             try check(id, gate: gate)
             guard CloudKitJournalMerger.sameValue(remote, conflict.remote) else {
@@ -417,9 +417,9 @@ final class CloudKitJournalSyncCoordinator {
         guard activeID == id, host?.cloudKitJournalData.syncEnabled == true else { throw CancellationError() }
     }
 
-    private func progress(_ id: UUID, _ message: String, fraction: Double? = nil) {
+    private func progress(_ id: UUID, _ message: String, phase: CloudSyncProgress.Phase = .preparing, detail: String? = nil, fraction: Double? = nil) {
         guard activeID == id, reportsProgress else { return }
-        host?.cloudKitSyncDidUpdate(.running(message: message, fractionCompleted: fraction))
+        host?.cloudKitSyncDidUpdate(.running(message: message, detail: detail, fractionCompleted: fraction, phase: phase))
     }
 
     private func database<T: Sendable>(gate: CloudKitPersistenceGate, _ operation: @escaping @Sendable (SQLiteJournalStore) throws -> T) async throws -> T {
@@ -457,7 +457,7 @@ final class CloudKitJournalSyncCoordinator {
             let client = try dependencies.makeClient(configuration)
             self.client = client
             passClient = client
-            progress(id, "Checking iCloud account", fraction: 0.02)
+            progress(id, "Checking iCloud account")
             let account = try await client.accountIdentifier()
             try check(id, gate: gate)
             let context = [configuration.containerIdentifier, configuration.environment, configuration.zoneName].joined(separator: "|")
@@ -477,7 +477,7 @@ final class CloudKitJournalSyncCoordinator {
                 _ = try await database(gate: gate) { try $0.prepareInitialCloudKitSnapshot(snapshot.data, contextKey: context) }
                 try check(id, gate: gate)
             }
-            progress(id, "Downloading iCloud changes", fraction: 0.12)
+            progress(id, "Downloading iCloud changes", phase: .downloading)
             var token = startingToken
             var fetched: [String: CloudKitSyncRecord] = [:]
             var retriedExpiredToken = false
@@ -490,11 +490,15 @@ final class CloudKitJournalSyncCoordinator {
                     // replacement fetch has been validated and committed.
                     token = nil
                     fetched.removeAll()
+                    progress(id, "Downloading iCloud changes", phase: .downloading)
                     retriedExpiredToken = true
                     continue
                 }
                 try check(id, gate: gate)
                 for record in page.records { fetched[record.key] = record }
+                // CloudKit supplies pages without an overall record/byte total.
+                progress(id, "Downloading iCloud changes", phase: .downloading,
+                         detail: "\(fetched.count) changes received")
                 if page.moreComing && (page.changeToken == nil || page.changeToken == token) {
                     throw CloudKitSyncError.invalidData("iCloud returned a non-advancing page. No journal checkpoint was changed.")
                 }
@@ -511,7 +515,11 @@ final class CloudKitJournalSyncCoordinator {
             while true {
                 try check(id, gate: gate)
                 try host.cloudKitFlushLocalChanges()
-                var pending = try await database(gate: gate) { try $0.claimCloudKitChanges(contextKey: context, limit: 50) }
+                let (batch, remaining) = try await database(gate: gate) { store in
+                    let batch = try store.claimCloudKitChanges(contextKey: context, limit: 50)
+                    return (batch, try store.remainingCloudKitChangeCount(contextKey: context))
+                }
+                var pending = batch
                 try check(id, gate: gate)
                 if pending.isEmpty { break }
                 for index in pending.indices where pending[index].recordType == "attachment_asset" && pending[index].operation != "delete" {
@@ -525,7 +533,12 @@ final class CloudKitJournalSyncCoordinator {
                     // The transport freezes/checks the bytes before handing the
                     // CKAsset to CloudKit; JSON hash and blob hash stay distinct.
                 }
-                progress(id, "Uploading changes to iCloud", fraction: 0.55)
+                // Recount after each flush so edits made during sync join the total.
+                // This measures acknowledged changes, not receipt byte transfer.
+                let total = uploaded + remaining
+                progress(id, "Uploading changes to iCloud", phase: .uploading,
+                         detail: "\(uploaded) of \(total) changes uploaded",
+                         fraction: total > 0 ? Double(uploaded) / Double(total) : nil)
                 let submitted = pending
                 let response = try await client.modifyRecords(submitted)
                 try check(id, gate: gate)

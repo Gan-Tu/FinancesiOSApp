@@ -927,12 +927,20 @@ struct FinanceBottomBar: View {
             Spacer()
 
             Button(action: openCloudSync) {
-                Text(syncTitle)
-                    .font(.body)
-                    .lineLimit(1)
-                    .frame(minWidth: 132, minHeight: 44)
+                VStack(spacing: 5) {
+                    Text(syncTitle)
+                        .font(.body)
+                        .lineLimit(1)
+                    if store.cloudSyncProgress.isRunning {
+                        CloudSyncProgressBar(progress: store.cloudSyncProgress)
+                            .frame(maxWidth: 160)
+                    }
+                }
+                .frame(maxWidth: 220, minHeight: 44)
+                .contentShape(Rectangle())
             }
             .accessibilityLabel("iCloud Sync")
+            .accessibilityValue(store.cloudSyncProgress.detail.map { "\(syncTitle) \($0)" } ?? syncTitle)
 
             Spacer()
 
@@ -961,7 +969,7 @@ struct FinanceBottomBar: View {
         case .idle:
             store.data.syncEnabled ? "Ready to Sync" : "Sync Disabled"
         case .running:
-            store.cloudSyncProgress.message.isEmpty ? "Syncing..." : store.cloudSyncProgress.message
+            store.cloudSyncProgress.phase.title
         case .succeeded:
             "Up to date"
         case .failed:

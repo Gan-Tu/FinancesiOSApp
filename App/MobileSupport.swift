@@ -38,6 +38,26 @@ enum AppColors {
 }
 
 struct CloudSyncProgress: Equatable {
+    enum Phase: Equatable {
+        case preparing, downloading, uploading
+
+        var title: String {
+            switch self {
+            case .preparing: "Syncing..."
+            case .downloading: "Downloading..."
+            case .uploading: "Uploading..."
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .preparing: "arrow.triangle.2.circlepath"
+            case .downloading: "icloud.and.arrow.down"
+            case .uploading: "icloud.and.arrow.up"
+            }
+        }
+    }
+
     enum State: Equatable {
         case idle
         case running
@@ -49,17 +69,19 @@ struct CloudSyncProgress: Equatable {
     var message: String
     var detail: String?
     var fractionCompleted: Double?
+    var phase: Phase = .preparing
 
     var isRunning: Bool { state == .running }
 
     static let idle = CloudSyncProgress(state: .idle, message: "", detail: nil, fractionCompleted: nil)
 
-    static func running(message: String, detail: String? = nil, fractionCompleted: Double? = nil) -> CloudSyncProgress {
+    static func running(message: String, detail: String? = nil, fractionCompleted: Double? = nil, phase: Phase = .preparing) -> CloudSyncProgress {
         CloudSyncProgress(
             state: .running,
             message: message,
             detail: detail,
-            fractionCompleted: fractionCompleted.map { min(max($0, 0), 1) }
+            fractionCompleted: fractionCompleted.map { min(max($0, 0), 1) },
+            phase: phase
         )
     }
 

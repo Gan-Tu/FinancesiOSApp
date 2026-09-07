@@ -1157,6 +1157,25 @@ final class SQLiteJournalStore: @unchecked Sendable {
         }
     }
 
+    /// Count queued mutations, including successors of an in-flight version.
+    /// No receipt payloads or file bytes are loaded for progress reporting.
+    func remainingCloudKitChangeCount(contextKey: String) throws -> Int {
+        try withCloudKitDatabase(contextKey: contextKey) { database in
+            let domainTypes = Self.cloudKitDomainTypes.sorted().map { "'\($0)'" }.joined(separator: ", ")
+            return try rows("""
+                SELECT COUNT(*) FROM sync_outbox AS candidate
+                WHERE candidate.state IN ('pending', 'in_flight') AND candidate.record_type IN (\(domainTypes))
+                  AND NOT EXISTS (
+                    SELECT 1 FROM cloudkit_conflicts AS conflict
+                    WHERE conflict.context_key = ?
+                      AND conflict.record_key = candidate.record_type || ':' || candidate.record_id
+                      AND conflict.resolved_at IS NULL
+                  )
+                """, database: database, bindValues: { try bind(contextKey, to: $0, at: 1, database) },
+                map: { Int(sqlite3_column_int64($0, 0)) }).first ?? 0
+        }
+    }
+
     func claimCloudKitChanges(contextKey: String, limit: Int = 50) throws -> [CloudKitSyncRecord] {
         try withCloudKitDatabase(contextKey: contextKey) { database in
             var result: [CloudKitSyncRecord] = []

@@ -1,5 +1,56 @@
 import SwiftUI
 
+/// A record-based upload bar, or an activity bar when CloudKit has no total.
+struct CloudSyncProgressBar: View {
+    let progress: CloudSyncProgress
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var moving = false
+
+    var body: some View {
+        Group {
+            if let fraction = progress.fractionCompleted {
+                ProgressView(value: fraction)
+                    .progressViewStyle(.linear)
+            } else {
+                GeometryReader { geometry in
+                    Capsule().fill(Color.accentColor.opacity(0.16))
+                        .overlay(alignment: .leading) {
+                            Capsule().fill(Color.accentColor)
+                                .frame(width: geometry.size.width * 0.3)
+                                .offset(x: geometry.size.width * (reduceMotion ? 0.35 : moving ? 0.7 : 0))
+                                .animation(reduceMotion ? nil : .easeInOut(duration: 1.2).repeatForever(autoreverses: true), value: moving)
+                        }
+                }
+                .onAppear { moving = true }
+                .onDisappear { moving = false }
+            }
+        }
+        .frame(height: 4)
+        .tint(.accentColor)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Sync progress")
+        .accessibilityValue(progress.detail ?? progress.message)
+        .accessibilityIdentifier("cloud-sync-progress-bar")
+    }
+}
+
+struct CloudSyncRunningStatus: View {
+    let progress: CloudSyncProgress
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(progress.message.isEmpty ? progress.phase.title : progress.message,
+                  systemImage: progress.phase.symbol)
+                .foregroundStyle(.primary)
+            CloudSyncProgressBar(progress: progress)
+            if let detail = progress.detail {
+                Text(detail).font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+}
+
 /// Geometry follows the compact grouped forms in the supplied iPhone recording.
 /// Minimum heights grow with Dynamic Type instead of clipping larger text.
 struct FinanceForm<Content: View>: View {
