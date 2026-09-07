@@ -126,3 +126,15 @@ struct CompactGroupedFormStyle: ViewModifier {
 extension View {
     func compactGroupedForm(sectionSpacing: CGFloat = 20) -> some View { modifier(CompactGroupedFormStyle(sectionSpacing: sectionSpacing)) }
 }
+
+/// Keep the native button gesture (including scroll/swipe cancellation), but
+/// make its entire row surface visibly respond without dimming the text.
+struct TransactionRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(.primary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .background(configuration.isPressed ? Color(uiColor: .systemGray4) : .clear)
+    }
+}

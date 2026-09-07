@@ -1,5 +1,7 @@
 Finances v2 for iOS
 
+Press a transaction in a register or Quick Search: the entire rectangular row should highlight gray immediately. Scrolling or swiping away cancels the press; releasing a tap still opens Details. Check taps in the empty space around the text as well.
+
 Quick Search now shows dates beside transaction results. Before typing, use All, Uncleared, Repeating, Today or Last Month. After typing, choose Note contains, Number contains, Payee contains or Search for to open the complete filtered register. Previews show up to 40 entries; the full list includes every match in the current journal/account/currency scope. Last Month means the previous calendar month. Check the empty popup, field choices, dated rows and returning from a result to the filtered list.
 
 Backup: Export Backup should prepare a ZIP with all journals and receipts, then open Apple's share sheet. Try Save to Files or an installed provider such as Dropbox. You can leave the Backup screen or background the app during preparation; return to share the completed file. Large exports now stream receipt bytes instead of building a giant in-memory document. Import the saved ZIP and check transactions, balances, templates and attachments. Restore replaces current journals after confirmation and turns Cloud Sync off. Older mobile backups and .fin packages still import. Deleted repeating occurrences should stay deleted after restore/reopen; new repeating schedules should still generate normally. The bank-statement and raw Original Finances Database import options have been removed.

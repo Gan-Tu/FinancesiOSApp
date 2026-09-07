@@ -452,11 +452,11 @@ struct TransactionListScreen: View {
                     } label: {
                         RegisterRow(transaction: transaction, amounts: presentation.amounts[transaction.id] ?? [], balances: presentation.balances[transaction.id] ?? [], flow: store.accountFlowDisplay(for: transaction), isFuture: RegisterPresentation.isFuture(transaction.date))
                             .equatable()
-                            .padding(.leading, 22).contentShape(Rectangle())
+                            .padding(EdgeInsets(top: 8, leading: 28, bottom: 8, trailing: 20))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(TransactionRowButtonStyle())
                     .accessibilityIdentifier("register-row-\(transaction.id.uuidString)")
-                    .listRowInsets(EdgeInsets(top: 8, leading: 6, bottom: 8, trailing: 20))
+                    .listRowInsets(EdgeInsets())
                     .listRowSeparator(.hidden)
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                         Button("Delete", role: .destructive) { requestDeletion(transaction) }.tint(.red)
@@ -1165,9 +1165,10 @@ struct QuickSearchSheet: View {
                                     MobileTransactionPreviewRow(
                                         presentation: mobileTransactionPreviewPresentation(for: transaction, store: store)
                                     )
-                                    .padding(.leading, 8)
+                                    .padding(EdgeInsets(top: 8, leading: 28, bottom: 8, trailing: 20))
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(TransactionRowButtonStyle())
+                                .listRowInsets(EdgeInsets())
                                 .accessibilityIdentifier("search-transaction-\(transaction.id.uuidString)")
                             }
                         }
