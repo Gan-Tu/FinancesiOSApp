@@ -1136,6 +1136,27 @@ final class SQLiteJournalStore: @unchecked Sendable {
         }
     }
 
+    /// Receipt bytes remain necessary until immutable upload attempts are acknowledged.
+    func attachmentFileRetention(includeCompletedClaims: Bool = false) throws -> (pending: Set<String>, completed: Set<String>) {
+        try withCloudKitDatabase { database in
+            let pending = try rows("SELECT payload_json FROM sync_outbox WHERE record_type = 'attachment_asset' AND operation = 'upsert' AND state IN ('pending', 'in_flight')", database: database) { statement in
+                guard let json = columnText(statement, 0)?.data(using: .utf8) else { throw cloudKitError("Pending receipt metadata is missing.") }
+                return try JSONDecoder.appDecoder.decode(AttachmentAsset.self, from: json).storedPath
+            }
+            var completed = Set<String>()
+            if includeCompletedClaims {
+                let records = try rows("SELECT record_json FROM cloudkit_receipt_claims AS claim WHERE NOT EXISTS (SELECT 1 FROM sync_outbox WHERE client_change_id = claim.client_change_id AND state IN ('pending', 'in_flight'))", database: database) { statement in
+                    try decodeCloudKitRecord(columnText(statement, 0) ?? "")
+                }
+                for record in records {
+                    guard let json = record.payloadJSON?.data(using: .utf8) else { throw cloudKitError("Completed receipt metadata is missing.") }
+                    completed.insert(try JSONDecoder.appDecoder.decode(AttachmentAsset.self, from: json).storedPath)
+                }
+            }
+            return (Set(pending), completed)
+        }
+    }
+
     func claimCloudKitChanges(contextKey: String, limit: Int = 50) throws -> [CloudKitSyncRecord] {
         try withCloudKitDatabase(contextKey: contextKey) { database in
             var result: [CloudKitSyncRecord] = []

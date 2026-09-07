@@ -1,6 +1,41 @@
 import XCTest
 
 final class CompanionFlowTests: XCTestCase {
+    @MainActor func testPasswordLockCoversOpenEditorAndPreservesDraft() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--demo", "--reset-demo"]
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 10))
+        app.buttons["Settings"].tap()
+        app.buttons["Security"].tap()
+        app.secureTextFields["New Password"].tap()
+        app.secureTextFields["New Password"].typeText("review-password")
+        app.secureTextFields["Verify Password"].tap()
+        app.secureTextFields["Verify Password"].typeText("review-password")
+        app.buttons["Set Password"].tap()
+        app.navigationBars["Security"].buttons.element(boundBy: 0).tap()
+        app.navigationBars["Settings"].buttons["Done"].tap()
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Personal,")).firstMatch.tap()
+        app.buttons["New Transaction"].tap()
+        app.buttons["Expense"].tap()
+        let cleared = app.switches["Cleared"]
+        XCTAssertTrue(cleared.waitForExistence(timeout: 5))
+        cleared.tap()
+        let draftCleared = cleared.value as? String
+        XCUIDevice.shared.press(.home)
+        XCTAssertTrue(app.wait(for: .runningBackground, timeout: 5) || app.state == .runningBackgroundSuspended)
+        app.activate()
+        let password = app.secureTextFields["Password"]
+        XCTAssertTrue(password.waitForExistence(timeout: 5))
+        XCTAssertTrue(password.isHittable)
+        password.tap(); password.typeText("review-password")
+        app.buttons["Unlock"].tap()
+        XCTAssertTrue(app.switches["Cleared"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.switches["Cleared"].value as? String, draftCleared)
+    }
+
     @MainActor func testCloudSyncSheetMatchesCompactReferenceAndOpensHelp() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--demo", "--reset-demo"]

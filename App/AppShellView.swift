@@ -80,14 +80,9 @@ struct AppShellView: View {
                 QuickSearchSheet(navigationPath: $navigationPath, presentedSheet: $presentedSheet, route: $route, contextLedgerID: currentLedgerID)
             }
         }
-        .overlay {
-            ZStack {
-                if store.requiresUnlock {
-                    LockedAppView()
-                        .transition(.opacity)
-                        .zIndex(20)
-                }
-            }
+        .background {
+            LockPresentationShield(store: store, isLocked: store.requiresUnlock)
+                .frame(width: 0, height: 0)
         }
         .confirmationDialog("New Transaction", isPresented: $showingNewTransactionDialog, titleVisibility: .visible) {
             ForEach(MobileNewTransactionKind.allCases) { kind in
@@ -154,14 +149,91 @@ struct AppShellView: View {
     }
 }
 
+/// A scene-local window covers UIKit presentations too, without destroying editor state.
+private struct LockPresentationShield: UIViewRepresentable {
+    let store: MobileLedgerStore
+    let isLocked: Bool
+
+    func makeCoordinator() -> Coordinator { Coordinator(store: store) }
+    func makeUIView(context: Context) -> AnchorView {
+        let view = AnchorView()
+        view.windowChanged = { [weak coordinator = context.coordinator] window in
+            coordinator?.attach(to: window)
+        }
+        return view
+    }
+    func updateUIView(_ view: AnchorView, context: Context) {
+        context.coordinator.attach(to: view.window)
+        context.coordinator.update(isLocked: isLocked)
+    }
+    static func dismantleUIView(_ view: AnchorView, coordinator: Coordinator) {
+        view.windowChanged = nil
+        coordinator.hide()
+    }
+
+    final class AnchorView: UIView {
+        var windowChanged: ((UIWindow?) -> Void)?
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            windowChanged?(window)
+        }
+    }
+
+    @MainActor final class Coordinator {
+        let store: MobileLedgerStore
+        weak var originalWindow: UIWindow?
+        private var shieldWindow: UIWindow?
+        private var previousInteractionEnabled = true
+        private var previousAccessibilityHidden = false
+
+        init(store: MobileLedgerStore) { self.store = store }
+        func attach(to window: UIWindow?) {
+            guard let window, window !== shieldWindow else { return }
+            if originalWindow !== window {
+                hide()
+                originalWindow = window
+            }
+            update(isLocked: store.requiresUnlock)
+        }
+        func update(isLocked: Bool) {
+            guard isLocked else { hide(); return }
+            guard shieldWindow == nil, let originalWindow, let scene = originalWindow.windowScene else { return }
+            originalWindow.endEditing(true)
+            previousInteractionEnabled = originalWindow.isUserInteractionEnabled
+            previousAccessibilityHidden = originalWindow.accessibilityElementsHidden
+            originalWindow.isUserInteractionEnabled = false
+            originalWindow.accessibilityElementsHidden = true
+            let window = UIWindow(windowScene: scene)
+            window.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.alert.rawValue + 1)
+            window.overrideUserInterfaceStyle = originalWindow.traitCollection.userInterfaceStyle
+            let controller = UIHostingController(rootView: LockedAppView().environmentObject(store))
+            controller.view.accessibilityViewIsModal = true
+            window.rootViewController = controller
+            shieldWindow = window
+            window.makeKeyAndVisible()
+        }
+        func hide() {
+            guard let window = shieldWindow else { return }
+            window.endEditing(true)
+            window.isHidden = true
+            window.rootViewController = nil
+            shieldWindow = nil
+            originalWindow?.isUserInteractionEnabled = previousInteractionEnabled
+            originalWindow?.accessibilityElementsHidden = previousAccessibilityHidden
+            originalWindow?.makeKey()
+        }
+    }
+}
+
 private struct LockedAppView: View {
     @EnvironmentObject private var store: MobileLedgerStore
     @State private var password = ""
+    @State private var passwordError: String?
 
     var body: some View {
         ZStack {
             Rectangle()
-                .fill(.ultraThinMaterial)
+                .fill(Color(uiColor: .systemGroupedBackground))
                 .ignoresSafeArea()
 
             VStack(spacing: 18) {
@@ -170,7 +242,7 @@ private struct LockedAppView: View {
                     .foregroundStyle(.blue)
 
                 VStack(spacing: 6) {
-                    Text("Finances")
+                    Text("Finances v2")
                         .font(.title.weight(.bold))
                     Text("Password Required")
                         .font(.subheadline)
@@ -185,6 +257,9 @@ private struct LockedAppView: View {
                     .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .frame(maxWidth: 260)
 
+                if let passwordError {
+                    Text(passwordError).font(.footnote).foregroundStyle(.red)
+                }
                 Button("Unlock") {
                     unlock()
                 }
@@ -200,7 +275,8 @@ private struct LockedAppView: View {
         store.unlock(password: password)
         if !store.requiresUnlock {
             password = ""
-        }
+            passwordError = nil
+        } else { passwordError = "Password is incorrect." }
     }
 }
 

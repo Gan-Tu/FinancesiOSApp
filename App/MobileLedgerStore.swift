@@ -2619,28 +2619,21 @@ final class MobileLedgerStore: ObservableObject {
         }
     }
 
-    private func applyOriginalFinancesImportedData(_ importedData: JournalData) throws -> OriginalImportResult {
+    func applyOriginalFinancesImportedData(_ importedData: JournalData) throws -> OriginalImportResult {
         try requireWritableJournal()
-        let previousData = data
         var importedData = importedData
         importedData.preservesImportedRecurringMaterializations = true
         importedData.syncEnabled = false
         importedData.lastSyncedAt = nil
-        cancelCloudSync()
-        data = importedData
-        let attachmentSummary = localizeImportedAttachments()
-        do {
-            try Self.validateCandidateData(data, operation: "Original import")
-        } catch {
-            data = previousData
-            refreshDerivedCache()
-            refreshCloudKitForegroundTriggers()
-            throw error
+        try Self.validateCandidateData(importedData, operation: "Original import")
+        var createdFiles: [URL] = []
+        var committed = false
+        defer {
+            if !committed { for file in createdFiles { try? FileManager.default.removeItem(at: file) } }
         }
-        deletedTransactionTombstoneIDs = []
-        scheduleDeferredRemoteReplacementSave(data)
-        refreshDerivedCache()
-        refreshUnlockStateForLoadedData()
+        let attachmentSummary = localizeImportedAttachments(in: &importedData, createdFiles: &createdFiles)
+        try replaceDataFromImport(&importedData, operation: "Original import")
+        committed = true
         if attachmentSummary.missingAttachments > 0 || attachmentSummary.failedAttachments > 0 {
             validationError = ValidationError(
                 message: "Imported data, but \(attachmentSummary.missingAttachments) attachment files were missing and \(attachmentSummary.failedAttachments) could not be copied."
@@ -3000,7 +2993,7 @@ final class MobileLedgerStore: ObservableObject {
 
     /// All normal writes, including a sync flush, share one committed baseline.
     /// Waiting on this queue drains earlier edits before computing the next diff.
-    private func persistSnapshot(_ snapshot: JournalData, trackSyncChanges: Bool) throws {
+    private func persistSnapshot(_ snapshot: JournalData, trackSyncChanges: Bool, collectCompletedReceipts: Bool = false) throws {
         try requireWritableJournal()
         let databaseURL = sqliteStore.databaseURL
         let baseline = persistenceBaseline
@@ -3012,7 +3005,7 @@ final class MobileLedgerStore: ObservableObject {
                     snapshot, previous: previous, trackSyncChanges: trackSyncChanges
                 )
                 baseline.snapshot = snapshot
-                Self.removeObsoleteAttachmentFiles(supportDirectory: supportDirectory, previous: previous, data: snapshot)
+                Self.removeObsoleteAttachmentFiles(supportDirectory: supportDirectory, previous: previous, data: snapshot, collectCompletedClaims: collectCompletedReceipts)
             } catch {
                 baseline.snapshot = nil
                 throw error
@@ -3047,32 +3040,6 @@ final class MobileLedgerStore: ObservableObject {
                     Task { @MainActor [weak self] in
                         self?.scheduleDeferredCloudSave()
                     }
-                }
-            } catch {
-                baseline.snapshot = nil
-                Task { @MainActor [weak self] in
-                    self?.validationError = ValidationError(message: "Save failed: \(error.localizedDescription)")
-                }
-            }
-        }
-    }
-
-    private func scheduleDeferredRemoteReplacementSave(_ snapshot: JournalData) {
-        guard allowJournalMutation() else { return }
-        let databaseURL = sqliteStore.databaseURL
-        let baseline = persistenceBaseline
-        let supportDirectory = supportDirectory
-        Self.deferredPersistenceQueue.async { [snapshot, databaseURL, baseline] in
-            do {
-                let store = SQLiteJournalStore(databaseURL: databaseURL)
-                // This is the explicit import/restore boundary, not a routine
-                // save. Preserve account binding and queue its local changes.
-                let previous = baseline.snapshot
-                try store.replaceData(snapshot, trackSyncChanges: true, resetCloudKitState: true)
-                baseline.snapshot = snapshot
-                Self.removeObsoleteAttachmentFiles(supportDirectory: supportDirectory, previous: previous, data: snapshot)
-                Task { @MainActor [weak self] in
-                    self?.refreshCloudSyncDataAvailability()
                 }
             } catch {
                 baseline.snapshot = nil
@@ -3244,7 +3211,7 @@ final class MobileLedgerStore: ObservableObject {
             }
             movedReceipts = true
         }
-        try replaceDataFromBackup(&imported)
+        try replaceDataFromImport(&imported)
         committed = true
     }
 
@@ -3278,9 +3245,9 @@ final class MobileLedgerStore: ObservableObject {
         return source
     }
 
-    private func replaceDataFromBackup(_ importedData: inout JournalData) throws {
+    private func replaceDataFromImport(_ importedData: inout JournalData, operation: String = "Imported backup") throws {
         try requireWritableJournal()
-        try Self.validateCandidateData(importedData, operation: "Imported backup")
+        try Self.validateCandidateData(importedData, operation: operation)
         cancelCloudSync()
         let snapshot = importedData
         let databaseURL = sqliteStore.databaseURL
@@ -3537,13 +3504,6 @@ final class MobileLedgerStore: ObservableObject {
         return cleaned.isEmpty ? "Attachment" : cleaned
     }
 
-    private func backupRelativePath(for asset: AttachmentAsset) -> String {
-        if let relativePath = validatedAttachmentRelativePathIfPresent(asset.storedPath) {
-            return relativePath
-        }
-        return "Attachments/\(asset.id.uuidString)-\(sanitizedAttachmentFilename(asset.originalFilename))"
-    }
-
     private nonisolated static func backupRelativePath(for asset: AttachmentAsset, supportDirectory: URL) -> String {
         if let relativePath = validatedAttachmentRelativePathIfPresent(asset.storedPath, supportDirectory: supportDirectory) {
             return relativePath
@@ -3648,32 +3608,38 @@ final class MobileLedgerStore: ObservableObject {
     }
 
     @discardableResult
-    private func localizeImportedAttachments() -> AttachmentLocalizationSummary {
+    private func localizeImportedAttachments(in importedData: inout JournalData, createdFiles: inout [URL]) -> AttachmentLocalizationSummary {
         var summary = AttachmentLocalizationSummary()
 
-        for transactionIndex in data.transactions.indices {
-            guard var attachment = data.transactions[transactionIndex].attachment else { continue }
+        for transactionIndex in importedData.transactions.indices {
+            guard var attachment = importedData.transactions[transactionIndex].attachment else { continue }
             for assetIndex in attachment.assets.indices {
                 let asset = attachment.assets[assetIndex]
                 summary.totalAttachments += 1
 
-                if !(asset.storedPath as NSString).isAbsolutePath,
+                let externalSource: URL?
+                if let url = URL(string: asset.storedPath), url.isFileURL {
+                    externalSource = url
+                } else if (asset.storedPath as NSString).isAbsolutePath {
+                    externalSource = URL(fileURLWithPath: asset.storedPath)
+                } else { externalSource = nil }
+                if externalSource == nil,
                    validatedAttachmentRelativePathIfPresent(asset.storedPath) != nil,
                    FileManager.default.fileExists(atPath: attachmentURL(for: asset).path) {
                     summary.alreadyLocalAttachments += 1
                     continue
                 }
 
-                let source = attachmentURL(for: asset)
+                let source = externalSource ?? attachmentURL(for: asset)
+                let relativePath = "Attachments/\(UUID().uuidString)-\(sanitizedAttachmentFilename(asset.originalFilename))"
                 guard FileManager.default.fileExists(atPath: source.path) else {
                     var localizedMissingAsset = asset
-                    localizedMissingAsset.storedPath = backupRelativePath(for: asset)
+                    localizedMissingAsset.storedPath = relativePath
                     attachment.assets[assetIndex] = localizedMissingAsset
                     summary.missingAttachments += 1
                     continue
                 }
 
-                let relativePath = backupRelativePath(for: asset)
                 let destination = attachmentFileURL(forRelativePath: relativePath)
                 if source.standardizedFileURL.path == destination.standardizedFileURL.path {
                     attachment.assets[assetIndex].storedPath = relativePath
@@ -3686,9 +3652,7 @@ final class MobileLedgerStore: ObservableObject {
                         at: destination.deletingLastPathComponent(),
                         withIntermediateDirectories: true
                     )
-                    if FileManager.default.fileExists(atPath: destination.path) {
-                        try FileManager.default.removeItem(at: destination)
-                    }
+                    createdFiles.append(destination)
                     try FileManager.default.copyItem(at: source, to: destination)
 
                     var localizedAsset = asset
@@ -3702,13 +3666,14 @@ final class MobileLedgerStore: ObservableObject {
                     attachment.assets[assetIndex] = localizedAsset
                     summary.copiedAttachments += 1
                 } catch {
+                    try? FileManager.default.removeItem(at: destination)
                     var localizedFailedAsset = asset
                     localizedFailedAsset.storedPath = relativePath
                     attachment.assets[assetIndex] = localizedFailedAsset
                     summary.failedAttachments += 1
                 }
             }
-            data.transactions[transactionIndex].attachment = attachment
+            importedData.transactions[transactionIndex].attachment = attachment
         }
 
         return summary
@@ -3724,22 +3689,33 @@ final class MobileLedgerStore: ObservableObject {
         return SHA256.hash(data: payload).map { String(format: "%02x", Int($0)) }.joined()
     }
 
-    private nonisolated static func removeObsoleteAttachmentFiles(supportDirectory: URL, previous: JournalData?, data: JournalData) {
-        guard let previous else { return }
-        func paths(in snapshot: JournalData) -> Set<String> {
-            Set(snapshot.transactions.flatMap { transaction in
-                transaction.attachment?.assets.compactMap {
-                    validatedAttachmentRelativePathIfPresent($0.storedPath, supportDirectory: supportDirectory)
-                } ?? []
-            })
+    private nonisolated static func removeObsoleteAttachmentFiles(supportDirectory: URL, previous: JournalData?, data: JournalData, collectCompletedClaims: Bool = false) {
+        func storedPaths(in snapshot: JournalData?) -> Set<String> {
+            Set(snapshot?.transactions.flatMap { $0.attachment?.assets.map { normalizedAttachmentStoredPathValue($0.storedPath) } ?? [] } ?? [])
         }
-        for path in paths(in: previous).subtracting(paths(in: data)) {
-            let url = attachmentFileURL(forRelativePath: path, supportDirectory: supportDirectory)
+        let current = storedPaths(in: data)
+        var candidates = storedPaths(in: previous).subtracting(current)
+        guard !candidates.isEmpty || collectCompletedClaims else { return }
+        let database = SQLiteJournalStore(databaseURL: supportDirectory.appendingPathComponent("journal.sqlite"))
+        // Failed retention reads must never turn into destructive cleanup.
+        guard let retention = try? database.attachmentFileRetention(includeCompletedClaims: collectCompletedClaims) else { return }
+        candidates.formUnion(retention.completed.map(normalizedAttachmentStoredPathValue))
+        let retained = current.union(retention.pending.map(normalizedAttachmentStoredPathValue))
+        candidates.subtract(retained)
+        guard !candidates.isEmpty else { return }
+        func canonicalPath(_ path: String) -> String? {
+            guard let relative = validatedAttachmentRelativePathIfPresent(path, supportDirectory: supportDirectory) else { return nil }
+            return canonicalAttachmentPath(attachmentFileURL(forRelativePath: relative, supportDirectory: supportDirectory))
+        }
+        let retainedFiles = Set(retained.compactMap(canonicalPath))
+        for path in candidates {
+            guard let relative = validatedAttachmentRelativePathIfPresent(path, supportDirectory: supportDirectory),
+                  let canonical = canonicalPath(relative), !retainedFiles.contains(canonical) else { continue }
+            let url = attachmentFileURL(forRelativePath: relative, supportDirectory: supportDirectory)
             guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
             try? FileManager.default.removeItem(at: url)
         }
     }
-
 
     private func seedBaseAccounts(
         for ledger: Ledger,
@@ -3912,7 +3888,7 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
         let snapshot = updated
         // Publish the completion timestamp only after the current journal and
         // any edit made during network awaits have reached the same save queue.
-        try persistSnapshot(snapshot, trackSyncChanges: true)
+        try persistSnapshot(snapshot, trackSyncChanges: true, collectCompletedReceipts: true)
         data = snapshot
         validationError = nil
         refreshCloudSyncDataAvailability()

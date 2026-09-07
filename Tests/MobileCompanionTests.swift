@@ -151,6 +151,89 @@ final class MobileCompanionTests: XCTestCase {
         XCTAssertTrue(reopened.requiresJournalRecovery)
     }
 
+    func testClaimedReceiptSurvivesDeleteOrRestoreUntilUploadRetryIsAcknowledged() throws {
+        for restore in [false, true] {
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            let store = MobileLedgerStore(supportDirectory: folder, initialData: DemoData.fixture())
+            let input = folder.appendingPathComponent("receipt.txt")
+            let bytes = Data("Original upload bytes".utf8)
+            try bytes.write(to: input)
+            let asset = try store.importAttachment(from: input)
+            let row = try XCTUnwrap(store.data.transactions.first)
+            var draft = store.draft(for: row); draft.attachments = [asset]
+            store.saveTransactionAndFlush(draft)
+            let context = "synthetic-retry-context"
+            _ = try store.cloudKitSQLiteStore.bindCloudKitAccount(contextKey: context, accountID: "synthetic-account")
+            let submitted = try store.cloudKitSQLiteStore.claimCloudKitChanges(contextKey: context, limit: 1000)
+            let receipt = try XCTUnwrap(submitted.first { $0.recordType == "attachment_asset" })
+            if restore {
+                let document = try XCTUnwrap(store.exportBackupDocument())
+                let backup = folder.appendingPathComponent("backup.json")
+                try document.data.write(to: backup)
+                store.importBackup(from: backup)
+            } else { store.deleteTransaction(row.id) }
+            XCTAssertNil(store.validationError)
+            XCTAssertEqual(try Data(contentsOf: store.attachmentURL(for: asset)), bytes)
+            let reopened = MobileLedgerStore(supportDirectory: folder)
+            let retry = try reopened.cloudKitSQLiteStore.claimCloudKitChanges(contextKey: context, limit: 1000)
+            let retriedReceipt = try XCTUnwrap(retry.first { $0.clientChangeID == receipt.clientChangeID })
+            XCTAssertEqual(retriedReceipt.assetSHA256, receipt.assetSHA256)
+            XCTAssertEqual(try Data(contentsOf: XCTUnwrap(retriedReceipt.assetFileURL)), bytes)
+            for tag in 1...5 {
+                let pending = try reopened.cloudKitSQLiteStore.claimCloudKitChanges(contextKey: context, limit: 1000)
+                if pending.isEmpty { break }
+                let accepted = pending.map { record in
+                    var saved = record; saved.systemFields = Data([UInt8(tag)]); return saved
+                }
+                try reopened.cloudKitSQLiteStore.acknowledgeCloudKitRecords(accepted, submitted: pending, contextKey: context)
+            }
+            XCTAssertTrue(try reopened.cloudKitSQLiteStore.claimCloudKitChanges(contextKey: context, limit: 1000).isEmpty)
+            try reopened.cloudKitSyncDidFinish(at: Date())
+            XCTAssertFalse(FileManager.default.fileExists(atPath: store.attachmentURL(for: asset).path))
+            if restore {
+                let restored = try XCTUnwrap(reopened.transaction(row.id)?.attachment?.assets.first)
+                XCTAssertEqual(try Data(contentsOf: reopened.attachmentURL(for: restored)), bytes)
+            }
+        }
+    }
+
+    func testOriginalImportPrefersExternalReceiptAndPreservesPriorDataOnCommitFailure() throws {
+        for failCommit in [false, true] {
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            let local = folder.appendingPathComponent("Local", isDirectory: true)
+            let original = folder.appendingPathComponent("Original/Attachments/receipt.txt")
+            let existing = local.appendingPathComponent("Attachments/receipt.txt")
+            let oldBytes = Data("Old local receipt".utf8), importedBytes = Data("Current original receipt".utf8)
+            for url in [original, existing] { try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true) }
+            try oldBytes.write(to: existing); try importedBytes.write(to: original)
+            var journal = DemoData.fixture()
+            let asset = AttachmentAsset(originalFilename: "receipt.txt", storedPath: "Attachments/receipt.txt", mimeType: "text/plain", sizeBytes: Int64(oldBytes.count))
+            journal.transactions[0].attachment = AttachmentContainer(assets: [asset])
+            let store = MobileLedgerStore(supportDirectory: local, initialData: journal)
+            let before = try XCTUnwrap(store.cloudKitSQLiteStore.loadData())
+            var imported = journal
+            imported.transactions[0].attachment?.assets[0].storedPath = original.path
+            if failCommit {
+                try executeReviewSQL("CREATE TRIGGER reject_original BEFORE DELETE ON ledgers BEGIN SELECT RAISE(ABORT, 'Synthetic original import failure'); END", at: store.cloudKitSQLiteStore.databaseURL)
+                XCTAssertThrowsError(try store.applyOriginalFinancesImportedData(imported))
+                XCTAssertEqual(store.data.transactions, journal.transactions)
+                XCTAssertEqual(try store.cloudKitSQLiteStore.loadData()?.transactions, before.transactions)
+                XCTAssertEqual(try Data(contentsOf: existing), oldBytes)
+            } else {
+                let result = try store.applyOriginalFinancesImportedData(imported)
+                XCTAssertEqual(result.attachmentSummary.copiedAttachments, 1)
+                XCTAssertEqual(result.attachmentSummary.missingAttachments, 0)
+                let reopened = MobileLedgerStore(supportDirectory: local)
+                let restored = try XCTUnwrap(reopened.transaction(journal.transactions[0].id)?.attachment?.assets.first)
+                XCTAssertEqual(try Data(contentsOf: reopened.attachmentURL(for: restored)), importedBytes)
+                XCTAssertNotEqual(reopened.attachmentURL(for: restored), existing)
+            }
+            XCTAssertEqual(try Data(contentsOf: original), importedBytes)
+        }
+    }
+
     private func executeReviewSQL(_ sql: String, at url: URL) throws {
         var database: OpaquePointer?
         XCTAssertEqual(sqlite3_open(url.path, &database), SQLITE_OK)
