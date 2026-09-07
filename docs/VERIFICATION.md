@@ -77,3 +77,10 @@ A new 30 fps recording of journal/register entry, chart toggling, return and re-
 The final shared recurrence contract passed **153 domain/storage tests** in `test_sim_2026-09-07T20-50-22-092Z_pid18930_dcc3a514.xcresult`. A new regression first reproduced a deleted middle occurrence reappearing after ZIP restore. Restore now marks existing recurrence rules as authoritative because backup payloads do not include tombstones. Direct SQLite reload preserves this optional flag; ordinary edits keep it, while new or explicitly rescheduled rules generate normally. First- and middle-occurrence deletion, restore/reopen, detail edits and creation of a new repeating series all passed. This uses the matching Mac optional rule/ledger provenance fields without changing iOS restore into Mac's import-as-new-journal operation.
 
 The final unsigned iOS Release archive succeeded after the recurrence fix. Project/CloudKit capability preflight and whitespace checks passed. Only synthetic data was used for this backup/navigation verification.
+
+
+## September 7 Quick Search dates and field filters
+
+Quick Search shows Note, Number, Payee and Anywhere suggestions for typed text, dates under each result amount, and transaction/date shortcuts before typing. A suggestion opens a fully filtered register in the same journal/account/currency scope; its month summary uses the same matching IDs. Quick previews stop at 40 rows while full registers include all matches. Search uses the background renderer, and the unused old global-result cache/trigram index was removed. Ordinary unfiltered registers avoid allocating search strings. Last Month now selects the previous calendar month and excludes current/future dates.
+
+All 155 model/storage tests passed after the changes (`test_sim_2026-09-07T21-35-38-985Z_pid18930_e97424a3.xcresult`). Focused UI tests verified empty shortcuts, dated previews, field actions, preserved queries, no-results behavior, and return navigation. Native screenshots of both popup states were reviewed against the supplied examples.

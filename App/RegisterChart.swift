@@ -87,11 +87,12 @@ struct MonthSummaryView: View {
     let month: Date
     let scope: MobileTransactionScope
     let ledgerID: UUID?
+    var transactionIDs: Set<UUID>? = nil
     @State private var route: EditorRoute?
     @State private var navigationPath: [MobileRoute] = []
 
     private var interval: DateInterval { Calendar.current.dateInterval(of: .month, for: month)! }
-    private var rows: [LedgerTransaction] { store.transactions(scope: scope, ledgerID: ledgerID).filter { $0.date >= interval.start && $0.date < interval.end } }
+    private var rows: [LedgerTransaction] { store.transactions(scope: scope, ledgerID: ledgerID).filter { $0.date >= interval.start && $0.date < interval.end && (transactionIDs?.contains($0.id) ?? true) } }
     private var cashFlow: RegisterCashFlow { RegisterCashFlow.build(data: store.data, rows: rows, scope: scope) }
 
     var body: some View {

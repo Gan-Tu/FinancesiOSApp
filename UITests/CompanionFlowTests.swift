@@ -69,7 +69,7 @@ final class CompanionFlowTests: XCTestCase {
         app.buttons["All"].tap()
         wait(for: [expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: app.staticTexts["TODAY"])], timeout: 10)
         app.buttons["Quick Search"].tap()
-        XCTAssertTrue(app.navigationBars["Search Transactions"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Quick Search"].waitForExistence(timeout: 5))
         let field = app.searchFields.firstMatch
         field.tap(); field.typeText("67.31")
         let result = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "search-transaction-", "Weekly groceries")).firstMatch
@@ -80,6 +80,38 @@ final class CompanionFlowTests: XCTestCase {
         app.navigationBars["Details"].buttons.element(boundBy: 0).tap()
         XCTAssertTrue(app.navigationBars["All"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.searchFields.firstMatch.exists)
+    }
+
+    @MainActor func testQuickSearchDatesAndFieldShortcuts() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--demo", "--reset-demo"]
+        app.launch()
+        defer { app.terminate() }
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Personal,")).firstMatch.tap()
+        app.buttons["Quick Search"].tap()
+        XCTAssertTrue(app.navigationBars["Quick Search"].waitForExistence(timeout: 5))
+        for label in ["All Transactions", "Uncleared Transactions", "Repeating Transactions", "Today", "Last Month"] {
+            XCTAssertTrue(app.buttons[label].exists, label)
+        }
+        let empty = XCTAttachment(screenshot: app.screenshot()); empty.name = "Quick Search empty suggestions"; empty.lifetime = .keepAlways; add(empty)
+        let search = app.searchFields.firstMatch
+        search.tap(); search.typeText("groceries")
+        for field in ["note", "number", "payee", "anywhere"] { XCTAssertTrue(app.buttons["search-filter-\(field)"].waitForExistence(timeout: 5)) }
+        let result = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "search-transaction-", "Today")).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 5), "Every transaction preview includes its date")
+        let filled = XCTAttachment(screenshot: app.screenshot()); filled.name = "Quick Search dated results and field filters"; filled.lifetime = .keepAlways; add(filled)
+        app.buttons["search-filter-note"].tap()
+        XCTAssertTrue(app.navigationBars["Note: groceries"].waitForExistence(timeout: 5))
+        let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "register-row-", "Weekly groceries")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "register-row-", "Dinner with friends")).firstMatch.exists)
+        app.buttons["Quick Search"].tap()
+        XCTAssertTrue(app.navigationBars["Quick Search"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.searchFields.firstMatch.value as? String, "groceries")
+        app.buttons["search-filter-payee"].tap()
+        XCTAssertTrue(app.navigationBars["Payee: groceries"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["No Results"].waitForExistence(timeout: 5))
     }
 
     @MainActor func testOverviewHierarchyAlignsCategoryAndPersistsExpansion() throws {

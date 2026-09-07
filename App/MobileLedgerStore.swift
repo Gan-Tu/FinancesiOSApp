@@ -102,15 +102,8 @@ private struct MobileSearchCacheKey: Hashable {
     var limit: Int
 }
 
-private struct MobileTransactionSearchTextRow {
-    var transactionID: UUID
-    var text: String
-}
-
 private struct MobileTransactionSearchWarmupResult {
     var textByID: [UUID: String]
-    var rowsDateDescending: [MobileTransactionSearchTextRow]
-    var rowIndexesByTrigram: [String: [Int]]
 }
 
 private enum MobilePersistenceTiming {
@@ -144,8 +137,6 @@ private struct MobileLedgerDerivedCache {
     var registerAmountInfoByTransactionID: [UUID: MobileBalanceRow] = [:]
     var accountFlowDisplayByTransactionID: [UUID: MobileAccountFlowDisplay] = [:]
     var transactionSearchTextByID: [UUID: String] = [:]
-    var transactionSearchRowsDateDescending: [MobileTransactionSearchTextRow] = []
-    var transactionSearchRowIndexesByTrigram: [String: [Int]] = [:]
     var ledgerSearchTextByID: [UUID: String] = [:]
     var accountSearchTextByID: [UUID: String] = [:]
     var commoditySearchTextByID: [UUID: String] = [:]
@@ -436,7 +427,6 @@ final class MobileLedgerStore: ObservableObject {
     private var derivedCache = MobileLedgerDerivedCache()
     private var transactionRowsCache: [MobileTransactionRowsCacheKey: [LedgerTransaction]] = [:]
     private var transactionDaySectionCache: [MobileTransactionRowsCacheKey: [MobileTransactionDaySection]] = [:]
-    private var transactionSearchResultCache: [MobileSearchCacheKey: [LedgerTransaction]] = [:]
     private var ledgerSearchResultCache: [MobileSearchCacheKey: [Ledger]] = [:]
     private var accountSearchResultCache: [MobileSearchCacheKey: [Account]] = [:]
     private var commoditySearchResultCache: [MobileSearchCacheKey: [Commodity]] = [:]
@@ -514,7 +504,6 @@ final class MobileLedgerStore: ObservableObject {
         derivedCache = MobileLedgerDerivedCache(data: data)
         invalidateTransactionSearchWarmup()
         clearTransactionListCaches()
-        transactionSearchResultCache.removeAll(keepingCapacity: true)
         ledgerSearchResultCache.removeAll(keepingCapacity: true)
         accountSearchResultCache.removeAll(keepingCapacity: true)
         commoditySearchResultCache.removeAll(keepingCapacity: true)
@@ -527,8 +516,6 @@ final class MobileLedgerStore: ObservableObject {
         transactionSearchWarmupTask = nil
         transactionSearchWarmupDelayTask?.cancel()
         transactionSearchWarmupDelayTask = nil
-        derivedCache.transactionSearchRowsDateDescending.removeAll(keepingCapacity: true)
-        derivedCache.transactionSearchRowIndexesByTrigram.removeAll(keepingCapacity: true)
     }
 
     /// Updates cached row copies for a one-bit cleared-status change.
@@ -557,7 +544,6 @@ final class MobileLedgerStore: ObservableObject {
         }
 
         clearTransactionListCaches()
-        transactionSearchResultCache.removeAll(keepingCapacity: true)
     }
 
     /// Removes one deleted row from mobile caches without rebuilding the whole
@@ -588,7 +574,6 @@ final class MobileLedgerStore: ObservableObject {
         derivedCache.accountFlowDisplayByTransactionID.removeValue(forKey: transaction.id)
         derivedCache.transactionSearchTextByID.removeValue(forKey: transaction.id)
         clearTransactionListCaches()
-        transactionSearchResultCache.removeAll(keepingCapacity: true)
     }
 
     /// Inserts one new transaction into the derived caches touched by mobile
@@ -639,7 +624,6 @@ final class MobileLedgerStore: ObservableObject {
         derivedCache.accountFlowDisplayByTransactionID[transaction.id] = derivedCache.accountFlowDisplay(for: transaction)
         derivedCache.transactionSearchTextByID[transaction.id] = transactionSearchText(for: transaction)
         clearTransactionListCaches()
-        transactionSearchResultCache.removeAll(keepingCapacity: true)
     }
 
     private func refreshDerivedCacheForTransactionReplacement(previous: LedgerTransaction?, updated: LedgerTransaction) {
@@ -688,7 +672,6 @@ final class MobileLedgerStore: ObservableObject {
 
         derivedCache.transactionSearchTextByID[transaction.id] = transactionSearchText(for: transaction)
         clearTransactionListCaches()
-        transactionSearchResultCache.removeAll(keepingCapacity: true)
         scheduleTransactionSearchWarmupAfterMutation()
     }
 
@@ -711,7 +694,6 @@ final class MobileLedgerStore: ObservableObject {
         }
         accountSearchResultCache.removeAll(keepingCapacity: true)
         templateSearchResultCache.removeAll(keepingCapacity: true)
-        transactionSearchResultCache.removeAll(keepingCapacity: true)
     }
 
     /// Updates cached ledger labels and search text after a journal rename.
@@ -743,7 +725,6 @@ final class MobileLedgerStore: ObservableObject {
         accountSearchResultCache.removeAll(keepingCapacity: true)
         commoditySearchResultCache.removeAll(keepingCapacity: true)
         templateSearchResultCache.removeAll(keepingCapacity: true)
-        transactionSearchResultCache.removeAll(keepingCapacity: true)
     }
 
     /// Adds a newly seeded journal to derived caches without rebuilding the
@@ -845,7 +826,6 @@ final class MobileLedgerStore: ObservableObject {
         accountSearchResultCache.removeAll(keepingCapacity: true)
         commoditySearchResultCache.removeAll(keepingCapacity: true)
         templateSearchResultCache.removeAll(keepingCapacity: true)
-        transactionSearchResultCache.removeAll(keepingCapacity: true)
     }
 
     /// Refreshes account-only lookup data for account creates and safe deletes.
@@ -889,7 +869,6 @@ final class MobileLedgerStore: ObservableObject {
         }
         refreshLedgerTotalsByKind(ledgerID: ledgerID)
         accountSearchResultCache.removeAll(keepingCapacity: true)
-        transactionSearchResultCache.removeAll(keepingCapacity: true)
     }
 
     private func refreshDescendantCaches(for accounts: [Account]) {
@@ -1098,9 +1077,6 @@ final class MobileLedgerStore: ObservableObject {
     ) -> MobileTransactionSearchWarmupResult {
         var textByID: [UUID: String] = [:]
         textByID.reserveCapacity(transactions.count)
-        var rowsDateDescending: [MobileTransactionSearchTextRow] = []
-        rowsDateDescending.reserveCapacity(transactions.count)
-        var rowIndexesByTrigram: [String: [Int]] = [:]
         for transaction in transactions {
             let postingAccounts = transaction.postings.compactMap { posting in
                 accountsByID[posting.accountID]?.name
@@ -1114,28 +1090,8 @@ final class MobileLedgerStore: ObservableObject {
                 .joined(separator: " ")
                 .lowercased()
             textByID[transaction.id] = text
-            let rowIndex = rowsDateDescending.count
-            rowsDateDescending.append(MobileTransactionSearchTextRow(transactionID: transaction.id, text: text))
-            for trigram in uniqueTrigrams(in: text) {
-                rowIndexesByTrigram[trigram, default: []].append(rowIndex)
-            }
         }
-        return MobileTransactionSearchWarmupResult(
-            textByID: textByID,
-            rowsDateDescending: rowsDateDescending,
-            rowIndexesByTrigram: rowIndexesByTrigram
-        )
-    }
-
-    private nonisolated static func uniqueTrigrams(in text: String) -> Set<String> {
-        let characters = Array(text)
-        guard characters.count >= 3 else { return [] }
-        var trigrams = Set<String>()
-        trigrams.reserveCapacity(max(0, characters.count - 2))
-        for index in 0..<(characters.count - 2) {
-            trigrams.insert(String(characters[index..<(index + 3)]))
-        }
-        return trigrams
+        return MobileTransactionSearchWarmupResult(textByID: textByID)
     }
 
     private nonisolated static func transactionSearchTextByID(
@@ -1162,8 +1118,7 @@ final class MobileLedgerStore: ObservableObject {
     private func warmTransactionSearchCacheInBackground() {
         let transactions = derivedCache.allTransactionsDateDescending
         guard !transactions.isEmpty else { return }
-        guard derivedCache.transactionSearchRowsDateDescending.count != transactions.count ||
-            derivedCache.transactionSearchTextByID.count < transactions.count else {
+        guard derivedCache.transactionSearchTextByID.count < transactions.count else {
             return
         }
 
@@ -1183,8 +1138,6 @@ final class MobileLedgerStore: ObservableObject {
                 for (id, text) in warmupResult.textByID where self.derivedCache.transactionsByID[id] != nil {
                     self.derivedCache.transactionSearchTextByID[id] = self.derivedCache.transactionSearchTextByID[id] ?? text
                 }
-                self.derivedCache.transactionSearchRowsDateDescending = warmupResult.rowsDateDescending
-                self.derivedCache.transactionSearchRowIndexesByTrigram = warmupResult.rowIndexesByTrigram
                 self.transactionSearchWarmupTask = nil
             }
         }
@@ -1214,8 +1167,6 @@ final class MobileLedgerStore: ObservableObject {
         for (id, text) in warmupResult.textByID where derivedCache.transactionsByID[id] != nil {
             derivedCache.transactionSearchTextByID[id] = text
         }
-        derivedCache.transactionSearchRowsDateDescending = warmupResult.rowsDateDescending
-        derivedCache.transactionSearchRowIndexesByTrigram = warmupResult.rowIndexesByTrigram
     }
 
     private func ledgerSearchText(for ledger: Ledger) -> String {
@@ -1444,7 +1395,8 @@ final class MobileLedgerStore: ObservableObject {
             let monthAgo = calendar.date(byAdding: .month, value: -1, to: Date()) ?? .distantFuture
             let rows = ledgerID.map { derivedCache.transactionsByLedgerDateDescending[$0] ?? [] }
                 ?? derivedCache.allTransactionsDateDescending
-            baseRows = rows.filter { $0.date >= monthAgo }
+            let interval = calendar.dateInterval(of: .month, for: monthAgo)
+            baseRows = rows.filter { row in interval.map { row.date >= $0.start && row.date < $0.end } ?? false }
         case .account(let accountID):
             let rows = ensureAccountScopeTransactionsDateDescending(for: accountID)
             if let ledgerID {
@@ -1522,59 +1474,6 @@ final class MobileLedgerStore: ObservableObject {
 
         transactionDaySectionCache[cacheKey] = sections
         return sections
-    }
-
-    func searchTransactions(_ search: String, limit: Int = 40) -> [LedgerTransaction] {
-        let normalizedSearch = normalizedSearch(search)
-        guard !normalizedSearch.isEmpty else { return [] }
-        let cacheKey = MobileSearchCacheKey(normalizedSearch: normalizedSearch, limit: limit)
-        if let cached = transactionSearchResultCache[cacheKey] {
-            return cached
-        }
-        let rows: [LedgerTransaction]
-        if derivedCache.transactionSearchRowsDateDescending.count == derivedCache.allTransactionsDateDescending.count {
-            var matches: [LedgerTransaction] = []
-            matches.reserveCapacity(min(limit, derivedCache.transactionSearchRowsDateDescending.count))
-            let searchRows = candidateTransactionSearchRows(for: normalizedSearch)
-            for searchRow in searchRows where searchRow.text.contains(normalizedSearch) {
-                if let transaction = derivedCache.transactionsByID[searchRow.transactionID] {
-                    matches.append(transaction)
-                    if matches.count == limit {
-                        break
-                    }
-                }
-            }
-            rows = matches
-        } else {
-            rows = derivedCache.allTransactionsDateDescending
-                .filter { ensureTransactionSearchText(for: $0).contains(normalizedSearch) }
-                .prefix(limit)
-                .map { $0 }
-        }
-        transactionSearchResultCache[cacheKey] = rows
-        return rows
-    }
-
-    private func candidateTransactionSearchRows(for normalizedSearch: String) -> [MobileTransactionSearchTextRow] {
-        guard normalizedSearch.count >= 3 else {
-            return derivedCache.transactionSearchRowsDateDescending
-        }
-        guard let trigram = normalizedSearchTrigrams(normalizedSearch).min(by: { lhs, rhs in
-            (derivedCache.transactionSearchRowIndexesByTrigram[lhs]?.count ?? .max) <
-                (derivedCache.transactionSearchRowIndexesByTrigram[rhs]?.count ?? .max)
-        }) else {
-            return derivedCache.transactionSearchRowsDateDescending
-        }
-        guard let indexes = derivedCache.transactionSearchRowIndexesByTrigram[trigram] else { return [] }
-        return indexes.compactMap { index in
-            derivedCache.transactionSearchRowsDateDescending.indices.contains(index)
-                ? derivedCache.transactionSearchRowsDateDescending[index]
-                : nil
-        }
-    }
-
-    private func normalizedSearchTrigrams(_ normalizedSearch: String) -> Set<String> {
-        Self.uniqueTrigrams(in: normalizedSearch)
     }
 
     func searchLedgers(_ search: String, limit: Int = 12) -> [Ledger] {

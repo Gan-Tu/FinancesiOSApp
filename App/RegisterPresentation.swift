@@ -199,6 +199,27 @@ struct RegisterPresentation {
     }
 }
 
+enum TransactionSearchField: String, CaseIterable, Identifiable, Sendable {
+    case note, number, payee, anywhere
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .note: "Note"
+        case .number: "Number"
+        case .payee: "Payee"
+        case .anywhere: "Search"
+        }
+    }
+    var suggestionPrefix: String { self == .anywhere ? "Search for" : "\(title) contains" }
+}
+
+struct TransactionSearchQuery: Hashable, Sendable {
+    var text: String
+    var field: TransactionSearchField = .anywhere
+    var title: String { "\(field.title): \(text)" }
+    var suggestion: String { "\(field.suggestionPrefix): \(text)" }
+}
+
 /// Immutable Foundation-value snapshots; no mutable store or UI objects cross
 /// the worker boundary. Receipt contents remain on disk.
 struct RegisterRenderRequest: @unchecked Sendable {
@@ -208,9 +229,10 @@ struct RegisterRenderRequest: @unchecked Sendable {
     let search: String
     let dateInterval: DateInterval?
     let transactionIDs: Set<UUID>?
+    var searchField: TransactionSearchField = .anywhere
 
     func matches(_ other: RegisterRenderRequest) -> Bool {
-        scope == other.scope && search == other.search && dateInterval == other.dateInterval &&
+        scope == other.scope && search == other.search && searchField == other.searchField && dateInterval == other.dateInterval &&
             transactionIDs == other.transactionIDs && RegisterPresentation.hasSameContent(data, other.data) && rows == other.rows
     }
 }
@@ -237,25 +259,39 @@ actor RegisterRenderWorker {
         return RegisterRenderResult(presentation: presentation)
     }
 
-    func search(_ request: RegisterRenderRequest) throws -> RegisterSearchResult {
+    func search(_ request: RegisterRenderRequest, limit: Int? = nil) throws -> RegisterSearchResult {
         try Task.checkCancellation()
-        return RegisterSearchResult(rows: try filteredRows(request))
+        return RegisterSearchResult(rows: try filteredRows(request, limit: limit))
     }
 
-    private func filteredRows(_ request: RegisterRenderRequest) throws -> [LedgerTransaction] {
+    private func filteredRows(_ request: RegisterRenderRequest, limit: Int? = nil) throws -> [LedgerTransaction] {
         let query = request.search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let accounts = Dictionary(uniqueKeysWithValues: request.data.accounts.map { ($0.id, $0.name) })
         let ledgers = Dictionary(uniqueKeysWithValues: request.data.ledgers.map { ($0.id, $0.name) })
-        return try request.rows.filter { transaction in
+        var matches: [LedgerTransaction] = []
+        if let limit { matches.reserveCapacity(max(0, min(limit, request.rows.count))) }
+        for transaction in request.rows {
             try Task.checkCancellation()
-            if let interval = request.dateInterval, !(transaction.date >= interval.start && transaction.date < interval.end) { return false }
-            if let ids = request.transactionIDs, !ids.contains(transaction.id) { return false }
-            guard !query.isEmpty else { return true }
-            let fields = [transaction.note, transaction.payee, transaction.number, ledgers[transaction.ledgerID] ?? ""]
-                + transaction.postings.compactMap { accounts[$0.accountID] }
-                + transaction.postings.map { String(describing: $0.amount) }
-            return fields.joined(separator: " ").lowercased().contains(query)
+            if let interval = request.dateInterval, !(transaction.date >= interval.start && transaction.date < interval.end) { continue }
+            if let ids = request.transactionIDs, !ids.contains(transaction.id) { continue }
+            // Ordinary registers skip search-string allocation entirely.
+            if !query.isEmpty {
+                let text: String
+                switch request.searchField {
+                case .note: text = transaction.note
+                case .number: text = transaction.number
+                case .payee: text = transaction.payee
+                case .anywhere:
+                    let fields = [transaction.note, transaction.payee, transaction.number, ledgers[transaction.ledgerID] ?? ""]
+                        + transaction.postings.compactMap { accounts[$0.accountID] }
+                        + transaction.postings.map { String(describing: $0.amount) }
+                    text = fields.joined(separator: " ")
+                }
+                if !text.lowercased().contains(query) { continue }
+            }
+            if let limit, matches.count >= max(0, limit) { break }
+            matches.append(transaction)
         }
+        return matches
     }
-
 }

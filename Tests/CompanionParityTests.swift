@@ -340,3 +340,55 @@ final class RegisterBalanceCurrencyTests: XCTestCase {
         return Fixture(data: JournalData(ledgers: [ledger], commodities: currencies, accounts: [group, cash, other], transactions: transactions), cash: cash, group: group, usd: currencies[0], eur: currencies[1], chf: currencies[2])
     }
 }
+
+
+@MainActor
+final class TransactionSearchTests: XCTestCase {
+    func testFieldChoicesMatchOnlyTheirFieldWithinProvidedScope() async throws {
+        var data = DemoData.fixture()
+        var rows = Array(data.transactions.prefix(4))
+        for index in rows.indices {
+            rows[index].note = "Unrelated"; rows[index].number = ""; rows[index].payee = "Unrelated"
+        }
+        rows[0].note = "Needle in notes"
+        rows[1].number = "REF-NEEDLE-42"
+        rows[2].payee = "Needle merchant"
+        rows[3].note = "Needle outside this scope"
+        data.transactions = rows
+        for (field, expected) in [(TransactionSearchField.note, [rows[0].id]), (.number, [rows[1].id]), (.payee, [rows[2].id]), (.anywhere, Array(rows.prefix(3).map(\.id)))] {
+            let request = RegisterRenderRequest(data: data, rows: Array(rows.prefix(3)), scope: .all, search: "  NeEdLe  ", dateInterval: nil, transactionIDs: nil, searchField: field)
+            let found = try await RegisterRenderWorker.shared.search(request).rows
+            XCTAssertEqual(found.map(\.id), expected, field.rawValue)
+        }
+    }
+
+    func testFullSearchContainsEveryMatchBeyondQuickPreviewLimit() async throws {
+        var data = DemoData.fixture()
+        let base = try XCTUnwrap(data.transactions.first)
+        data.transactions = (0..<55).map { offset in
+            var row = base; row.id = UUID(); row.note = "Repeated search match"
+            row.date = Calendar.current.date(byAdding: .day, value: -offset, to: Date())!
+            return row
+        }
+        let request = RegisterRenderRequest(data: data, rows: data.transactions, scope: .all, search: "match", dateInterval: nil, transactionIDs: nil, searchField: .note)
+        let preview = try await RegisterRenderWorker.shared.search(request, limit: 40).rows
+        let full = try await RegisterRenderWorker.shared.render(request).presentation
+        XCTAssertEqual(preview.count, 40)
+        XCTAssertEqual(Set(full.months.flatMap(\.days).flatMap(\.transactions).map(\.id)), Set(data.transactions.map(\.id)))
+        var differentField = request; differentField.searchField = .payee
+        XCTAssertFalse(request.matches(differentField), "Changing the field must invalidate the register filter")
+    }
+
+    func testLastMonthShortcutExcludesCurrentAndFutureMonths() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        var data = DemoData.fixture()
+        let start = try XCTUnwrap(Calendar.current.dateInterval(of: .month, for: Date())?.start)
+        data.transactions = Array(data.transactions.prefix(3))
+        for (index, offset) in [-1, 0, 1].enumerated() {
+            data.transactions[index].date = try XCTUnwrap(Calendar.current.date(byAdding: .month, value: offset, to: start))
+        }
+        let store = MobileLedgerStore(supportDirectory: folder, initialData: data)
+        XCTAssertEqual(store.transactions(scope: .lastMonth).map(\.id), [data.transactions[0].id])
+    }
+}

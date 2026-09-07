@@ -4,6 +4,7 @@ enum MobileRoute: Hashable {
     case journals
     case journal(UUID)
     case transactions(scope: MobileTransactionScope, title: String, ledgerID: UUID)
+    case searchTransactions(scope: MobileTransactionScope, ledgerID: UUID, query: TransactionSearchQuery)
     case transaction(UUID)
     case templates(UUID)
     case account(UUID)
@@ -12,7 +13,7 @@ enum MobileRoute: Hashable {
     @MainActor func resolvedLedgerID(in store: MobileLedgerStore) -> UUID? {
         switch self {
         case .journal(let id), .templates(let id): id
-        case .transactions(_, _, let id): id
+        case .transactions(_, _, let id), .searchTransactions(_, let id, _): id
         case .account(let id): store.account(id)?.ledgerID
         case .currency(let id): store.commodity(id)?.ledgerID
         case .transaction(let id): store.transaction(id)?.ledgerID
@@ -333,6 +334,7 @@ struct TransactionListScreen: View {
     var dateInterval: DateInterval? = nil
     var transactionIDs: Set<UUID>? = nil
     var ledgerID: UUID? = nil
+    var searchFilter: TransactionSearchQuery? = nil
     let openTransaction: (UUID) -> Void
     @State private var pendingDeletion: LedgerTransaction?
     @State private var pendingDuplication: LedgerTransaction?
@@ -379,7 +381,7 @@ struct TransactionListScreen: View {
                 } else if !contentReady && loadingVisible && !(showsChart && dateInterval == nil) {
                     ProgressView("Loading Transactions").accessibilityIdentifier("register-loading")
                 } else if hasLoaded && presentation.months.isEmpty {
-                    ContentUnavailableView("No Transactions", systemImage: "arrow.left.arrow.right", description: Text("Use the compose button to add your first transaction."))
+                    ContentUnavailableView(searchFilter == nil ? "No Transactions" : "No Results", systemImage: searchFilter == nil ? "arrow.left.arrow.right" : "magnifyingglass", description: Text(searchFilter.map { $0.suggestion } ?? "Use the compose button to add your first transaction."))
                 }
             }
             .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
@@ -396,7 +398,7 @@ struct TransactionListScreen: View {
             }
             .sheet(isPresented: Binding(get: { selectedMonth != nil }, set: { if !$0 { selectedMonth = nil } })) {
                 if let month = selectedMonth {
-                    MonthSummaryView(month: month, scope: scope, ledgerID: ledgerID)
+                    MonthSummaryView(month: month, scope: scope, ledgerID: ledgerID, transactionIDs: searchFilter == nil ? nil : Set(presentation.months.first { $0.date == month }?.days.flatMap(\.transactions).map(\.id) ?? []))
                 }
             }
             .modifier(TransactionDeletionConfirmation(transaction: $pendingDeletion))
@@ -501,7 +503,7 @@ struct TransactionListScreen: View {
 
     private func scheduleRefresh() {
         guard isActive else { return }
-        let request = RegisterRenderRequest(data: store.data, rows: store.transactions(scope: scope, ledgerID: ledgerID), scope: scope, search: "", dateInterval: dateInterval, transactionIDs: transactionIDs)
+        let request = RegisterRenderRequest(data: store.data, rows: store.transactions(scope: scope, ledgerID: ledgerID), scope: scope, search: searchFilter?.text ?? "", dateInterval: dateInterval, transactionIDs: transactionIDs, searchField: searchFilter?.field ?? .anywhere)
         if let previous = renderRequest, request.matches(previous) { return }
         renderRequest = request
         renderID = UUID()
@@ -519,7 +521,7 @@ struct TransactionListScreen: View {
                 loadError = nil
                 if !contentReady {
                     initialScrollRequested = false
-                    initialDay = dateInterval == nil ? presentation.initialDay() : nil
+                    initialDay = dateInterval == nil && searchFilter == nil ? presentation.initialDay() : nil
                     if initialDay == nil { contentReady = true }
                 }
             }
@@ -854,6 +856,7 @@ private struct MobileTransactionPreviewPresentation: Equatable {
     var flowDisplay: MobileAccountFlowDisplay
     var hasActiveRecurrence: Bool
     var hasAttachment: Bool
+    var dateLabel: String
 }
 
 @MainActor
@@ -871,7 +874,11 @@ private func mobileTransactionPreviewPresentation(
         isNegativeAmount: amount.amount < .zero,
         flowDisplay: store.accountFlowDisplay(for: transaction),
         hasActiveRecurrence: transaction.recurrenceRule?.frequency != nil && transaction.recurrenceRule?.frequency != .never,
-        hasAttachment: transaction.attachment?.assets.isEmpty == false
+        hasAttachment: transaction.attachment?.assets.isEmpty == false,
+        dateLabel: Calendar.current.isDateInToday(transaction.date) ? "Today"
+            : Calendar.current.isDateInYesterday(transaction.date) ? "Yesterday"
+            : store.data.dateFormat == .iso ? dateString(transaction.date, format: .iso)
+            : transaction.date.formatted(.dateTime.month(.wide).day().year())
     )
 }
 
@@ -903,10 +910,13 @@ private struct MobileTransactionPreviewRow: View {
                 }
                 HStack(spacing: 4) {
                     AccountFlowText(display: presentation.flowDisplay)
-                    Spacer(minLength: 8)
                     if presentation.hasActiveRecurrence {
                         Image(systemName: "arrow.2.squarepath")
                     }
+                    Spacer(minLength: 8)
+                    Text(presentation.dateLabel)
+                        .layoutPriority(1)
+                        .accessibilityIdentifier("search-result-date")
                 }
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
@@ -1097,41 +1107,46 @@ struct QuickSearchSheet: View {
     @Binding var route: EditorRoute?
     @State private var searchText = ""
     @State private var searchResults = MobileQuickSearchResults.empty
+    @State private var isSearchPresented = false
     @State private var isSearching = false
     @State private var searchRevision = UUID()
 
     var contextLedgerID: UUID? = nil
     var contextScope: MobileTransactionScope? = nil
+    var initialQuery: TransactionSearchQuery? = nil
+    private var trimmedQuery: String { searchText.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     var body: some View {
         NavigationStack {
             List {
                 if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    if contextScope != nil {
-                        Text("Search this register by notes, payee, account or amount.")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Section("Suggestions") {
-                            suggestion("All Transactions", "arrow.right") {
-                                open(.all, title: "All")
-                            }
-                            suggestion("Uncleared Transactions", "circle") {
-                                open(.uncleared, title: "Uncleared")
-                            }
-                            suggestion("Repeating Transactions", "arrow.2.squarepath") {
-                                open(.repeating, title: "Repeating")
-                            }
+                    QuickSearchSection("Suggestions") {
+                        suggestion("All Transactions", "arrow.right") {
+                            open(.all, title: "All")
                         }
-                        Section("Date") {
-                            suggestion("Today", "calendar") {
-                                open(.today, title: "Today")
-                            }
-                            suggestion("Last Month", "calendar") {
-                                open(.lastMonth, title: "Last Month")
-                            }
+                        suggestion("Uncleared Transactions", "circle") {
+                            open(.uncleared, title: "Uncleared")
+                        }
+                        suggestion("Repeating Transactions", "arrow.2.squarepath") {
+                            open(.repeating, title: "Repeating")
+                        }
+                    }
+                    QuickSearchSection("Date") {
+                        suggestion("Today", "calendar") {
+                            open(.today, title: "Today")
+                        }
+                        suggestion("Last Month", "calendar") {
+                            open(.lastMonth, title: "Last Month")
                         }
                     }
                 } else {
+                    QuickSearchSection("Suggestions") {
+                        ForEach(TransactionSearchField.allCases) { field in
+                            let query = TransactionSearchQuery(text: trimmedQuery, field: field)
+                            suggestion(query.suggestion, "magnifyingglass") { openFiltered(query) }
+                                .accessibilityIdentifier("search-filter-\(field.rawValue)")
+                        }
+                    }
                     if isSearching {
                         ProgressView("Searching")
                     } else if searchResults.isEmpty {
@@ -1142,7 +1157,7 @@ struct QuickSearchSheet: View {
                     }
 
                     if !searchResults.transactions.isEmpty {
-                        Section("Transactions") {
+                        QuickSearchSection("Transactions") {
                             ForEach(searchResults.transactions) { transaction in
                                 Button {
                                     openTransaction(transaction)
@@ -1159,7 +1174,7 @@ struct QuickSearchSheet: View {
                     }
 
                     if !searchResults.ledgers.isEmpty {
-                        Section("Journals") {
+                        QuickSearchSection("Journals") {
                             ForEach(searchResults.ledgers) { ledger in
                                 Button {
                                     openJournal(ledger)
@@ -1177,7 +1192,7 @@ struct QuickSearchSheet: View {
                     }
 
                     if !searchResults.accounts.isEmpty {
-                        Section("Accounts") {
+                        QuickSearchSection("Accounts") {
                             ForEach(searchResults.accounts) { account in
                                 Button {
                                     openAccount(account)
@@ -1195,7 +1210,7 @@ struct QuickSearchSheet: View {
                     }
 
                     if !searchResults.currencies.isEmpty {
-                        Section("Currencies") {
+                        QuickSearchSection("Currencies") {
                             ForEach(searchResults.currencies) { currency in
                                 Button {
                                     openCurrency(currency)
@@ -1213,7 +1228,7 @@ struct QuickSearchSheet: View {
                     }
 
                     if !searchResults.templates.isEmpty {
-                        Section("Templates") {
+                        QuickSearchSection("Templates") {
                             ForEach(searchResults.templates) { template in
                                 Button {
                                     useTemplate(template)
@@ -1232,8 +1247,18 @@ struct QuickSearchSheet: View {
                 }
             }
             .listStyle(.plain)
-            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search")
-            .navigationTitle(contextScope == nil ? "Quick Search" : "Search Transactions")
+            .listSectionSpacing(.custom(0))
+            .contentMargins(.top, 0, for: .scrollContent)
+            .environment(\.defaultMinListHeaderHeight, 0)
+            .searchable(text: $searchText, isPresented: $isSearchPresented, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search")
+            .modifier(QuickSearchToolbarVisibility())
+            .scrollDismissesKeyboard(.interactively)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .onSubmit(of: .search) {
+                if !trimmedQuery.isEmpty { openFiltered(TransactionSearchQuery(text: trimmedQuery)) }
+            }
+            .navigationTitle("Quick Search")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -1242,6 +1267,10 @@ struct QuickSearchSheet: View {
                     }
                 }
             }
+        }
+        .onAppear {
+            if let initialQuery { searchText = initialQuery.text }
+            isSearchPresented = true
         }
         .onChange(of: searchText) { searchRevision = UUID() }
         .onReceive(store.$data.removeDuplicates(by: RegisterPresentation.hasSameContent)) { _ in searchRevision = UUID() }
@@ -1257,21 +1286,23 @@ struct QuickSearchSheet: View {
         }
         isSearching = true
         searchResults = .empty
+        let scope = contextScope ?? .all
+        let matchingRows: [LedgerTransaction]
         do {
             try await Task.sleep(for: .milliseconds(150))
-            if let scope = contextScope {
-                let request = RegisterRenderRequest(data: store.data, rows: store.transactions(scope: scope, ledgerID: contextLedgerID), scope: scope, search: trimmedSearch, dateInterval: nil, transactionIDs: nil)
-                let result = try await RegisterRenderWorker.shared.search(request)
-                try Task.checkCancellation()
-                searchResults = .empty
-                searchResults.transactions = result.rows
-                isSearching = false
-                return
-            }
+            let request = RegisterRenderRequest(data: store.data, rows: store.transactions(scope: scope, ledgerID: contextLedgerID), scope: scope, search: trimmedSearch, dateInterval: nil, transactionIDs: nil)
+            matchingRows = try await RegisterRenderWorker.shared.search(request, limit: 40).rows
+            try Task.checkCancellation()
         } catch { return }
+        if contextScope != nil {
+            searchResults = .empty
+            searchResults.transactions = matchingRows
+            isSearching = false
+            return
+        }
         let ledgers = store.searchLedgers(trimmedSearch)
         searchResults = MobileQuickSearchResults(
-            transactions: store.searchTransactions(trimmedSearch),
+            transactions: matchingRows,
             ledgers: ledgers,
             accounts: store.searchAccounts(trimmedSearch),
             currencies: store.searchCommodities(trimmedSearch),
@@ -1286,6 +1317,8 @@ struct QuickSearchSheet: View {
     private func suggestion(_ title: String, _ icon: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Label(title, systemImage: icon)
+                .foregroundStyle(.primary)
+                .padding(.vertical, 4)
         }
     }
 
@@ -1311,6 +1344,12 @@ struct QuickSearchSheet: View {
             }
         }
         .padding(.vertical, 3)
+    }
+
+    private func openFiltered(_ query: TransactionSearchQuery) {
+        guard let ledgerID = contextLedgerID ?? store.selectedLedgerID else { return }
+        navigationPath.append(.searchTransactions(scope: contextScope ?? .all, ledgerID: ledgerID, query: query))
+        dismissSheet()
     }
 
     private func open(_ scope: MobileTransactionScope, title: String) {
@@ -1368,6 +1407,38 @@ struct QuickSearchSheet: View {
     private func dismissSheet() {
         presentedSheet = nil
         dismiss()
+    }
+}
+
+private struct QuickSearchSection<Content: View>: View {
+    let title: String
+    let content: Content
+    init(_ title: String, @ViewBuilder content: () -> Content) {
+        self.title = title; self.content = content()
+    }
+    var body: some View {
+        Section { content } header: {
+            Text(title)
+                .font(.headline)
+                .foregroundColor(Color(uiColor: .label))
+                .textCase(nil)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 28)
+                .padding(.vertical, 5)
+                .background(Color(uiColor: .systemGray5))
+                .listRowInsets(EdgeInsets())
+        }
+        .listSectionSeparator(.hidden)
+    }
+}
+
+private struct QuickSearchToolbarVisibility: ViewModifier {
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 17.1, *) {
+            content.searchPresentationToolbarBehavior(.avoidHidingContent)
+        } else {
+            content
+        }
     }
 }
 

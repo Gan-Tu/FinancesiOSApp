@@ -51,6 +51,8 @@ struct AppShellView: View {
                         JournalOverviewScreen(ledgerID: ledgerID, navigationPath: $navigationPath, route: $route)
                     case .transactions(let scope, let title, let ledgerID):
                         TransactionListScreen(scope: scope, title: title, route: $route, ledgerID: ledgerID, openTransaction: { navigationPath.append(.transaction($0)) })
+                    case .searchTransactions(let scope, let ledgerID, let query):
+                        TransactionListScreen(scope: scope, title: query.title, route: $route, ledgerID: ledgerID, searchFilter: query, openTransaction: { navigationPath.append(.transaction($0)) })
                     case .transaction(let transactionID):
                         TransactionDetailScreen(transactionID: transactionID, route: $route)
                     case .templates(let ledgerID):
@@ -83,7 +85,7 @@ struct AppShellView: View {
             case .templates(let ledgerID):
                 TemplateManagementSheet(ledgerID: ledgerID)
             case .quickSearch:
-                QuickSearchSheet(navigationPath: $navigationPath, presentedSheet: $presentedSheet, route: $route, contextLedgerID: currentLedgerID, contextScope: currentRegisterScope)
+                QuickSearchSheet(navigationPath: $navigationPath, presentedSheet: $presentedSheet, route: $route, contextLedgerID: currentLedgerID, contextScope: currentRegisterScope, initialQuery: currentSearchQuery)
             }
         }
         .background {
@@ -131,7 +133,7 @@ struct AppShellView: View {
         switch lastRoute {
         case .transaction, .settings, .templates:
             return false
-        case .journals, .journal, .transactions, .account, .currency:
+        case .journals, .journal, .transactions, .searchTransactions, .account, .currency:
             return true
         }
     }
@@ -142,11 +144,16 @@ struct AppShellView: View {
 
     private var currentRegisterScope: MobileTransactionScope? {
         switch navigationPath.last {
-        case .transactions(let scope, _, _): scope
+        case .transactions(let scope, _, _), .searchTransactions(let scope, _, _): scope
         case .account(let id): .account(id)
         case .currency(let id): .currency(id)
         default: nil
         }
+    }
+
+    private var currentSearchQuery: TransactionSearchQuery? {
+        if case .searchTransactions(_, _, let query) = navigationPath.last { return query }
+        return nil
     }
 
     private var currentAccountID: UUID? {
@@ -156,7 +163,7 @@ struct AppShellView: View {
 
     private var isJournalContext: Bool {
         switch navigationPath.last {
-        case .journal, .transactions, .templates, .account, .currency:
+        case .journal, .transactions, .searchTransactions, .templates, .account, .currency:
             return true
         case .journals, .settings, .transaction, .none:
             return false
