@@ -100,6 +100,7 @@ struct MobileAccountFlowDisplay: Equatable {
 private struct MobileSearchCacheKey: Hashable {
     var normalizedSearch: String
     var limit: Int
+    var ledgerID: UUID? = nil
 }
 
 private struct MobileTransactionSearchWarmupResult {
@@ -1528,16 +1529,23 @@ final class MobileLedgerStore: ObservableObject {
         return rows
     }
 
-    func searchAccounts(_ search: String, limit: Int = 30) -> [Account] {
+    func accountParentPath(for account: Account) -> String {
+        AccountSearchPath.parentNames(for: account, in: derivedCache.accountsByID).joined(separator: ":")
+    }
+
+    func searchAccounts(_ search: String, ledgerID: UUID? = nil, limit: Int = 30) -> [Account] {
         let normalizedSearch = normalizedSearch(search)
         guard !normalizedSearch.isEmpty else { return [] }
-        let cacheKey = MobileSearchCacheKey(normalizedSearch: normalizedSearch, limit: limit)
+        let cacheKey = MobileSearchCacheKey(normalizedSearch: normalizedSearch, limit: limit, ledgerID: ledgerID)
         if let cached = accountSearchResultCache[cacheKey] {
             return cached
         }
-        let rows = derivedCache.orderedLedgers
-            .flatMap { derivedCache.accountsByLedger[$0.id] ?? [] }
-            .filter { derivedCache.accountSearchTextByID[$0.id]?.contains(normalizedSearch) ?? false }
+        let accounts = ledgerID.map { derivedCache.accountsByLedger[$0] ?? [] }
+            ?? derivedCache.orderedLedgers.flatMap { derivedCache.accountsByLedger[$0.id] ?? [] }
+        let rows = accounts.filter {
+            (derivedCache.accountSearchTextByID[$0.id]?.contains(normalizedSearch) ?? false)
+                || AccountSearchPath.fullName(for: $0, in: derivedCache.accountsByID).lowercased().contains(normalizedSearch)
+        }
             .prefix(limit)
             .map { $0 }
         accountSearchResultCache[cacheKey] = rows
@@ -1637,10 +1645,13 @@ final class MobileLedgerStore: ObservableObject {
         save(syncCloud: true, refreshCache: false)
     }
 
-    func moveJournals(from offsets: IndexSet, to destination: Int) {
+    func moveJournals(from offsets: IndexSet, to destination: Int, excluding hiddenIDs: Set<UUID> = []) {
         guard allowJournalMutation() else { return }
         var ordered = orderedLedgers
-        ordered.move(fromOffsets: offsets, toOffset: destination)
+        let visibleSlots = ordered.indices.filter { !hiddenIDs.contains(ordered[$0].id) }
+        var visible = visibleSlots.map { ordered[$0] }
+        visible.move(fromOffsets: offsets, toOffset: destination)
+        for (slot, journal) in zip(visibleSlots, visible) { ordered[slot] = journal }
         for (index, ledger) in ordered.enumerated() {
             if let stored = data.ledgers.firstIndex(where: { $0.id == ledger.id }) { data.ledgers[stored].listIndex = index }
         }

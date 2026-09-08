@@ -213,6 +213,44 @@ enum TransactionSearchField: String, CaseIterable, Identifiable, Sendable {
     var suggestionPrefix: String { self == .anywhere ? "Search for" : "\(title) contains" }
 }
 
+/// Search hides future recurring materializations by default; the normal
+/// registers remain complete. Boundaries use the user's local calendar.
+struct TransactionSearchDatePolicy: Hashable, Sendable {
+    static let preferenceKey = "search.includeAllFutureEntries"
+    let includeAllFuture: Bool
+    let todayEnd: Date
+    let yearEnd: Date
+
+    init(includeAllFuture: Bool, now: Date = Date(), calendar: Calendar = .current) {
+        self.includeAllFuture = includeAllFuture
+        todayEnd = calendar.dateInterval(of: .day, for: now)?.end ?? now
+        yearEnd = calendar.dateInterval(of: .year, for: now)?.end ?? now
+    }
+
+    func includes(_ row: LedgerTransaction) -> Bool {
+        if includeAllFuture || row.date < todayEnd { return true }
+        let repeating = row.recurrenceRule.map { $0.frequency != .never } ?? false
+        return !repeating && row.date < yearEnd
+    }
+}
+
+enum AccountSearchPath {
+    static func parentNames(for account: Account, in accounts: [UUID: Account]) -> [String] {
+        var names: [String] = []
+        var parent = account.parentID
+        var visited: Set<UUID> = [account.id]
+        while let id = parent, visited.insert(id).inserted,
+              let row = accounts[id], row.ledgerID == account.ledgerID {
+            names.append(row.name)
+            parent = row.parentID
+        }
+        return names.reversed()
+    }
+    static func fullName(for account: Account, in accounts: [UUID: Account]) -> String {
+        (parentNames(for: account, in: accounts) + [account.name]).joined(separator: ":")
+    }
+}
+
 struct TransactionSearchQuery: Hashable, Sendable {
     var text: String
     var field: TransactionSearchField = .anywhere
@@ -231,9 +269,23 @@ struct RegisterRenderRequest: @unchecked Sendable {
     let transactionIDs: Set<UUID>?
     var searchField: TransactionSearchField = .anywhere
     var filtersScope = false
+    var searchDatePolicy: TransactionSearchDatePolicy? = nil
+    var referenceDate = Date()
+    var calendar = Calendar.current
+
+    var relativeScopeInterval: DateInterval? {
+        switch scope {
+        case .today: return calendar.dateInterval(of: .day, for: referenceDate)
+        case .lastMonth:
+            return calendar.date(byAdding: .month, value: -1, to: referenceDate)
+                .flatMap { calendar.dateInterval(of: .month, for: $0) }
+        default: return nil
+        }
+    }
 
     func matches(_ other: RegisterRenderRequest) -> Bool {
-        filtersScope == other.filtersScope && scope == other.scope && search == other.search && searchField == other.searchField && dateInterval == other.dateInterval &&
+        calendar == other.calendar && relativeScopeInterval == other.relativeScopeInterval &&
+            searchDatePolicy == other.searchDatePolicy && filtersScope == other.filtersScope && scope == other.scope && search == other.search && searchField == other.searchField && dateInterval == other.dateInterval &&
             transactionIDs == other.transactionIDs && RegisterPresentation.hasSameContent(data, other.data) && rows == other.rows
     }
 }
@@ -255,7 +307,7 @@ actor RegisterRenderWorker {
         if CommandLine.arguments.contains("--demo-slow-register") { try await Task.sleep(for: .seconds(2)) }
         #endif
         let rows = try filteredRows(request)
-        let presentation = RegisterPresentation.build(data: request.data, rows: rows, scope: request.scope)
+        let presentation = RegisterPresentation.build(data: request.data, rows: rows, scope: request.scope, calendar: request.calendar)
         try Task.checkCancellation()
         return RegisterRenderResult(presentation: presentation)
     }
@@ -269,7 +321,7 @@ actor RegisterRenderWorker {
         let query = request.search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let accountsByID = Dictionary(uniqueKeysWithValues: request.data.accounts.map { ($0.id, $0) })
         let defaults = Dictionary(grouping: request.data.commodities, by: \.ledgerID).compactMapValues { $0.first?.id }
-        let accounts = query.isEmpty ? [:] : accountsByID.mapValues(\.name)
+        let accounts = query.isEmpty ? [:] : accountsByID.mapValues { AccountSearchPath.fullName(for: $0, in: accountsByID) }
         let ledgers = query.isEmpty ? [:] : Dictionary(uniqueKeysWithValues: request.data.ledgers.map { ($0.id, $0.name) })
         var scopedAccounts = Set<UUID>()
         if request.filtersScope, case .account(let id) = request.scope {
@@ -280,10 +332,7 @@ actor RegisterRenderWorker {
                 pending.append(contentsOf: (children[id] ?? []).map { $0.1 })
             }
         }
-        let calendar = Calendar.current
-        let now = Date()
-        let today = calendar.dateInterval(of: .day, for: now)
-        let lastMonth = calendar.date(byAdding: .month, value: -1, to: now).flatMap { calendar.dateInterval(of: .month, for: $0) }
+        let relativeInterval = request.relativeScopeInterval
         func isInScope(_ row: LedgerTransaction) -> Bool {
             guard request.filtersScope else { return true }
             switch request.scope {
@@ -292,15 +341,17 @@ actor RegisterRenderWorker {
             case .repeating: return row.recurrenceRule.map { $0.frequency != .never } ?? false
             case .account: return row.postings.contains { scopedAccounts.contains($0.accountID) }
             case .currency(let id): return row.postings.contains { ($0.commodityID ?? accountsByID[$0.accountID]?.commodityID ?? defaults[row.ledgerID]) == id }
-            case .today: return today.map { row.date >= $0.start && row.date < $0.end } ?? false
-            case .lastMonth: return lastMonth.map { row.date >= $0.start && row.date < $0.end } ?? false
+            case .today, .lastMonth: return relativeInterval.map { row.date >= $0.start && row.date < $0.end } ?? false
             }
         }
         var matches: [LedgerTransaction] = []
+        var futureMatches: [LedgerTransaction] = []
+        var futureSlot = 0
+        if let limit, limit <= 0 { return [] }
         if let limit { matches.reserveCapacity(max(0, min(limit, request.rows.count))) }
         for transaction in request.rows {
             try Task.checkCancellation()
-            guard isInScope(transaction) else { continue }
+            guard isInScope(transaction), request.searchDatePolicy?.includes(transaction) ?? true else { continue }
             if let interval = request.dateInterval, !(transaction.date >= interval.start && transaction.date < interval.end) { continue }
             if let ids = request.transactionIDs, !ids.contains(transaction.id) { continue }
             // Ordinary registers skip search-string allocation entirely.
@@ -318,8 +369,22 @@ actor RegisterRenderWorker {
                 }
                 if !text.lowercased().contains(query) { continue }
             }
-            if let limit, matches.count >= max(0, limit) { break }
+            if let policy = request.searchDatePolicy, transaction.date >= policy.todayEnd {
+                // Source rows are newest first. A bounded ring retains the
+                // nearest future matches without letting them crowd out history.
+                if let limit, futureMatches.count == limit {
+                    futureMatches[futureSlot] = transaction
+                    futureSlot = (futureSlot + 1) % limit
+                } else { futureMatches.append(transaction) }
+                continue
+            }
+            if let limit, matches.count >= limit { break }
             matches.append(transaction)
+        }
+        if request.searchDatePolicy != nil {
+            futureMatches.sort { $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date < $1.date }
+            if let limit { matches.append(contentsOf: futureMatches.prefix(max(0, limit - matches.count))) }
+            else { matches.append(contentsOf: futureMatches) }
         }
         return matches
     }

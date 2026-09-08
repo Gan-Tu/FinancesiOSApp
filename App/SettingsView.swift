@@ -7,8 +7,9 @@ struct SettingsView: View {
     @Binding var route: EditorRoute?
     @State private var confirmingJournalDelete: Ledger?
     @State private var confirmingCurrencyDelete: Commodity?
-    @State private var confirmingTemplateDelete: TransactionTemplate?
     @State private var editorRoute: EditorRoute?
+    @AppStorage(JournalVisibility.preferenceKey, store: MobileDisplayPreferences.defaults) private var hiddenJournalIDs = ""
+    private var visibility: JournalVisibility { JournalVisibility(rawValue: hiddenJournalIDs) }
 
     var body: some View {
         NavigationStack {
@@ -56,7 +57,7 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    ForEach(store.orderedLedgers) { ledger in
+                    ForEach(visibility.visible(in: store.orderedLedgers)) { ledger in
                         HStack {
                             Button {
                                 store.selectLedger(ledger.id)
@@ -82,6 +83,11 @@ struct SettingsView: View {
                             }
                             .accessibilityLabel("Actions for journal \(ledger.name)")
                         }
+                    }
+                    NavigationLink {
+                        HiddenJournalsView()
+                    } label: {
+                        Label("Hidden Journals", systemImage: "archivebox")
                     }
                     Button {
                         editorRoute = .journalNew
@@ -148,11 +154,6 @@ struct SettingsView: View {
                                 } label: {
                                     Label("Edit", systemImage: "pencil")
                                 }
-                                Button(role: .destructive) {
-                                    confirmingTemplateDelete = template
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
                             } label: {
                                 Image(systemName: "ellipsis.circle")
                                     .frame(width: 44, height: 44).contentShape(Rectangle())
@@ -204,17 +205,7 @@ struct SettingsView: View {
                 confirmingCurrencyDelete = nil
             }
         }
-        .confirmationDialog("Delete Template?", isPresented: Binding(
-            get: { confirmingTemplateDelete != nil },
-            set: { if !$0 { confirmingTemplateDelete = nil } }
-        ), titleVisibility: .visible) {
-            Button("Delete", role: .destructive) {
-                if let template = confirmingTemplateDelete {
-                    store.deleteTransactionTemplate(template.id)
-                }
-                confirmingTemplateDelete = nil
-            }
-        }
+
     }
 }
 

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 enum MobileRoute: Hashable {
     case journals
@@ -42,14 +43,25 @@ enum ShellSheet: Identifiable {
 struct JournalsHomeScreen: View {
     @EnvironmentObject private var store: MobileLedgerStore
     @Environment(\.editMode) private var editMode
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var navigationPath: [MobileRoute]
     @Binding var route: EditorRoute?
     @State private var pendingDelete: Ledger?
+    @State private var showingHiddenJournals = false
+    @AppStorage(JournalVisibility.preferenceKey, store: MobileDisplayPreferences.defaults) private var hiddenJournalIDs = ""
+    private var visibility: JournalVisibility { JournalVisibility(rawValue: hiddenJournalIDs) }
+    private var visibleJournals: [Ledger] { visibility.visible(in: store.orderedLedgers) }
+
+    private func hide(_ journal: Ledger) {
+        var updated = visibility
+        updated.setHidden(true, id: journal.id)
+        withAnimation(FinanceMotion.disclosure(reduceMotion: reduceMotion)) { hiddenJournalIDs = updated.rawValue }
+    }
 
     var body: some View {
         List {
             Section {
-                ForEach(store.orderedLedgers) { ledger in
+                ForEach(visibleJournals) { ledger in
                     NavigationLink(value: MobileRoute.journal(ledger.id)) {
                         HStack(spacing: 14) {
                             Image(systemName: "folder").font(.title2).foregroundStyle(.tint)
@@ -66,8 +78,12 @@ struct JournalsHomeScreen: View {
                     }
                     .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
                     .contextMenu {
+                        Button("Hide Journal", systemImage: "archivebox") { hide(ledger) }
                         Button("Rename", systemImage: "pencil") { route = .journalRename(ledger) }
                         Button("Delete Journal", systemImage: "trash", role: .destructive) { pendingDelete = ledger }
+                    }
+                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                        Button("Hide", systemImage: "archivebox") { hide(ledger) }.tint(.gray)
                     }
                     .swipeActions(allowsFullSwipe: false) {
                         Button("Delete", role: .destructive) { pendingDelete = ledger }.tint(.red)
@@ -75,23 +91,38 @@ struct JournalsHomeScreen: View {
                     }
                 }
                 .onDelete { offsets in
-                    if let index = offsets.first { pendingDelete = store.orderedLedgers[index] }
+                    if let index = offsets.first { pendingDelete = visibleJournals[index] }
                 }
-                .onMove(perform: store.moveJournals)
+                .onMove { offsets, destination in
+                    store.moveJournals(from: offsets, to: destination, excluding: visibility.hiddenIDs)
+                }
             }
         }
         .listStyle(.insetGrouped)
         .compactGroupedForm()
+        .animation(FinanceMotion.disclosure(reduceMotion: reduceMotion), value: hiddenJournalIDs)
         .contentMargins(.top, 16, for: .scrollContent)
         .overlay {
-            if store.orderedLedgers.isEmpty {
+            if visibleJournals.isEmpty {
                 ContentUnavailableView {
                     Label("Your Journals", systemImage: "folder")
                 } description: {
-                    Text("Create a journal to get started, or turn on iCloud Sync to bring your journals from your Mac.")
+                    Text(store.orderedLedgers.isEmpty
+                         ? "Create a journal to get started, or turn on iCloud Sync to bring your journals from your Mac."
+                         : "Your journals are hidden. Restore them from Hidden Journals in Settings.")
                 } actions: {
-                    Button("New Journal") { route = .journalNew }.buttonStyle(.borderedProminent)
+                    if !store.orderedLedgers.isEmpty {
+                        Button("Hidden Journals") { showingHiddenJournals = true }.buttonStyle(.borderedProminent)
+                    } else {
+                        Button("New Journal") { route = .journalNew }.buttonStyle(.borderedProminent)
+                    }
                 }
+            }
+        }
+        .sheet(isPresented: $showingHiddenJournals) {
+            NavigationStack {
+                HiddenJournalsView()
+                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { showingHiddenJournals = false } } }
             }
         }
         .navigationTitle("Journals")
@@ -344,6 +375,7 @@ struct TransactionListScreen: View {
     var searchFilter: TransactionSearchQuery? = nil
     let openTransaction: (UUID) -> Void
     @State private var pendingDeletion: LedgerTransaction?
+    @AppStorage(TransactionSearchDatePolicy.preferenceKey, store: MobileDisplayPreferences.defaults) private var includeAllFutureEntries = false
     @State private var pendingDuplication: LedgerTransaction?
     @AppStorage("display.showsTransactionChart", store: MobileDisplayPreferences.defaults) private var showsChart = false
     @State private var selectedMonth: Date?
@@ -395,6 +427,16 @@ struct TransactionListScreen: View {
             .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
+                    if searchFilter != nil {
+                        Button {
+                            includeAllFutureEntries.toggle()
+                        } label: {
+                            Image(systemName: includeAllFutureEntries ? "calendar.badge.checkmark" : "calendar.badge.clock")
+                        }
+                        .accessibilityLabel(includeAllFutureEntries ? "Limit Future Entries" : "Show All Future Entries")
+                        .accessibilityIdentifier("search-future-toggle")
+                        .accessibilityValue(includeAllFutureEntries ? "All dates" : "Recent entries")
+                    }
                     if dateInterval == nil {
                         Button(showsChart ? "Hide Chart" : "Show Chart", systemImage: showsChart ? "chart.bar.fill" : "chart.bar") {
                             withAnimation(FinanceMotion.disclosure(reduceMotion: reduceMotion)) { showsChart.toggle() }
@@ -415,6 +457,9 @@ struct TransactionListScreen: View {
             .onDisappear { isActive = false; renderRequest = nil }
             .onReceive(store.$data.removeDuplicates(by: RegisterPresentation.hasSameContent).debounce(for: .milliseconds(40), scheduler: RunLoop.main)) { _ in scheduleRefresh() }
             .task(id: renderID) { [renderID, renderRequest] in await renderCurrentRequest(renderRequest, id: renderID) }
+            .onChange(of: includeAllFutureEntries) { if searchFilter != nil { scheduleRefresh() } }
+            .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in scheduleRefresh() }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in scheduleRefresh() }
             .task(id: contentReady) {
                 guard !contentReady else { loadingVisible = false; return }
                 do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
@@ -511,7 +556,10 @@ struct TransactionListScreen: View {
 
     private func scheduleRefresh() {
         guard isActive else { return }
-        let request = RegisterRenderRequest(data: store.data, rows: store.registerSourceRows(ledgerID: ledgerID), scope: scope, search: searchFilter?.text ?? "", dateInterval: dateInterval, transactionIDs: transactionIDs, searchField: searchFilter?.field ?? .anywhere, filtersScope: true)
+        var request = RegisterRenderRequest(data: store.data, rows: store.registerSourceRows(ledgerID: ledgerID), scope: scope, search: searchFilter?.text ?? "", dateInterval: dateInterval, transactionIDs: transactionIDs, searchField: searchFilter?.field ?? .anywhere, filtersScope: true)
+        if searchFilter != nil {
+            request.searchDatePolicy = TransactionSearchDatePolicy(includeAllFuture: includeAllFutureEntries, now: request.referenceDate, calendar: request.calendar)
+        }
         if let previous = renderRequest, request.matches(previous) { return }
         renderRequest = request
         renderID = UUID()
@@ -529,7 +577,7 @@ struct TransactionListScreen: View {
                 loadError = nil
                 if !contentReady {
                     initialScrollRequested = false
-                    initialDay = dateInterval == nil && searchFilter == nil ? presentation.initialDay() : nil
+                    initialDay = dateInterval == nil ? presentation.initialDay() : nil
                     if initialDay == nil { contentReady = true }
                 }
             }
@@ -1124,6 +1172,7 @@ struct QuickSearchSheet: View {
     @State private var isSearchPresented = false
     @State private var isSearching = false
     @State private var searchRevision = UUID()
+    @AppStorage(TransactionSearchDatePolicy.preferenceKey, store: MobileDisplayPreferences.defaults) private var includeAllFutureEntries = false
 
     var contextLedgerID: UUID? = nil
     var contextScope: MobileTransactionScope? = nil
@@ -1154,6 +1203,17 @@ struct QuickSearchSheet: View {
                         }
                     }
                 } else {
+                    if !searchResults.accounts.isEmpty {
+                        QuickSearchSection("Accounts") {
+                            ForEach(searchResults.accounts) { account in
+                                Button { openAccount(account) } label: {
+                                    accountResultRow(account)
+                                }
+                                .buttonStyle(TransactionRowButtonStyle())
+                                .accessibilityIdentifier("search-account-\(account.id.uuidString)")
+                            }
+                        }
+                    }
                     QuickSearchSection("Suggestions") {
                         ForEach(TransactionSearchField.allCases) { field in
                             let query = TransactionSearchQuery(text: trimmedQuery, field: field)
@@ -1170,8 +1230,16 @@ struct QuickSearchSheet: View {
                         }
                     }
 
-                    if !searchResults.transactions.isEmpty {
-                        QuickSearchSection("Transactions") {
+                    QuickSearchSection("Transactions") {
+                        Button {
+                            includeAllFutureEntries.toggle()
+                        } label: {
+                            Label(includeAllFutureEntries ? "Limit Future Entries" : "Show All Future Entries", systemImage: "calendar.badge.clock")
+                                .foregroundStyle(.blue).font(.subheadline)
+                        }
+                        .accessibilityIdentifier("search-future-toggle")
+                        .accessibilityValue(includeAllFutureEntries ? "All dates" : "Recent entries")
+                        if !searchResults.transactions.isEmpty {
                             ForEach(searchResults.transactions) { transaction in
                                 Button {
                                     openTransaction(transaction)
@@ -1206,23 +1274,6 @@ struct QuickSearchSheet: View {
                         }
                     }
 
-                    if !searchResults.accounts.isEmpty {
-                        QuickSearchSection("Accounts") {
-                            ForEach(searchResults.accounts) { account in
-                                Button {
-                                    openAccount(account)
-                                } label: {
-                                    resultRow(
-                                        title: account.name,
-                                        subtitle: "\(store.ledger(account.ledgerID)?.name ?? "Journal") · \(account.kind.title)",
-                                        systemImage: account.isGroup ? "folder" : "list.bullet.rectangle",
-                                        tint: account.kind == .income || account.kind == .expense ? AppColors.color(account.colorName) : .gray
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
 
                     if !searchResults.currencies.isEmpty {
                         QuickSearchSection("Currencies") {
@@ -1270,8 +1321,10 @@ struct QuickSearchSheet: View {
             .scrollDismissesKeyboard(.interactively)
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
+            .submitLabel(.done)
             .onSubmit(of: .search) {
-                if !trimmedQuery.isEmpty { openFiltered(TransactionSearchQuery(text: trimmedQuery)) }
+                // Keep the query, suggestions, results, and sheet in place.
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             }
             .navigationTitle("Quick Search")
             .navigationBarTitleDisplayMode(.inline)
@@ -1288,6 +1341,9 @@ struct QuickSearchSheet: View {
             isSearchPresented = true
         }
         .onChange(of: searchText) { searchRevision = UUID() }
+        .onChange(of: includeAllFutureEntries) { searchRevision = UUID() }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in searchRevision = UUID() }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in searchRevision = UUID() }
         .onReceive(store.$data.removeDuplicates(by: RegisterPresentation.hasSameContent)) { _ in searchRevision = UUID() }
         .task(id: searchRevision) { await refreshSearchResults() }
     }
@@ -1305,23 +1361,18 @@ struct QuickSearchSheet: View {
         let matchingRows: [LedgerTransaction]
         do {
             try await Task.sleep(for: .milliseconds(150))
-            let request = RegisterRenderRequest(data: store.data, rows: store.registerSourceRows(ledgerID: contextLedgerID), scope: scope, search: trimmedSearch, dateInterval: nil, transactionIDs: nil, filtersScope: true)
+            var request = RegisterRenderRequest(data: store.data, rows: store.registerSourceRows(ledgerID: contextLedgerID), scope: scope, search: trimmedSearch, dateInterval: nil, transactionIDs: nil, filtersScope: true)
+            request.searchDatePolicy = TransactionSearchDatePolicy(includeAllFuture: includeAllFutureEntries, now: request.referenceDate, calendar: request.calendar)
             matchingRows = try await RegisterRenderWorker.shared.search(request, limit: 40).rows
             try Task.checkCancellation()
         } catch { return }
-        if contextScope != nil {
-            searchResults = .empty
-            searchResults.transactions = matchingRows
-            isSearching = false
-            return
-        }
-        let ledgers = store.searchLedgers(trimmedSearch)
+        let ledgers = contextScope == nil ? store.searchLedgers(trimmedSearch) : []
         searchResults = MobileQuickSearchResults(
             transactions: matchingRows,
             ledgers: ledgers,
-            accounts: store.searchAccounts(trimmedSearch),
-            currencies: store.searchCommodities(trimmedSearch),
-            templates: store.searchTransactionTemplates(trimmedSearch),
+            accounts: store.searchAccounts(trimmedSearch, ledgerID: contextLedgerID ?? store.selectedLedgerID),
+            currencies: contextScope == nil ? store.searchCommodities(trimmedSearch) : [],
+            templates: contextScope == nil ? store.searchTransactionTemplates(trimmedSearch) : [],
             ledgerTransactionCounts: Dictionary(uniqueKeysWithValues: ledgers.map { ledger in
                 (ledger.id, store.transactions(scope: .all, ledgerID: ledger.id).count)
             })
@@ -1335,6 +1386,21 @@ struct QuickSearchSheet: View {
                 .foregroundStyle(.primary)
                 .padding(.vertical, 4)
         }
+    }
+
+    private func accountResultRow(_ account: Account) -> some View {
+        let path = store.accountParentPath(for: account)
+        return HStack(spacing: 12) {
+            Circle()
+                .fill(account.kind == .income || account.kind == .expense ? AppColors.color(account.colorName) : .gray)
+                .frame(width: 12, height: 12)
+            (Text(path.isEmpty ? "" : path + ":").foregroundColor(.secondary)
+                + Text(account.name).foregroundColor(.primary))
+                .lineLimit(3).frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 8)
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
     }
 
     private func resultRow(
