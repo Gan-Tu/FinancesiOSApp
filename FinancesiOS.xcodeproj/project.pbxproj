@@ -23,6 +23,7 @@
 		36A1CBF3A99B7A6D1A5BAB86 /* LayoutAuditTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCBDFF5A7BA12D148161FF03 /* LayoutAuditTests.swift */; };
 		3821F420F8AAA79FF41E767D /* RecurringJournalEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ACC2C03AF40231D12945107 /* RecurringJournalEditor.swift */; };
 		3D008210DD2A2256D9AC6DBC /* UUIDOrderingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F560DDCB2842B7A051249C4E /* UUIDOrderingTests.swift */; };
+		3E8D07BF4411549E6BAD758B /* TemplateAndNavigationPerformanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 103A5A6578909BEC17466757 /* TemplateAndNavigationPerformanceTests.swift */; };
 		4169A37905CB374B5DCD5623 /* NativeJournalStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = E544C7CCCB40D25685656BDD /* NativeJournalStorage.swift */; };
 		47DA318440C8FCE147C03954 /* ReceiptViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13AFB6B6FB83278C098593CD /* ReceiptViews.swift */; };
 		49C0F05C848647CC3492E383 /* PostingBalance.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBEB774D3AC950CDC6B21DD9 /* PostingBalance.swift */; };
@@ -97,6 +98,7 @@
 		090311332FA6B7D2C0A46636 /* libsqlite3.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libsqlite3.tbd; path = usr/lib/libsqlite3.tbd; sourceTree = SDKROOT; };
 		0DE0CFA8C0041BA407E81FE4 /* RegisterChart.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RegisterChart.swift; sourceTree = "<group>"; };
 		0EB71C1D6F61E19732CE91FD /* RecurringJournalEditorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecurringJournalEditorTests.swift; sourceTree = "<group>"; };
+		103A5A6578909BEC17466757 /* TemplateAndNavigationPerformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemplateAndNavigationPerformanceTests.swift; sourceTree = "<group>"; };
 		120177F093E73C7D0481DAC2 /* MobileAppIconBadge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileAppIconBadge.swift; sourceTree = "<group>"; };
 		13AFB6B6FB83278C098593CD /* ReceiptViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReceiptViews.swift; sourceTree = "<group>"; };
 		13D968B89685C6F8CBB70B08 /* AttachmentDuplicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentDuplicator.swift; sourceTree = "<group>"; };
@@ -260,6 +262,7 @@
 				7331FE1CCF089396B76A3CA1 /* RecurringTransactionEditPolicyTests.swift */,
 				15246DDD0437BC92E0557861 /* SQLiteCloudKitBatchingTests.swift */,
 				FD57D4F7D32FD381F1F005DC /* SQLiteCloudKitSyncTests.swift */,
+				103A5A6578909BEC17466757 /* TemplateAndNavigationPerformanceTests.swift */,
 				F560DDCB2842B7A051249C4E /* UUIDOrderingTests.swift */,
 			);
 			path = Tests;
@@ -463,6 +466,7 @@
 				D523165B8458E84586A691E8 /* RecurringTransactionEditPolicyTests.swift in Sources */,
 				B23435F545F1EC6F9D2B8B23 /* SQLiteCloudKitBatchingTests.swift in Sources */,
 				95BA27FC95A9553680156841 /* SQLiteCloudKitSyncTests.swift in Sources */,
+				3E8D07BF4411549E6BAD758B /* TemplateAndNavigationPerformanceTests.swift in Sources */,
 				3D008210DD2A2256D9AC6DBC /* UUIDOrderingTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

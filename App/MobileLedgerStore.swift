@@ -118,6 +118,7 @@ private struct MobileLedgerDerivedCache {
     var accountsByID: [UUID: Account] = [:]
     var commoditiesByID: [UUID: Commodity] = [:]
     var transactionsByID: [UUID: LedgerTransaction] = [:]
+    var recurrenceAnchorIDs: [UUID: UUID] = [:]
     var accountsByLedger: [UUID: [Account]] = [:]
     var commoditiesByLedger: [UUID: [Commodity]] = [:]
     var transactionTemplatesByLedger: [UUID: [TransactionTemplate]] = [:]
@@ -212,6 +213,13 @@ private struct MobileLedgerDerivedCache {
                 guard let frequency = transaction.recurrenceRule?.frequency else { return false }
                 return frequency != .never
             }
+        }
+
+        for row in data.transactions {
+            guard let ruleID = row.recurrenceRule?.id else { continue }
+            if let currentID = recurrenceAnchorIDs[ruleID], let current = transactionsByID[currentID],
+               current.date < row.date || (current.date == row.date && current.id.uuidString < row.id.uuidString) { continue }
+            recurrenceAnchorIDs[ruleID] = row.id
         }
 
         var balancesByAccount: [UUID: [UUID?: Decimal]] = [:]
@@ -396,6 +404,13 @@ private final class MobileCloudKitAccountObservation: @unchecked Sendable {
     deinit { NotificationCenter.default.removeObserver(token) }
 }
 
+/// Progress-only updates should redraw sync controls, not every account row,
+/// transaction editor, and navigation destination observing the journal store.
+@MainActor
+final class MobileCloudSyncState: ObservableObject {
+    @Published var progress = CloudSyncProgress.idle
+}
+
 @MainActor
 final class MobileLedgerStore: ObservableObject {
     private static let deferredPersistenceQueue = DispatchQueue(label: "FinancesMobile.MobileLedgerStore.deferredPersistence", qos: .utility)
@@ -404,7 +419,11 @@ final class MobileLedgerStore: ObservableObject {
         didSet { appIconBadge?.update(data) }
     }
     @Published var validationError: ValidationError?
-    @Published private(set) var cloudSyncProgress = CloudSyncProgress.idle
+    let cloudSyncState = MobileCloudSyncState()
+    private(set) var cloudSyncProgress: CloudSyncProgress {
+        get { cloudSyncState.progress }
+        set { cloudSyncState.progress = newValue }
+    }
     @Published private(set) var isUnlocked = true
     @Published private(set) var cloudSyncDataAvailable = false
     @Published private(set) var cloudSyncConflicts: [CloudKitSyncConflict] = []
@@ -1361,6 +1380,13 @@ final class MobileLedgerStore: ObservableObject {
         return display
     }
 
+    /// O(1) COW snapshot for register rendering. Scope/search filtering belongs
+    /// to RegisterRenderWorker so opening an account never scans on the UI actor.
+    func registerSourceRows(ledgerID: UUID?) -> [LedgerTransaction] {
+        (ledgerID ?? selectedLedgerID).map { derivedCache.transactionsByLedgerDateDescending[$0] ?? [] }
+            ?? derivedCache.allTransactionsDateDescending
+    }
+
     func transactions(scope: MobileTransactionScope, ledgerID: UUID? = nil, search: String = "") -> [LedgerTransaction] {
         let ledgerID = ledgerID ?? selectedLedgerID
         let normalizedSearch = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -1429,9 +1455,17 @@ final class MobileLedgerStore: ObservableObject {
     }
 
     func unclearedTransactionCount(ledgerID: UUID, now: Date = Date(), calendar: Calendar = .current) -> Int {
-        transactions(scope: .uncleared, ledgerID: ledgerID)
-            .filter { calendar.compare($0.date, to: now, toGranularity: .day) != .orderedDescending }
-            .count
+        guard let cutoff = calendar.dateInterval(of: .day, for: now)?.end else { return 0 }
+        let rows = derivedCache.unclearedTransactionsByLedgerDateDescending[ledgerID] ?? []
+        // The cache is already ordered newest first. Find the day boundary
+        // without allocating a filtered array or comparing every entry's date.
+        var lower = 0, upper = rows.count
+        while lower < upper {
+            let middle = lower + (upper - lower) / 2
+            if rows[middle].date >= cutoff { lower = middle + 1 }
+            else { upper = middle }
+        }
+        return rows.count - lower
     }
 
     func transactionDaySections(
@@ -1599,6 +1633,7 @@ final class MobileLedgerStore: ObservableObject {
         data.selectedLedgerID = ledger.id
         seedBaseAccounts(for: ledger, primaryCurrency: JournalCurrencyCatalog.choice(named: currencyName), template: template)
         refreshDerivedCacheForJournalInsertion(ledgerID: ledger.id)
+        seedDefaultTransactionTemplates(ledgerID: ledger.id)
         save(syncCloud: true, refreshCache: false)
     }
 
@@ -1962,7 +1997,8 @@ final class MobileLedgerStore: ObservableObject {
     }
 
     func recurrenceAnchorID(ruleID: UUID) -> UUID? {
-        RecurringJournalEditor.anchor(ruleID: ruleID, in: data.transactions)?.id
+        guard let id = derivedCache.recurrenceAnchorIDs[ruleID], derivedCache.transactionsByID[id] != nil else { return nil }
+        return id
     }
 
     /// The editor confirms Save only after the journal and offline outbox are durable.
@@ -2168,6 +2204,30 @@ final class MobileLedgerStore: ObservableObject {
         )
     }
 
+    /// Seed only when a journal is created. Imported or renamed templates are
+    /// never supplemented with hard-coded menu items or silently recreated.
+    private func seedDefaultTransactionTemplates(ledgerID: UUID) {
+        for (index, kind) in MobileNewTransactionKind.allCases.enumerated() {
+            let draft = makeTransactionDraft(kind: kind, ledgerID: ledgerID)
+            data.transactionTemplates.append(TransactionTemplate(
+                ledgerID: ledgerID, name: kind.rawValue, note: "", payee: "",
+                cleared: true, enabled: true, scanInvoice: false, listIndex: index,
+                postings: draft.postings.enumerated().map { PostingTemplate(accountID: $0.element.accountID, listIndex: $0.offset) }
+            ))
+        }
+        refreshDerivedCacheForTransactionTemplateListChange(ledgerID: ledgerID)
+    }
+
+    func setTransactionTemplateIncluded(_ templateID: UUID, included: Bool) {
+        guard allowJournalMutation() else { return }
+        validationError = nil
+        guard let index = data.transactionTemplates.firstIndex(where: { $0.id == templateID }) else { return }
+        let ledgerID = data.transactionTemplates[index].ledgerID
+        data.transactionTemplates[index].enabled = included
+        refreshDerivedCacheForTransactionTemplateListChange(ledgerID: ledgerID)
+        save(syncCloud: true, refreshCache: false)
+    }
+
     func moveTransactionTemplates(ledgerID: UUID, from offsets: IndexSet, to destination: Int) {
         guard allowJournalMutation() else { return }
         var templates = transactionTemplates(for: ledgerID)
@@ -2234,6 +2294,7 @@ final class MobileLedgerStore: ObservableObject {
 
     func deleteTransactionTemplate(_ templateID: UUID) {
         guard allowJournalMutation() else { return }
+        validationError = nil
         guard let template = data.transactionTemplates.first(where: { $0.id == templateID }) else { return }
         data.transactionTemplates.removeAll { $0.id == templateID }
         refreshDerivedCacheForTransactionTemplateListChange(ledgerID: template.ledgerID)

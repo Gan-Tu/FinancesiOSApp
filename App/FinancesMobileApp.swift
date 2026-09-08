@@ -53,6 +53,7 @@ private struct FinancesMobileNormalContent: View {
     var body: some View {
         AppShellView()
             .environmentObject(store)
+            .environmentObject(store.cloudSyncState)
             .preferredColorScheme(store.data.appearance.colorScheme)
             .task { await store.prepareAfterInitialRender() }
             .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in

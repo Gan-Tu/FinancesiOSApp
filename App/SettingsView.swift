@@ -240,6 +240,7 @@ struct SettingsIconLabel: View {
 
 struct CloudSyncManagementView: View {
     @EnvironmentObject private var store: MobileLedgerStore
+    @EnvironmentObject private var syncState: MobileCloudSyncState
     @State private var showingConnection = false
     @State private var showingConflicts = false
     @State private var confirmingReset = false
@@ -264,8 +265,8 @@ struct CloudSyncManagementView: View {
                 FinanceFormCard {
                     FinanceFormRow(last: true) {
                         if store.cloudSyncConflicts.isEmpty {
-                            if store.cloudSyncProgress.isRunning {
-                                CloudSyncRunningStatus(progress: store.cloudSyncProgress)
+                            if syncState.progress.isRunning {
+                                CloudSyncRunningStatus(progress: syncState.progress)
                             } else {
                                 Text(cloudSyncStatusText).foregroundStyle(.primary)
                             }
@@ -284,7 +285,7 @@ struct CloudSyncManagementView: View {
                 FinanceFormRow {
                     Button("Synchronize Now") { store.synchronizeNow() }
                         .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                        .disabled(!store.data.syncEnabled || store.cloudSyncProgress.isRunning)
+                        .disabled(!store.data.syncEnabled || syncState.progress.isRunning)
                 }
                 FinanceFormRow(last: true) {
                     Button("Reset...", role: .destructive) { confirmingReset = true }
@@ -321,16 +322,16 @@ struct CloudSyncManagementView: View {
     }
 
     private var cloudSyncStatusText: String {
-        switch store.cloudSyncProgress.state {
+        switch syncState.progress.state {
         case .idle: store.data.syncEnabled ? "Ready to Sync" : "Sync Disabled"
-        case .running: store.cloudSyncProgress.phase.title
+        case .running: syncState.progress.phase.title
         case .succeeded: "Up to date"
         case .failed: "Sync failed"
         }
     }
 
     private var canResetCloudSync: Bool {
-        !store.data.syncEnabled && store.cloudSyncDataAvailable && !store.cloudSyncProgress.isRunning
+        !store.data.syncEnabled && store.cloudSyncDataAvailable && !syncState.progress.isRunning
     }
 }
 
@@ -516,16 +517,17 @@ struct BackupSettingsView: View {
 
 struct FinancesForMacView: View {
     @EnvironmentObject private var store: MobileLedgerStore
+    @EnvironmentObject private var syncState: MobileCloudSyncState
 
     var body: some View {
         Form {
             Section("iCloud Sync") {
-                if store.cloudSyncProgress.isRunning {
-                    CloudSyncRunningStatus(progress: store.cloudSyncProgress)
+                if syncState.progress.isRunning {
+                    CloudSyncRunningStatus(progress: syncState.progress)
                 } else {
                     Label(syncStatusTitle, systemImage: syncStatusIcon)
                         .foregroundStyle(syncStatusColor)
-                    if let detail = store.cloudSyncProgress.detail {
+                    if let detail = syncState.progress.detail {
                         Text(detail)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
@@ -536,7 +538,7 @@ struct FinancesForMacView: View {
                 } label: {
                     Label("Synchronize Now", systemImage: "arrow.triangle.2.circlepath")
                 }
-                .disabled(!store.data.syncEnabled || store.cloudSyncProgress.isRunning)
+                .disabled(!store.data.syncEnabled || syncState.progress.isRunning)
             }
 
             Section("Connection") {
@@ -557,31 +559,31 @@ struct FinancesForMacView: View {
     }
 
     private var syncStatusTitle: String {
-        switch store.cloudSyncProgress.state {
+        switch syncState.progress.state {
         case .idle:
             store.data.syncEnabled ? "Ready to Sync" : "Sync Disabled"
         case .running:
-            store.cloudSyncProgress.message.isEmpty ? "Synchronizing" : store.cloudSyncProgress.message
+            syncState.progress.message.isEmpty ? "Synchronizing" : syncState.progress.message
         case .succeeded:
             "Up to date"
         case .failed:
-            store.cloudSyncProgress.message.isEmpty ? "Sync failed" : store.cloudSyncProgress.message
+            syncState.progress.message.isEmpty ? "Sync failed" : syncState.progress.message
         }
     }
 
     private var syncStatusIcon: String {
-        switch store.cloudSyncProgress.state {
+        switch syncState.progress.state {
         case .failed:
             "icloud.slash"
         case .running:
-            store.cloudSyncProgress.phase.symbol
+            syncState.progress.phase.symbol
         case .idle, .succeeded:
             store.data.syncEnabled ? "icloud" : "icloud.slash"
         }
     }
 
     private var syncStatusColor: Color {
-        switch store.cloudSyncProgress.state {
+        switch syncState.progress.state {
         case .failed:
             .red
         case .running:
@@ -702,6 +704,7 @@ struct HelpSettingsView: View {
 struct CloudSyncSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var store: MobileLedgerStore
+    @EnvironmentObject private var syncState: MobileCloudSyncState
 
     var body: some View {
         NavigationStack {
@@ -711,7 +714,7 @@ struct CloudSyncSettingsView: View {
                     Text("Journals and receipts sync to your private iCloud database. They count against your iCloud storage.")
                     Text("Sync requires a signed app provisioned for the Finances CloudKit container. Local and unsigned builds can still manage journals and backups.")
                 }
-                if let detail = store.cloudSyncProgress.detail, !detail.isEmpty {
+                if let detail = syncState.progress.detail, !detail.isEmpty {
                     Section("Sync Details") { Text(detail).font(.footnote).textSelection(.enabled) }
                 }
             }

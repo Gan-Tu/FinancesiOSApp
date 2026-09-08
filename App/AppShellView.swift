@@ -93,9 +93,6 @@ struct AppShellView: View {
                 .frame(width: 0, height: 0)
         }
         .confirmationDialog("New Transaction", isPresented: $showingNewTransactionDialog, titleVisibility: .visible) {
-            ForEach(MobileNewTransactionKind.allCases) { kind in
-                Button(kind.rawValue) { route = .transaction(store.makeTransactionDraft(kind: kind, ledgerID: currentLedgerID, accountID: currentAccountID), "New Transaction") }
-            }
             ForEach((currentLedgerID.map { store.transactionTemplates(for: $0) } ?? []).filter(\.enabled)) { template in
                 Button(template.name) { route = .transaction(store.draft(for: template), "New Transaction", scanInvoice: template.scanInvoice) }
             }
@@ -153,11 +150,6 @@ struct AppShellView: View {
 
     private var currentSearchQuery: TransactionSearchQuery? {
         if case .searchTransactions(_, _, let query) = navigationPath.last { return query }
-        return nil
-    }
-
-    private var currentAccountID: UUID? {
-        if case .account(let id) = navigationPath.last { return id }
         return nil
     }
 

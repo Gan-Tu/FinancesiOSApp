@@ -256,13 +256,14 @@ struct JournalOverviewScreen: View {
 
     private func visibleNodes(_ kind: AccountKind) -> [MobileAccountNode] {
         let nodes = store.accountNodes(kind: kind, ledgerID: ledgerID)
+        let collapsed = collapsedAccounts
         let roots = nodes.filter { $0.account.parentID == nil }
         return nodes.filter { node in
             if roots.count == 1 && node.account.parentID == nil { return false }
             var parent = node.account.parentID
             var visited = Set<UUID>()
             while let id = parent, visited.insert(id).inserted {
-                if collapsedAccounts.contains(id) { return false }
+                if collapsed.contains(id) { return false }
                 parent = store.account(id)?.parentID
             }
             return true
@@ -503,7 +504,7 @@ struct TransactionListScreen: View {
 
     private func scheduleRefresh() {
         guard isActive else { return }
-        let request = RegisterRenderRequest(data: store.data, rows: store.transactions(scope: scope, ledgerID: ledgerID), scope: scope, search: searchFilter?.text ?? "", dateInterval: dateInterval, transactionIDs: transactionIDs, searchField: searchFilter?.field ?? .anywhere)
+        let request = RegisterRenderRequest(data: store.data, rows: store.registerSourceRows(ledgerID: ledgerID), scope: scope, search: searchFilter?.text ?? "", dateInterval: dateInterval, transactionIDs: transactionIDs, searchField: searchFilter?.field ?? .anywhere, filtersScope: true)
         if let previous = renderRequest, request.matches(previous) { return }
         renderRequest = request
         renderID = UUID()
@@ -595,13 +596,7 @@ struct TemplateListScreen: View {
             if !included.isEmpty {
                 Section("Include") {
                     ForEach(included) { template in
-                        Button { route = .template(store.templateDraft(for: template)) } label: {
-                            Text(template.name).foregroundStyle(.primary).frame(maxWidth: .infinity, alignment: .leading)
-                        }.buttonStyle(.plain)
-                    }
-                    .onDelete { offsets in
-                        let ids = offsets.map { included[$0].id }
-                        for id in ids { store.deleteTransactionTemplate(id) }
+                        templateRow(template, included: true)
                     }
                     .onMove { offsets, destination in
                         let sourceIDs = Set(offsets.map { included[$0].id })
@@ -615,21 +610,7 @@ struct TemplateListScreen: View {
             if !excluded.isEmpty {
                 Section("More Templates") {
                     ForEach(excluded) { template in
-                        Button {
-                            var draft = store.templateDraft(for: template)
-                            draft.enabled = true
-                            store.saveTransactionTemplate(draft)
-                        } label: {
-                            HStack(spacing: 16) {
-                                Image(systemName: "plus.circle.fill").foregroundStyle(.green).font(.title3)
-                                Text(template.name).foregroundStyle(.primary)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            Button("Edit Template") { route = .template(store.templateDraft(for: template)) }
-                            Button("Delete Template", role: .destructive) { store.deleteTransactionTemplate(template.id) }
-                        }
+                        templateRow(template, included: false)
                     }
                 }
             }
@@ -648,6 +629,29 @@ struct TemplateListScreen: View {
                 .accessibilityLabel("New Template")
             }
         }
+    }
+
+    private func templateRow(_ template: TransactionTemplate, included: Bool) -> some View {
+        HStack(spacing: 12) {
+            Button {
+                withAnimation { store.setTransactionTemplateIncluded(template.id, included: !included) }
+            } label: {
+                Image(systemName: included ? "minus.circle.fill" : "plus.circle.fill")
+                    .font(.system(size: 22))
+                    .foregroundStyle(included ? Color.red : Color.green)
+                    .frame(width: 32, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel("\(included ? "Exclude" : "Include") \(template.name)")
+            Button { route = .template(store.templateDraft(for: template)) } label: {
+                Text(template.name).foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel("Edit template \(template.name)")
+        }
+        .buttonStyle(.plain)
+        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
     }
 }
 
@@ -1030,6 +1034,7 @@ struct CurrencyTransactionsScreen: View {
 
 struct FinanceBottomBar: View {
     @EnvironmentObject private var store: MobileLedgerStore
+    @EnvironmentObject private var syncState: MobileCloudSyncState
     var isJournalActive: Bool
     var openSettings: () -> Void
     var openSearch: () -> Void
@@ -1052,8 +1057,8 @@ struct FinanceBottomBar: View {
                     Text(syncTitle)
                         .font(.body)
                         .lineLimit(1)
-                    if store.cloudSyncProgress.isRunning {
-                        CloudSyncProgressBar(progress: store.cloudSyncProgress)
+                    if syncState.progress.isRunning {
+                        CloudSyncProgressBar(progress: syncState.progress)
                             .frame(maxWidth: 160)
                     }
                 }
@@ -1061,7 +1066,7 @@ struct FinanceBottomBar: View {
                 .contentShape(Rectangle())
             }
             .accessibilityLabel("iCloud Sync")
-            .accessibilityValue(store.cloudSyncProgress.detail.map { "\(syncTitle) \($0)" } ?? syncTitle)
+            .accessibilityValue(syncState.progress.detail.map { "\(syncTitle) \($0)" } ?? syncTitle)
 
             Spacer()
 
@@ -1086,11 +1091,11 @@ struct FinanceBottomBar: View {
     }
 
     private var syncTitle: String {
-        switch store.cloudSyncProgress.state {
+        switch syncState.progress.state {
         case .idle:
             store.data.syncEnabled ? "Ready to Sync" : "Sync Disabled"
         case .running:
-            store.cloudSyncProgress.phase.title
+            syncState.progress.phase.title
         case .succeeded:
             "Up to date"
         case .failed:
@@ -1291,7 +1296,7 @@ struct QuickSearchSheet: View {
         let matchingRows: [LedgerTransaction]
         do {
             try await Task.sleep(for: .milliseconds(150))
-            let request = RegisterRenderRequest(data: store.data, rows: store.transactions(scope: scope, ledgerID: contextLedgerID), scope: scope, search: trimmedSearch, dateInterval: nil, transactionIDs: nil)
+            let request = RegisterRenderRequest(data: store.data, rows: store.registerSourceRows(ledgerID: contextLedgerID), scope: scope, search: trimmedSearch, dateInterval: nil, transactionIDs: nil, filtersScope: true)
             matchingRows = try await RegisterRenderWorker.shared.search(request, limit: 40).rows
             try Task.checkCancellation()
         } catch { return }
@@ -1471,6 +1476,7 @@ private struct MobileQuickSearchResults {
 
 struct MobileCloudSyncSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var store: MobileLedgerStore
 
     // Sync belongs to MobileLedgerStore, not this presentation. Dismissing
     // the sheet must never cancel its task; the Cloud Sync toggle owns that.
@@ -1483,11 +1489,13 @@ struct MobileCloudSyncSheet: View {
                     }
                 }
         }
+        .environmentObject(store.cloudSyncState)
     }
 }
 
 struct MobileCloudSyncConflictsSection: View {
     @EnvironmentObject private var store: MobileLedgerStore
+    @EnvironmentObject private var syncState: MobileCloudSyncState
 
     var body: some View {
         if !store.cloudSyncConflicts.isEmpty {
@@ -1510,7 +1518,7 @@ struct MobileCloudSyncConflictsSection: View {
                             }
                         }
                         .buttonStyle(.bordered)
-                        .disabled(store.cloudSyncProgress.isRunning)
+                        .disabled(syncState.progress.isRunning)
                     }
                     .padding(.vertical, 4)
                 }

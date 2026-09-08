@@ -1,6 +1,10 @@
 import SwiftUI
 import UIKit
 
+enum TransactionEditorField: Hashable {
+    case amount(UUID), notes, payee, number
+}
+
 struct TransactionEditorView: View {
     @EnvironmentObject private var store: MobileLedgerStore
     @Environment(\.dismiss) private var dismiss
@@ -8,9 +12,10 @@ struct TransactionEditorView: View {
     private let initialDraft: TransactionDraft
     private let scanInvoice: Bool
     @State private var draft: TransactionDraft
-    @FocusState private var focusedAmount: UUID?
+    @FocusState private var focusedField: TransactionEditorField?
     @State private var accountPostingID: UUID?
     @State private var showingRecurringSaveScope = false
+    @State private var hasAppliedInitialFocus = false
 
     init(title: String, initialDraft: TransactionDraft, scanInvoice: Bool = false) {
         self.title = title
@@ -23,6 +28,11 @@ struct TransactionEditorView: View {
             }
         }
         _draft = State(initialValue: editable)
+    }
+
+    private var focusedAmountID: UUID? {
+        if case .amount(let id) = focusedField { return id }
+        return nil
     }
 
     private var recurrencePolicy: RecurringTransactionEditPolicy {
@@ -39,10 +49,10 @@ struct TransactionEditorView: View {
                     FinanceFormCard {
                         ForEach($draft.postings) { $posting in
                             FinanceFormRow(last: posting.id == draft.postings.last?.id) {
-                                PostingEditorRow(posting: $posting, ledgerID: draft.ledgerID, focusedAmount: $focusedAmount, canRemove: draft.postings.count > 2,
+                                PostingEditorRow(posting: $posting, ledgerID: draft.ledgerID, focusedField: $focusedField, canRemove: draft.postings.count > 2,
                                     changeAmount: { text in
                                         if let index = draft.postings.firstIndex(where: { $0.id == posting.id }) { updateAmount(text, at: index) }
-                                    }, chooseAccount: { focusedAmount = nil; accountPostingID = posting.id }) {
+                                    }, chooseAccount: { focusedField = nil; accountPostingID = posting.id }) {
                                         draft.postings.removeAll { $0.id == posting.id }
                                     }
                             }
@@ -75,12 +85,12 @@ struct TransactionEditorView: View {
                     FinanceFormRow {
                         VStack(alignment: .leading, spacing: 2) {
                             if !draft.note.isEmpty { Text("Notes").font(.caption).foregroundStyle(.secondary) }
-                            TextField("Notes", text: $draft.note, axis: .vertical).accessibilityLabel("Notes")
+                            TextField("Notes", text: $draft.note, axis: .vertical).accessibilityLabel("Notes").focused($focusedField, equals: .notes)
                         }
                         .frame(minHeight: draft.note.isEmpty ? 0 : 44, alignment: .leading)
                     }
-                    FinanceFormRow { TextField("Payee", text: $draft.payee).textInputAutocapitalization(.words) }
-                    FinanceFormRow(last: true) { TextField("Number", text: $draft.number) }
+                    FinanceFormRow { TextField("Payee", text: $draft.payee).textInputAutocapitalization(.words).focused($focusedField, equals: .payee) }
+                    FinanceFormRow(last: true) { TextField("Number", text: $draft.number).focused($focusedField, equals: .number) }
                 }
                 .padding(.bottom, 40)
 
@@ -147,18 +157,19 @@ struct TransactionEditorView: View {
                     }
                     .disabled(draft.postings.count < 2 || draft.postings.contains { $0.accountID == nil || decimalFromInput($0.amount) == nil } || !draft.postings.contains { (decimalFromInput($0.amount) ?? 0) != 0 })
                 }
-                ToolbarItemGroup(placement: .keyboard) {
-                    if focusedAmount != nil {
-                        Button("±") { calculate(negate: true) }
-                        ForEach(["÷", "×", "−", "+"], id: \.self) { symbol in
-                            Button(symbol) { appendOperator(symbol) }
-                        }
-                        Button("=") { calculate() }
-                    }
-                    Spacer()
-                    Button("Done") { focusedAmount = nil }
+                ToolbarItem(placement: .keyboard) {
+                    AmountKeyboardToolbar(showOperators: focusedAmountID != nil,
+                        negate: { calculate(negate: true) }, appendOperator: appendOperator,
+                        calculate: { calculate() }, done: { focusedField = nil })
                 }
 
+            }
+            .task {
+                guard initialDraft.id == nil, !scanInvoice, !hasAppliedInitialFocus else { return }
+                hasAppliedInitialFocus = true
+                do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
+                guard focusedField == nil, accountPostingID == nil else { return }
+                focusedField = draft.postings.first.map { .amount($0.id) }
             }
             .confirmationDialog(
                 recurrencePolicy.requiresScheduleConfirmation ? "Update repeating schedule" : "Save recurring transaction changes",
@@ -189,12 +200,12 @@ struct TransactionEditorView: View {
     }
 
     private func appendOperator(_ symbol: String) {
-        guard let index = draft.postings.firstIndex(where: { $0.id == focusedAmount }) else { return }
+        guard let index = draft.postings.firstIndex(where: { $0.id == focusedAmountID }) else { return }
         updateAmount(draft.postings[index].amount + (symbol == "−" ? "-" : symbol), at: index)
     }
 
     private func calculate(negate: Bool = false) {
-        guard let index = draft.postings.firstIndex(where: { $0.id == focusedAmount }),
+        guard let index = draft.postings.firstIndex(where: { $0.id == focusedAmountID }),
               let value = decimalFromInput(draft.postings[index].amount) else { return }
         updateAmount(decimalInputString(negate ? -value : value), at: index)
     }
@@ -214,13 +225,52 @@ struct TransactionEditorView: View {
 
 }
 
+private struct AmountKeyboardToolbar: View {
+    let showOperators: Bool
+    let negate: () -> Void
+    let appendOperator: (String) -> Void
+    let calculate: () -> Void
+    let done: () -> Void
+
+    var body: some View {
+        HStack(spacing: 3) {
+            if showOperators {
+                key("±", highlighted: true, action: negate)
+                ForEach(["÷", "×", "−", "+"], id: \.self) { symbol in
+                    key(symbol) { appendOperator(symbol) }
+                }
+                key("=", highlighted: true, action: calculate)
+            } else { Spacer() }
+            Button(action: done) {
+                Image(systemName: "keyboard.chevron.compact.down")
+                    .font(.system(size: 20)).frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel("Done")
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
+    }
+
+    private func key(_ symbol: String, highlighted: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(symbol).font(.system(size: 26, weight: .medium))
+                .frame(minWidth: 44, maxWidth: .infinity, minHeight: 44)
+                .foregroundStyle(highlighted ? Color.white : Color.primary)
+                .background(highlighted ? Color.blue : Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 6))
+                .contentShape(Rectangle())
+        }
+        .accessibilityIdentifier("amount-key-\(symbol)")
+    }
+}
+
 struct PostingEditorRow: View {
     @ScaledMetric(relativeTo: .body) private var amountWidth: CGFloat = 82
     @ScaledMetric(relativeTo: .body) private var currencyWidth: CGFloat = 38
     @EnvironmentObject private var store: MobileLedgerStore
     @Binding var posting: PostingDraft
     let ledgerID: UUID?
-    var focusedAmount: FocusState<UUID?>.Binding
+    var focusedField: FocusState<TransactionEditorField?>.Binding
     let canRemove: Bool
     let changeAmount: (String) -> Void
     let chooseAccount: () -> Void
@@ -246,9 +296,9 @@ struct PostingEditorRow: View {
             }
             .buttonStyle(.plain)
             .layoutPriority(1)
-            TextField("0.00", text: Binding(get: { posting.amount }, set: changeAmount))
+            TextField("0.00", text: Binding(get: { posting.amount }, set: { value in changeAmount(value) }))
                 .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
-                .focused(focusedAmount, equals: posting.id)
+                .focused(focusedField, equals: .amount(posting.id))
                 .frame(width: amountWidth).monospacedDigit()
                 .accessibilityLabel("Amount for \(store.account(posting.accountID)?.name ?? "account")")
             Menu {
@@ -529,6 +579,7 @@ struct TemplateEditorView: View {
     @EnvironmentObject private var store: MobileLedgerStore
     @Environment(\.dismiss) private var dismiss
     @State private var draft: TransactionTemplateDraft
+    @State private var showingDeleteConfirmation = false
 
     init(initialDraft: TransactionTemplateDraft) {
         var editable = initialDraft
@@ -539,6 +590,9 @@ struct TemplateEditorView: View {
     var body: some View {
         NavigationStack {
             FinanceForm {
+                FinanceFormCard {
+                    FinanceFormRow(last: true) { TextField("Name", text: $draft.name) }
+                }
                 VStack(alignment: .leading, spacing: 8) {
                     Text("POSTINGS").font(.footnote).foregroundStyle(.secondary).padding(.leading, 16)
                     FinanceFormCard {
@@ -566,13 +620,30 @@ struct TemplateEditorView: View {
                     .buttonStyle(.plain).accessibilityLabel("Posting").padding(.leading, 8)
                 }
                 FinanceFormCard {
-                    FinanceFormRow { TextField("Name", text: $draft.name) }
                     FinanceFormRow { TextField("Payee", text: $draft.payee) }
                     FinanceFormRow { TextField("Note", text: $draft.note, axis: .vertical) }
                     FinanceFormRow { Toggle("Cleared", isOn: $draft.cleared) }
-                    FinanceFormRow { Toggle("Enabled", isOn: $draft.enabled) }
                     FinanceFormRow(last: true) { Toggle("Scan Invoice", isOn: $draft.scanInvoice) }
                 }
+                if draft.id != nil {
+                    FinanceFormCard {
+                        FinanceFormRow(last: true) {
+                            Button("Delete", role: .destructive) { showingDeleteConfirmation = true }
+                                .foregroundStyle(.red).accessibilityLabel("Delete Template")
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+            }
+            .confirmationDialog("Delete this template permanently?", isPresented: $showingDeleteConfirmation, titleVisibility: .visible) {
+                Button("Delete Template", role: .destructive) {
+                    guard let id = draft.id else { return }
+                    store.deleteTransactionTemplate(id)
+                    guard store.validationError == nil else { return }
+                    do { try store.flushLocalChanges(); dismiss() }
+                    catch { store.validationError = ValidationError(message: error.localizedDescription) }
+                }
+                Button("Cancel", role: .cancel) {}
             }
             .navigationTitle(draft.id == nil ? "New Template" : "Edit Template")
             .navigationBarTitleDisplayMode(.inline)

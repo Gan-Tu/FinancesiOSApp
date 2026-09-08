@@ -2,6 +2,87 @@ import XCTest
 
 @MainActor
 final class TemplateInteractionTests: XCTestCase {
+    func testTemplateMinusMovesToMoreAndOnlyIncludedTemplatesAppearInAddMenu() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        defer { app.terminate() }
+        app.launchArguments = ["--demo", "--reset-demo"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Journals"].waitForExistence(timeout: 10))
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Personal,")).firstMatch.tap()
+        XCTAssertTrue(app.buttons["New Transaction"].waitForExistence(timeout: 5))
+        app.buttons["New Transaction"].tap()
+        app.buttons["Customize Templates…"].tap()
+        XCTAssertTrue(app.navigationBars["Templates"].waitForExistence(timeout: 5))
+        app.buttons["Exclude Expense"].tap()
+        XCTAssertTrue(app.buttons["Include Expense"].waitForExistence(timeout: 5))
+        app.buttons["Edit template Expense"].tap()
+        XCTAssertTrue(app.navigationBars["Edit Template"].waitForExistence(timeout: 5))
+        let name = app.textFields["Name"]
+        name.tap(); name.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 7) + "Spending")
+        app.navigationBars.buttons["Save"].tap()
+        XCTAssertTrue(app.buttons["Include Spending"].waitForExistence(timeout: 5))
+        app.buttons["Include Spending"].tap()
+        XCTAssertTrue(app.buttons["Exclude Spending"].waitForExistence(timeout: 5))
+        app.buttons["Exclude Income"].tap()
+        let listImage = XCTAttachment(screenshot: app.screenshot())
+        listImage.name = "Included and more templates"; listImage.lifetime = .keepAlways; add(listImage)
+        app.navigationBars.buttons["Done"].tap()
+        app.buttons["New Transaction"].tap()
+        XCTAssertTrue(app.buttons["Spending"].waitForExistence(timeout: 5))
+        let choices = app.sheets.firstMatch
+        XCTAssertTrue(choices.buttons["Spending"].exists)
+        XCTAssertFalse(choices.buttons["Expense"].exists)
+        XCTAssertFalse(choices.buttons["Income"].exists)
+        app.buttons["Customize Templates…"].tap()
+        XCTAssertTrue(app.navigationBars["Templates"].waitForExistence(timeout: 5))
+        app.buttons["Edit template Spending"].tap()
+        XCTAssertTrue(app.navigationBars["Edit Template"].waitForExistence(timeout: 5))
+        let detailImage = XCTAttachment(screenshot: app.screenshot())
+        detailImage.name = "Template detail with permanent delete"; detailImage.lifetime = .keepAlways; add(detailImage)
+        let delete = app.buttons["Delete Template"]
+        if !delete.isHittable { app.swipeUp() }
+        XCTAssertTrue(delete.waitForExistence(timeout: 5)); delete.tap()
+        let confirmation = app.sheets.buttons["Delete Template"]
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+        confirmation.tap()
+        XCTAssertTrue(app.navigationBars["Templates"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Edit template Spending"].exists)
+    }
+
+    func testAmountAutoFocusAndLargeCalculatorKeys() throws {
+        let app = XCUIApplication()
+        defer { app.terminate() }
+        app.launchArguments = ["--demo", "--reset-demo"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Journals"].waitForExistence(timeout: 10))
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Personal,")).firstMatch.tap()
+        app.buttons["New Transaction"].tap(); app.buttons["Expense"].tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "A new transaction should focus its first amount automatically")
+        let amount = app.textFields.matching(NSPredicate(format: "label BEGINSWITH %@", "Amount for")).firstMatch
+        app.typeText("25")
+        XCTAssertEqual(amount.value as? String, "25")
+        for symbol in ["±", "÷", "×", "−", "+", "="] {
+            let key = app.buttons["amount-key-\(symbol)"]
+            XCTAssertTrue(key.isHittable)
+            XCTAssertGreaterThanOrEqual(key.frame.width, 44)
+            XCTAssertGreaterThanOrEqual(key.frame.height, 44)
+        }
+        app.buttons["amount-key-+"].tap(); app.typeText("3"); app.buttons["amount-key-="].tap()
+        XCTAssertEqual(amount.value as? String, "28.00")
+        app.buttons["amount-key-±"].tap()
+        XCTAssertEqual(amount.value as? String, "-28.00")
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "Large calculator keys and focused amount"; attachment.lifetime = .keepAlways; add(attachment)
+        app.buttons["Done"].tap()
+        let payee = app.textFields["Payee"]
+        payee.tap(); payee.typeText("Keyboard dismissal")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3))
+        app.buttons["Done"].tap()
+        let hidden = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.keyboards.firstMatch)
+        XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 3), .completed, "Done should dismiss the keyboard from Payee too")
+    }
+
     func testInvoiceTemplateRequestsReceiptScanning() throws {
         #if !targetEnvironment(simulator)
         throw XCTSkip("Physical camera capture requires an intentionally positioned test receipt.")
@@ -15,7 +96,7 @@ final class TemplateInteractionTests: XCTestCase {
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Personal,")).firstMatch.tap()
         app.buttons["section-action-Transactions"].tap()
         app.buttons["Templates"].tap()
-        XCTAssertTrue(app.staticTexts["No Templates"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Edit template Expense"].waitForExistence(timeout: 5))
         app.buttons["New Template"].tap()
         XCTAssertTrue(app.navigationBars["New Template"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.switches["Scan Invoice"].waitForExistence(timeout: 5))

@@ -9,7 +9,7 @@ enum DemoData {
             try? FileManager.default.removeItem(at: directory)
             MobileDisplayPreferences.defaults.removePersistentDomain(forName: MobileDisplayPreferences.demoSuiteName)
         }
-        var data = fixture(includeFutureEntries: CommandLine.arguments.contains("--demo-future"), includeRecurringEntries: CommandLine.arguments.contains("--demo-recurring"))
+        var data = fixture(includeFutureEntries: CommandLine.arguments.contains("--demo-future"), includeRecurringEntries: CommandLine.arguments.contains("--demo-recurring"), includeTemplates: true)
         if CommandLine.arguments.contains("--demo-hierarchy"), let ledgerID = data.selectedLedgerID {
             let currencyID = data.commodities.first { $0.ledgerID == ledgerID }?.id
             let liabilities = Account(ledgerID: ledgerID, commodityID: currencyID, name: "Liabilities", kind: .liability)
@@ -60,7 +60,7 @@ enum DemoData {
         return store
     }
 
-    static func fixture(referenceDate: Date = Date(), includeFutureEntries: Bool = false, includeRecurringEntries: Bool = false) -> JournalData {
+    static func fixture(referenceDate: Date = Date(), includeFutureEntries: Bool = false, includeRecurringEntries: Bool = false, includeTemplates: Bool = false) -> JournalData {
         let journal = Ledger(name: "Personal")
         let travel = Ledger(name: "Travel", listIndex: 1)
         let usd = Commodity(ledgerID: journal.id, symbol: "USD", name: "US Dollar")
@@ -95,7 +95,12 @@ enum DemoData {
                 rows.append(LedgerTransaction(ledgerID: journal.id, date: date, payee: "Club", note: "Repeating sample", number: "", cleared: month == 0, postings: [Posting(accountID: checking.id, commodityID: usd.id, amount: -50), Posting(accountID: food.id, commodityID: usd.id, amount: 50, listIndex: 1)], recurrenceRule: rule))
             }
         }
-        return JournalData(ledgers: [journal, travel], commodities: [usd, eur], accounts: [asset, checking, cash, income, salary, expense, food, groceries, transport], transactions: rows, selectedLedgerID: journal.id)
+        let templates: [TransactionTemplate] = includeTemplates ? [
+            TransactionTemplate(ledgerID: journal.id, name: "Expense", note: "", payee: "", cleared: true, enabled: true, scanInvoice: false, listIndex: 0, postings: [PostingTemplate(accountID: food.id, listIndex: 0), PostingTemplate(accountID: checking.id, listIndex: 1)]),
+            TransactionTemplate(ledgerID: journal.id, name: "Income", note: "", payee: "", cleared: true, enabled: true, scanInvoice: false, listIndex: 1, postings: [PostingTemplate(accountID: checking.id, listIndex: 0), PostingTemplate(accountID: salary.id, listIndex: 1)]),
+            TransactionTemplate(ledgerID: journal.id, name: "Transfer", note: "", payee: "", cleared: true, enabled: true, scanInvoice: false, listIndex: 2, postings: [PostingTemplate(accountID: checking.id, listIndex: 0), PostingTemplate(accountID: cash.id, listIndex: 1)])
+        ] : []
+        return JournalData(ledgers: [journal, travel], commodities: [usd, eur], accounts: [asset, checking, cash, income, salary, expense, food, groceries, transport], transactions: rows, transactionTemplates: templates, selectedLedgerID: journal.id)
     }
 }
 #endif

@@ -230,9 +230,10 @@ struct RegisterRenderRequest: @unchecked Sendable {
     let dateInterval: DateInterval?
     let transactionIDs: Set<UUID>?
     var searchField: TransactionSearchField = .anywhere
+    var filtersScope = false
 
     func matches(_ other: RegisterRenderRequest) -> Bool {
-        scope == other.scope && search == other.search && searchField == other.searchField && dateInterval == other.dateInterval &&
+        filtersScope == other.filtersScope && scope == other.scope && search == other.search && searchField == other.searchField && dateInterval == other.dateInterval &&
             transactionIDs == other.transactionIDs && RegisterPresentation.hasSameContent(data, other.data) && rows == other.rows
     }
 }
@@ -266,12 +267,40 @@ actor RegisterRenderWorker {
 
     private func filteredRows(_ request: RegisterRenderRequest, limit: Int? = nil) throws -> [LedgerTransaction] {
         let query = request.search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let accounts = Dictionary(uniqueKeysWithValues: request.data.accounts.map { ($0.id, $0.name) })
-        let ledgers = Dictionary(uniqueKeysWithValues: request.data.ledgers.map { ($0.id, $0.name) })
+        let accountsByID = Dictionary(uniqueKeysWithValues: request.data.accounts.map { ($0.id, $0) })
+        let defaults = Dictionary(grouping: request.data.commodities, by: \.ledgerID).compactMapValues { $0.first?.id }
+        let accounts = query.isEmpty ? [:] : accountsByID.mapValues(\.name)
+        let ledgers = query.isEmpty ? [:] : Dictionary(uniqueKeysWithValues: request.data.ledgers.map { ($0.id, $0.name) })
+        var scopedAccounts = Set<UUID>()
+        if request.filtersScope, case .account(let id) = request.scope {
+            let children = Dictionary(grouping: request.data.accounts.compactMap { account in account.parentID.map { ($0, account.id) } }, by: { $0.0 })
+            var pending = [id]
+            while let id = pending.popLast() {
+                guard scopedAccounts.insert(id).inserted else { continue }
+                pending.append(contentsOf: (children[id] ?? []).map { $0.1 })
+            }
+        }
+        let calendar = Calendar.current
+        let now = Date()
+        let today = calendar.dateInterval(of: .day, for: now)
+        let lastMonth = calendar.date(byAdding: .month, value: -1, to: now).flatMap { calendar.dateInterval(of: .month, for: $0) }
+        func isInScope(_ row: LedgerTransaction) -> Bool {
+            guard request.filtersScope else { return true }
+            switch request.scope {
+            case .all: return true
+            case .uncleared: return !row.cleared
+            case .repeating: return row.recurrenceRule.map { $0.frequency != .never } ?? false
+            case .account: return row.postings.contains { scopedAccounts.contains($0.accountID) }
+            case .currency(let id): return row.postings.contains { ($0.commodityID ?? accountsByID[$0.accountID]?.commodityID ?? defaults[row.ledgerID]) == id }
+            case .today: return today.map { row.date >= $0.start && row.date < $0.end } ?? false
+            case .lastMonth: return lastMonth.map { row.date >= $0.start && row.date < $0.end } ?? false
+            }
+        }
         var matches: [LedgerTransaction] = []
         if let limit { matches.reserveCapacity(max(0, min(limit, request.rows.count))) }
         for transaction in request.rows {
             try Task.checkCancellation()
+            guard isInScope(transaction) else { continue }
             if let interval = request.dateInterval, !(transaction.date >= interval.start && transaction.date < interval.end) { continue }
             if let ids = request.transactionIDs, !ids.contains(transaction.id) { continue }
             // Ordinary registers skip search-string allocation entirely.
