@@ -27,6 +27,12 @@ struct RegisterCashFlow {
     let expenses: [RegisterCashFlowBucket]
 
     static func build(data: JournalData, rows: [LedgerTransaction], scope: MobileTransactionScope) -> RegisterCashFlow {
+        build(data: data, rows: rows, scope: scope, cancellationCheck: {})
+    }
+
+    static func build(data: JournalData, rows: [LedgerTransaction], scope: MobileTransactionScope,
+                      cancellationCheck: () throws -> Void) rethrows -> RegisterCashFlow {
+        try cancellationCheck()
         let accounts = Dictionary(uniqueKeysWithValues: data.accounts.map { ($0.id, $0) })
         let currencies = Dictionary(uniqueKeysWithValues: data.commodities.map { ($0.id, $0) })
         let defaults = Dictionary(grouping: data.commodities, by: \.ledgerID).compactMapValues { $0.first?.id }
@@ -54,7 +60,8 @@ struct RegisterCashFlow {
             }
             buckets[account.id]!.transactionIDs.insert(transactionID)
         }
-        for transaction in rows {
+        for (index, transaction) in rows.enumerated() {
+            if index.isMultiple(of: 128) { try cancellationCheck() }
             for posting in transaction.postings {
                 guard let account = accounts[posting.accountID], account.kind == .income || account.kind == .expense,
                       categoryIDs?.contains(account.id) ?? true,
@@ -101,9 +108,12 @@ struct RegisterPresentation {
     /// Future occurrences stay reachable above today's entries without becoming
     /// the landing page every time a register opens.
     func initialDay(now: Date = Date(), calendar: Calendar = .current) -> Date? {
-        let days = months.flatMap(\.days).map(\.date)
-        guard let newest = days.first, Self.isFuture(newest, now: now, calendar: calendar) else { return nil }
-        return days.first { !Self.isFuture($0, now: now, calendar: calendar) } ?? days.last
+        guard let cutoff = calendar.dateInterval(of: .day, for: now)?.end,
+              let newest = months.first?.days.first?.date, newest >= cutoff else { return nil }
+        for month in months {
+            for day in month.days where day.date < cutoff { return day.date }
+        }
+        return months.last?.days.last?.date
     }
 
     static func isFuture(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> Bool {
@@ -111,6 +121,12 @@ struct RegisterPresentation {
     }
 
     static func build(data: JournalData, rows: [LedgerTransaction], scope: MobileTransactionScope, calendar: Calendar = .current) -> RegisterPresentation {
+        build(data: data, rows: rows, scope: scope, calendar: calendar, cancellationCheck: {})
+    }
+
+    static func build(data: JournalData, rows: [LedgerTransaction], scope: MobileTransactionScope, calendar: Calendar,
+                      cancellationCheck: () throws -> Void) rethrows -> RegisterPresentation {
+        try cancellationCheck()
         let accounts = Dictionary(uniqueKeysWithValues: data.accounts.map { ($0.id, $0) })
         let currencies = Dictionary(uniqueKeysWithValues: data.commodities.map { ($0.id, $0) })
         let defaults = Dictionary(grouping: data.commodities, by: \.ledgerID).compactMapValues { $0.first?.id }
@@ -138,10 +154,14 @@ struct RegisterPresentation {
         var cumulative: [UUID: [UUID: Decimal]] = [:]
         var scopedTotals: [UUID: Decimal] = [:]
         var scopeHasMultiCurrencyAccount = false
-        let chronological = data.transactions.filter { ledgerIDs.contains($0.ledgerID) }.sorted {
-            $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date < $1.date
+        var comparisons = 0
+        let chronological = try data.transactions.filter { ledgerIDs.contains($0.ledgerID) }.sorted { lhs, rhs in
+            comparisons += 1
+            if comparisons.isMultiple(of: 1024) { try cancellationCheck() }
+            return lhs.date == rhs.date ? lhs.id.canonicallyPrecedes(rhs.id) : lhs.date < rhs.date
         }
-        for transaction in chronological {
+        for (index, transaction) in chronological.enumerated() {
+            if index.isMultiple(of: 128) { try cancellationCheck() }
             for posting in transaction.postings {
                 if let id = currency(posting) {
                     cumulative[posting.accountID, default: [:]][id, default: 0] += posting.amount
@@ -187,10 +207,16 @@ struct RegisterPresentation {
             amounts[transaction.id] = money(displayed)
             balances[transaction.id] = money(running)
         }
-        let grouped = Dictionary(grouping: rows) { calendar.dateInterval(of: .month, for: $0.date)!.start }
-        let months = grouped.keys.sorted(by: >).map { month in
+        var grouped: [Date: [LedgerTransaction]] = [:]
+        for (index, row) in rows.enumerated() {
+            if index.isMultiple(of: 128) { try cancellationCheck() }
+            let month = calendar.dateInterval(of: .month, for: row.date)!.start
+            grouped[month, default: []].append(row)
+        }
+        let months = try grouped.keys.sorted(by: >).map { month in
+            try cancellationCheck()
             let monthRows = grouped[month]!
-            let cashFlow = RegisterCashFlow.build(data: data, rows: monthRows, scope: scope)
+            let cashFlow = try RegisterCashFlow.build(data: data, rows: monthRows, scope: scope, cancellationCheck: cancellationCheck)
             let days = Dictionary(grouping: monthRows) { calendar.startOfDay(for: $0.date) }
                 .map { MobileTransactionDaySection(date: $0.key, transactions: $0.value) }.sorted { $0.date > $1.date }
             return RegisterMonth(date: month, days: days, income: RegisterCashFlow.totals(cashFlow.income), expenses: RegisterCashFlow.totals(cashFlow.expenses))
@@ -301,23 +327,34 @@ struct RegisterSearchResult: @unchecked Sendable {
 actor RegisterRenderWorker {
     static let shared = RegisterRenderWorker()
 
-    func render(_ request: RegisterRenderRequest) async throws -> RegisterRenderResult {
-        try Task.checkCancellation()
-        #if DEBUG
-        if CommandLine.arguments.contains("--demo-slow-register") { try await Task.sleep(for: .seconds(2)) }
-        #endif
-        let rows = try filteredRows(request)
-        let presentation = RegisterPresentation.build(data: request.data, rows: rows, scope: request.scope, calendar: request.calendar)
-        try Task.checkCancellation()
-        return RegisterRenderResult(presentation: presentation)
+    nonisolated func render(_ request: RegisterRenderRequest) async throws -> RegisterRenderResult {
+        let work = Task.detached(priority: Task.currentPriority) {
+            try Task.checkCancellation()
+            #if DEBUG
+            if CommandLine.arguments.contains("--demo-slow-register") {
+                let seconds = CommandLine.arguments.contains("--demo-edge-loading") ? 5 : 2
+                try await Task.sleep(for: .seconds(seconds))
+            }
+            #endif
+            let rows = try Self.filteredRows(request)
+            let presentation = try RegisterPresentation.build(data: request.data, rows: rows, scope: request.scope,
+                calendar: request.calendar, cancellationCheck: { try Task.checkCancellation() })
+            try Task.checkCancellation()
+            return RegisterRenderResult(presentation: presentation)
+        }
+        return try await withTaskCancellationHandler {
+            try await work.value
+        } onCancel: {
+            work.cancel()
+        }
     }
 
     func search(_ request: RegisterRenderRequest, limit: Int? = nil) throws -> RegisterSearchResult {
         try Task.checkCancellation()
-        return RegisterSearchResult(rows: try filteredRows(request, limit: limit))
+        return RegisterSearchResult(rows: try Self.filteredRows(request, limit: limit))
     }
 
-    private func filteredRows(_ request: RegisterRenderRequest, limit: Int? = nil) throws -> [LedgerTransaction] {
+    private nonisolated static func filteredRows(_ request: RegisterRenderRequest, limit: Int? = nil) throws -> [LedgerTransaction] {
         let query = request.search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let accountsByID = Dictionary(uniqueKeysWithValues: request.data.accounts.map { ($0.id, $0) })
         let defaults = Dictionary(grouping: request.data.commodities, by: \.ledgerID).compactMapValues { $0.first?.id }

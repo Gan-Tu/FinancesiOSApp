@@ -53,7 +53,10 @@ struct RegisterInitialPositionProbe: UIViewRepresentable {
             let maximumOffset = max(-inset.top, scroll.contentSize.height - scroll.bounds.height + inset.bottom)
             let atTop = abs(frame.minY - top) < 2
             let atClampedEnd = scroll.contentOffset.y >= maximumOffset - 2 && frame.intersects(visible)
-            guard atTop || atClampedEnd else { return }
+            // Exact alignment is not guaranteed while List measures lazy rows.
+            // A visible target header is enough to safely reveal today's rows.
+            let targetIsVisible = visible.contains(CGPoint(x: frame.midX, y: frame.midY))
+            guard atTop || atClampedEnd || targetIsVisible else { return }
             armed = false
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.window != nil else { return }

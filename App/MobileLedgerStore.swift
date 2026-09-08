@@ -223,48 +223,9 @@ private struct MobileLedgerDerivedCache {
             recurrenceAnchorIDs[ruleID] = row.id
         }
 
-        var balancesByAccount: [UUID: [UUID?: Decimal]] = [:]
-        for transaction in allTransactionsDateDescending where transaction.date < balanceDateCutoff {
-            for posting in transaction.postings {
-                let commodityID = postingCommodityID(posting, ledgerID: transaction.ledgerID)
-                var accountID: UUID? = posting.accountID
-                while let currentID = accountID, let account = accountsByID[currentID] {
-                    balancesByAccount[currentID, default: [:]][commodityID, default: .zero] += posting.amount
-                    accountID = account.parentID
-                }
-            }
-        }
-        // Account/currency register scopes, per-row amount labels, row account
-        // flow text, and transaction search text are lazy. The dashboard only
-        // needs balances, totals, and ledger rows at startup, so large synced
-        // journals should not pay to build every inactive drill-down surface.
-
-        balanceRowsByAccount = balancesByAccount.mapValues { balances in
-            balances
-                .map { MobileBalanceRow(commodityID: $0.key, symbol: symbol(for: $0.key), amount: $0.value) }
-                .sorted { $0.symbol < $1.symbol }
-        }
-        ledgerTotalsByKind = Dictionary(uniqueKeysWithValues: accountsByLedger.keys.map { ledgerID in
-            let roots = (accountsByLedger[ledgerID] ?? []).filter { $0.parentID == nil }
-            let totals = Dictionary(uniqueKeysWithValues: AccountKind.allCases.map { kind in
-                let rows = roots
-                    .filter { $0.kind == kind }
-                    .flatMap { balanceRowsByAccount[$0.id] ?? [] }
-                    .reduce(into: [String: MobileBalanceRow]()) { partial, row in
-                        var existing = partial[row.id] ?? MobileBalanceRow(
-                            commodityID: row.commodityID,
-                            symbol: row.symbol,
-                            amount: .zero
-                        )
-                        existing.amount += row.amount
-                        partial[row.id] = existing
-                    }
-                    .values
-                    .sorted { $0.symbol < $1.symbol }
-                return (kind, rows)
-            })
-            return (ledgerID, totals)
-        })
+        let projection = AccountBalanceProjection.build(data: data, rows: allTransactionsDateDescending, cutoff: balanceDateCutoff)
+        balanceRowsByAccount = projection.balances
+        ledgerTotalsByKind = projection.totals
 
         ledgerSearchTextByID = Dictionary(uniqueKeysWithValues: data.ledgers.map { ledger in
             (ledger.id, Self.normalizedSearchText([ledger.name]))
@@ -419,6 +380,12 @@ final class MobileLedgerStore: ObservableObject {
     @Published private(set) var data: JournalData {
         didSet { appIconBadge?.update(data) }
     }
+    @Published private(set) var registerContentRevision: UInt64 = 0
+    @Published private(set) var searchContentRevision: UInt64 = 0
+    let registerPresentations = RegisterPresentationCache()
+    private var registerPrewarmTask: Task<Void, Never>?
+    private var dailyBalanceTask: Task<Void, Never>?
+    private var dailyBalanceRequest: (referenceDate: Date, calendar: Calendar, cutoff: Date)?
     @Published var validationError: ValidationError?
     let cloudSyncState = MobileCloudSyncState()
     private(set) var cloudSyncProgress: CloudSyncProgress {
@@ -502,6 +469,8 @@ final class MobileLedgerStore: ObservableObject {
     }
 
     deinit {
+        registerPrewarmTask?.cancel()
+        dailyBalanceTask?.cancel()
         transactionSearchWarmupTask?.cancel()
         transactionSearchWarmupDelayTask?.cancel()
     }
@@ -717,6 +686,7 @@ final class MobileLedgerStore: ObservableObject {
         }
         accountSearchResultCache.removeAll(keepingCapacity: true)
         templateSearchResultCache.removeAll(keepingCapacity: true)
+        clearTransactionListCaches()
     }
 
     /// Updates cached ledger labels and search text after a journal rename.
@@ -748,6 +718,7 @@ final class MobileLedgerStore: ObservableObject {
         accountSearchResultCache.removeAll(keepingCapacity: true)
         commoditySearchResultCache.removeAll(keepingCapacity: true)
         templateSearchResultCache.removeAll(keepingCapacity: true)
+        clearTransactionListCaches()
     }
 
     /// Adds a newly seeded journal to derived caches without rebuilding the
@@ -790,6 +761,7 @@ final class MobileLedgerStore: ObservableObject {
         accountSearchResultCache.removeAll(keepingCapacity: true)
         commoditySearchResultCache.removeAll(keepingCapacity: true)
         templateSearchResultCache.removeAll(keepingCapacity: true)
+        clearTransactionListCaches()
     }
 
     private func refreshDerivedCacheForJournalDeletion(
@@ -892,6 +864,8 @@ final class MobileLedgerStore: ObservableObject {
         }
         refreshLedgerTotalsByKind(ledgerID: ledgerID)
         accountSearchResultCache.removeAll(keepingCapacity: true)
+        derivedCache.transactionsByAccountScopeDateDescending.removeAll(keepingCapacity: true)
+        clearTransactionListCaches()
     }
 
     private func refreshDescendantCaches(for accounts: [Account]) {
@@ -952,6 +926,8 @@ final class MobileLedgerStore: ObservableObject {
     private func clearTransactionListCaches() {
         transactionRowsCache.removeAll(keepingCapacity: true)
         transactionDaySectionCache.removeAll(keepingCapacity: true)
+        registerContentRevision = registerPresentations.invalidate()
+        searchContentRevision &+= 1
     }
 
     private func refreshDerivedCacheForTransactionTemplateListChange(ledgerID: UUID) {
@@ -966,6 +942,7 @@ final class MobileLedgerStore: ObservableObject {
             derivedCache.transactionTemplateSearchTextByID[template.id] = transactionTemplateSearchText(for: template)
         }
         templateSearchResultCache.removeAll(keepingCapacity: true)
+        searchContentRevision &+= 1
     }
 
     private func refreshAccountNodeCaches(ledgerID: UUID) {
@@ -1299,7 +1276,12 @@ final class MobileLedgerStore: ObservableObject {
         }
         data.selectedLedgerID = ledgerID
         if backupFileOperationInProgress { backupSelectionChanged = true; return }
-        save(syncCloud: true, refreshCache: false)
+        // Selection cannot alter ledger invariants or cloud conflicts. Avoid
+        // validating the entire journal and waiting on a cloud-status SQL read
+        // just because navigation changed the selected journal.
+        validationError = nil
+        scheduleDeferredLocalSave(validateSnapshot: false, scheduleCloudAfterSuccess: false, refreshCloudStateAfterSuccess: false)
+        prewarmRegister(ledgerID: ledgerID)
     }
 
     func accounts(for ledgerID: UUID) -> [Account] {
@@ -1600,8 +1582,36 @@ final class MobileLedgerStore: ObservableObject {
     }
 
     private func refreshBalancesForCurrentDayIfNeeded() {
-        if derivedCache.balanceDateCutoff != Calendar.current.dateInterval(of: .day, for: Date())?.end {
-            refreshDerivedCache()
+        refreshDailyBalancesIfNeeded()
+    }
+
+    func refreshDailyBalancesIfNeeded(referenceDate: Date = Date(), calendar: Calendar = .current) {
+        guard let cutoff = calendar.dateInterval(of: .day, for: referenceDate)?.end else { return }
+        dailyBalanceRequest = (referenceDate, calendar, cutoff)
+        guard cutoff != derivedCache.balanceDateCutoff, dailyBalanceTask == nil else { return }
+        let snapshot = AccountBalanceSnapshot(data: data, rows: derivedCache.allTransactionsDateDescending, cutoff: cutoff)
+        let revision = registerContentRevision
+        dailyBalanceTask = Task { [weak self] in
+            let work = Task.detached(priority: .utility) {
+                try AccountBalanceProjection.build(data: snapshot.data, rows: snapshot.rows, cutoff: snapshot.cutoff,
+                    cancellationCheck: { try Task.checkCancellation() })
+            }
+            let projection = try? await withTaskCancellationHandler {
+                try await work.value
+            } onCancel: { work.cancel() }
+            guard let self else { return }
+            self.dailyBalanceTask = nil
+            guard let projection, !Task.isCancelled else { return }
+            guard self.registerContentRevision == revision, self.dailyBalanceRequest?.cutoff == projection.cutoff else {
+                if let latest = self.dailyBalanceRequest {
+                    self.refreshDailyBalancesIfNeeded(referenceDate: latest.referenceDate, calendar: latest.calendar)
+                }
+                return
+            }
+            self.objectWillChange.send()
+            self.derivedCache.balanceRowsByAccount = projection.balances
+            self.derivedCache.ledgerTotalsByKind = projection.totals
+            self.derivedCache.balanceDateCutoff = projection.cutoff
         }
     }
 
@@ -2591,6 +2601,7 @@ final class MobileLedgerStore: ObservableObject {
         appIconBadge?.setActive(isForegroundActive)
         refreshCloudKitForegroundTriggers()
         if isForegroundActive {
+            refreshDailyBalancesIfNeeded()
             synchronizeIfEnabled()
         } else {
             deferredCloudSaveToken = nil
@@ -2607,7 +2618,28 @@ final class MobileLedgerStore: ObservableObject {
         requestCloudSync(reportProgress: false, requireFollowUpIfBusy: requireFollowUpIfBusy)
     }
 
+    private func prewarmRegister(ledgerID: UUID?) {
+        #if DEBUG
+        // Keep the explicit slow-load fixture cold so loading/back-gesture
+        // tests actually exercise the pending presentation state.
+        if CommandLine.arguments.contains("--demo-slow-register") { return }
+        #endif
+        guard let ledgerID, !requiresJournalRecovery else { return }
+        registerPrewarmTask?.cancel()
+        let cache = registerPresentations
+        let request = RegisterRenderRequest(data: data, rows: registerSourceRows(ledgerID: ledgerID), scope: .all, search: "", dateInterval: nil, transactionIDs: nil, filtersScope: true)
+        let key = RegisterPresentationCacheKey(revision: registerContentRevision, ledgerID: ledgerID, request: request)
+        registerPrewarmTask = Task(priority: .utility) {
+            do {
+                try await Task.sleep(for: .milliseconds(150))
+                try Task.checkCancellation()
+                _ = try await cache.load(request, key: key, speculative: true)
+            } catch { /* Speculative preparation must not surface an error. */ }
+        }
+    }
+
     func prepareAfterInitialRender() async {
+        prewarmRegister(ledgerID: selectedLedgerID)
         warmTransactionSearchCacheInBackground()
         // The initial and subsequent scene-phase callbacks own sync activation.
     }
@@ -2916,7 +2948,8 @@ final class MobileLedgerStore: ObservableObject {
     private func scheduleDeferredLocalSave(
         trackSyncChanges: Bool = true,
         validateSnapshot: Bool = true,
-        scheduleCloudAfterSuccess: Bool = false
+        scheduleCloudAfterSuccess: Bool = false,
+        refreshCloudStateAfterSuccess: Bool = true
     ) {
         guard allowJournalMutation() else { return }
         let snapshot = data
@@ -2925,16 +2958,21 @@ final class MobileLedgerStore: ObservableObject {
         let supportDirectory = supportDirectory
         Self.deferredPersistenceQueue.async { [weak self, snapshot, databaseURL, baseline, trackSyncChanges, validateSnapshot] in
             do {
-                if validateSnapshot {
+                let previous = baseline.snapshot
+                // A failed prior write clears the baseline; the next persist
+                // becomes a full replacement and must revalidate even if this
+                // request was only a selection change.
+                if validateSnapshot || previous == nil {
                     try Self.validateCandidateData(snapshot, operation: "Journal")
                 }
                 let store = SQLiteJournalStore(databaseURL: databaseURL)
-                let previous = baseline.snapshot
                 try store.persist(snapshot, previous: previous, trackSyncChanges: trackSyncChanges)
                 baseline.snapshot = snapshot
                 Self.removeObsoleteAttachmentFiles(supportDirectory: supportDirectory, previous: previous, data: snapshot)
-                Task { @MainActor [weak self] in
-                    self?.refreshCloudSyncDataAvailability()
+                if refreshCloudStateAfterSuccess {
+                    Task { @MainActor [weak self] in
+                        self?.refreshCloudSyncDataAvailability()
+                    }
                 }
                 if scheduleCloudAfterSuccess {
                     Task { @MainActor [weak self] in

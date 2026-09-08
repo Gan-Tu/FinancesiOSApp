@@ -58,9 +58,11 @@ private struct FinancesMobileNormalContent: View {
             .task { await store.prepareAfterInitialRender() }
             .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
                 store.refreshAppIconBadge()
+                store.refreshDailyBalancesIfNeeded()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in
                 store.refreshAppIconBadge()
+                store.refreshDailyBalancesIfNeeded()
             }
     }
 }

@@ -381,6 +381,8 @@ struct TransactionListScreen: View {
     @State private var selectedMonth: Date?
     @State private var presentation = RegisterPresentation(months: [], amounts: [:], balances: [:])
     @State private var renderRequest: RegisterRenderRequest?
+    @State private var renderKey: RegisterPresentationCacheKey?
+    @State private var appliedRenderKey: RegisterPresentationCacheKey?
     @State private var renderID = UUID()
     @State private var isActive = false
     @State private var hasLoaded = false
@@ -390,7 +392,7 @@ struct TransactionListScreen: View {
     @State private var loadingVisible = false
     @State private var loadError: String?
 
-    private enum ScrollTarget: Hashable { case day(Date) }
+    private enum ScrollTarget: Hashable { case day(Date), transaction(UUID) }
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -455,8 +457,8 @@ struct TransactionListScreen: View {
             .modifier(TransactionDuplicateConfirmation(transaction: $pendingDuplication))
             .onAppear { isActive = true; scheduleRefresh() }
             .onDisappear { isActive = false; renderRequest = nil }
-            .onReceive(store.$data.removeDuplicates(by: RegisterPresentation.hasSameContent).debounce(for: .milliseconds(40), scheduler: RunLoop.main)) { _ in scheduleRefresh() }
-            .task(id: renderID) { [renderID, renderRequest] in await renderCurrentRequest(renderRequest, id: renderID) }
+            .onReceive(store.$registerContentRevision.debounce(for: .milliseconds(40), scheduler: RunLoop.main)) { _ in scheduleRefresh() }
+            .task(id: renderID) { [renderID, renderRequest, renderKey] in await renderCurrentRequest(renderRequest, key: renderKey, id: renderID) }
             .onChange(of: includeAllFutureEntries) { if searchFilter != nil { scheduleRefresh() } }
             .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in scheduleRefresh() }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in scheduleRefresh() }
@@ -467,13 +469,27 @@ struct TransactionListScreen: View {
             }
             .task(id: initialDay) {
                 guard let day = initialDay, !contentReady, isActive else { return }
-                await Task.yield()
-                guard !Task.isCancelled else { return }
-                var update = Transaction(animation: nil); update.disablesAnimations = true
-                withTransaction(update) {
-                    proxy.scrollTo(ScrollTarget.day(day), anchor: .top)
-                    initialScrollRequested = true
+                let firstRow = presentation.months.lazy.flatMap(\.days).first { $0.date == day }?.transactions.first?.id
+                // Retry after lazy row measurements settle. The alternate row
+                // anchor handles headers whose estimated offset is inaccurate.
+                for attempt in 0..<3 {
+                    await Task.yield()
+                    guard !Task.isCancelled, isActive, !contentReady else { return }
+                    var update = Transaction(animation: nil); update.disablesAnimations = true
+                    withTransaction(update) {
+                        if attempt == 1, let firstRow {
+                            proxy.scrollTo(ScrollTarget.transaction(firstRow), anchor: .center)
+                        } else {
+                            proxy.scrollTo(ScrollTarget.day(day), anchor: .top)
+                        }
+                        initialScrollRequested = true
+                    }
+                    do { try await Task.sleep(for: .milliseconds(attempt == 0 ? 120 : 220)) } catch { return }
                 }
+                // Navigation and scrolling must never remain disabled forever
+                // if UIKit does not report the expected viewport callback.
+                guard !Task.isCancelled, isActive, !contentReady else { return }
+                contentReady = true
             }
         }
     }
@@ -508,6 +524,7 @@ struct TransactionListScreen: View {
                             .padding(EdgeInsets(top: 8, leading: 28, bottom: 8, trailing: 20))
                     }
                     .buttonStyle(TransactionRowButtonStyle())
+                    .id(ScrollTarget.transaction(transaction.id))
                     .accessibilityIdentifier("register-row-\(transaction.id.uuidString)")
                     .listRowInsets(EdgeInsets())
                     .listRowSeparator(.hidden)
@@ -560,32 +577,56 @@ struct TransactionListScreen: View {
         if searchFilter != nil {
             request.searchDatePolicy = TransactionSearchDatePolicy(includeAllFuture: includeAllFutureEntries, now: request.referenceDate, calendar: request.calendar)
         }
-        if let previous = renderRequest, request.matches(previous) { return }
-        renderRequest = request
+        let key = RegisterPresentationCacheKey(revision: store.registerContentRevision, ledgerID: ledgerID ?? store.selectedLedgerID, request: request)
+        if appliedRenderKey == key, hasLoaded {
+            // Returning to the already displayed query must also detach a
+            // different pending query, so a late result cannot replace it.
+            if renderKey != key {
+                renderKey = key
+                renderRequest = nil
+                renderID = UUID()
+            }
+            loadError = nil
+            return
+        }
+        if renderKey == key, renderRequest != nil { return }
+        renderKey = key
         renderID = UUID()
+        if let cached = store.registerPresentations.cached(for: key) {
+            renderRequest = nil
+            applyRenderResult(cached, key: key)
+        } else {
+            renderRequest = request
+        }
     }
 
-    private func renderCurrentRequest(_ snapshot: RegisterRenderRequest?, id: UUID) async {
-        guard let request = snapshot, isActive, id == renderID, !Task.isCancelled else { return }
+    private func renderCurrentRequest(_ snapshot: RegisterRenderRequest?, key: RegisterPresentationCacheKey?, id: UUID) async {
+        guard let request = snapshot, let key, isActive, id == renderID, !Task.isCancelled else { return }
         do {
-            let result = try await RegisterRenderWorker.shared.render(request)
-            guard !Task.isCancelled, isActive, id == renderID else { return }
-            var update = Transaction(animation: nil); update.disablesAnimations = true
-            withTransaction(update) {
-                presentation = result.presentation
-                hasLoaded = true
-                loadError = nil
-                if !contentReady {
-                    initialScrollRequested = false
-                    initialDay = dateInterval == nil ? presentation.initialDay() : nil
-                    if initialDay == nil { contentReady = true }
-                }
-            }
+            let result = try await store.registerPresentations.load(request, key: key)
+            guard !Task.isCancelled, isActive, id == renderID,
+                  key.revision == store.registerContentRevision else { return }
+            applyRenderResult(result, key: key)
         } catch is CancellationError { return }
         catch {
             guard id == renderID else { return }
             loadError = error.localizedDescription
             hasLoaded = true; contentReady = true
+        }
+    }
+
+    private func applyRenderResult(_ result: RegisterRenderResult, key: RegisterPresentationCacheKey) {
+        var update = Transaction(animation: nil); update.disablesAnimations = true
+        withTransaction(update) {
+            presentation = result.presentation
+            appliedRenderKey = key
+            hasLoaded = true
+            loadError = nil
+            if !contentReady {
+                initialScrollRequested = false
+                initialDay = dateInterval == nil ? presentation.initialDay() : nil
+                if initialDay == nil { contentReady = true }
+            }
         }
     }
 
@@ -1344,7 +1385,7 @@ struct QuickSearchSheet: View {
         .onChange(of: includeAllFutureEntries) { searchRevision = UUID() }
         .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in searchRevision = UUID() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in searchRevision = UUID() }
-        .onReceive(store.$data.removeDuplicates(by: RegisterPresentation.hasSameContent)) { _ in searchRevision = UUID() }
+        .onReceive(store.$searchContentRevision) { _ in searchRevision = UUID() }
         .task(id: searchRevision) { await refreshSearchResults() }
     }
 
