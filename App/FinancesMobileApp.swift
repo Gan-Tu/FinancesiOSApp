@@ -38,6 +38,12 @@ private final class FinancesMobileLaunchState: ObservableObject {
         #else
         store = liveVerification ? nil : MobileLedgerStore()
         #endif
+        // Register before scene rendering so a cold silent-push launch can
+        // refresh the badge too. Permission is requested only in an active scene.
+        if !CommandLine.arguments.contains("--demo"),
+           ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
+            store?.enableAppIconBadges()
+        }
     }
 }
 
@@ -49,6 +55,12 @@ private struct FinancesMobileNormalContent: View {
             .environmentObject(store)
             .preferredColorScheme(store.data.appearance.colorScheme)
             .task { await store.prepareAfterInitialRender() }
+            .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
+                store.refreshAppIconBadge()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in
+                store.refreshAppIconBadge()
+            }
     }
 }
 

@@ -400,7 +400,9 @@ private final class MobileCloudKitAccountObservation: @unchecked Sendable {
 final class MobileLedgerStore: ObservableObject {
     private static let deferredPersistenceQueue = DispatchQueue(label: "FinancesMobile.MobileLedgerStore.deferredPersistence", qos: .utility)
 
-    @Published private(set) var data: JournalData
+    @Published private(set) var data: JournalData {
+        didSet { appIconBadge?.update(data) }
+    }
     @Published var validationError: ValidationError?
     @Published private(set) var cloudSyncProgress = CloudSyncProgress.idle
     @Published private(set) var isUnlocked = true
@@ -408,6 +410,7 @@ final class MobileLedgerStore: ObservableObject {
     @Published private(set) var cloudSyncConflicts: [CloudKitSyncConflict] = []
     @Published private(set) var requiresJournalRecovery = false
 
+    private var appIconBadge: MobileAppIconBadge?
     private let supportDirectory: URL
     private let sqliteStore: SQLiteJournalStore
     private let persistenceBaseline = MobilePersistenceBaseline()
@@ -2492,6 +2495,16 @@ final class MobileLedgerStore: ObservableObject {
         requestCloudSync(reportProgress: true)
     }
 
+    func enableAppIconBadges(using badge: MobileAppIconBadge? = nil) {
+        guard appIconBadge == nil, !requiresJournalRecovery else { return }
+        let badge = badge ?? MobileAppIconBadge()
+        appIconBadge = badge
+        badge.update(data)
+        badge.setActive(isForegroundActive)
+    }
+
+    func refreshAppIconBadge() { appIconBadge?.refresh() }
+
     func setSceneActive(_ active: Bool, sceneID: UUID) {
         let wasActive = isForegroundActive
         if active { activeSceneIDs.insert(sceneID) } else { activeSceneIDs.remove(sceneID) }
@@ -2503,6 +2516,7 @@ final class MobileLedgerStore: ObservableObject {
             do { try flushLocalChanges() }
             catch { validationError = ValidationError(message: "Save failed: \(error.localizedDescription)") }
         }
+        appIconBadge?.setActive(isForegroundActive)
         refreshCloudKitForegroundTriggers()
         if isForegroundActive {
             synchronizeIfEnabled()
@@ -2535,7 +2549,9 @@ final class MobileLedgerStore: ObservableObject {
     func synchronizeFromNotification(isForeground: Bool) async -> CloudKitBackgroundRefreshOutcome {
         guard !backupFileOperationInProgress, data.syncEnabled, cloudKitSyncDependencies.automaticTriggersEnabled, !requiresJournalRecovery else { return .noData }
         // An active app keeps foreground ownership; the callback still has its own deadline.
-        return await cloudSyncCoordinator.backgroundRefresh(isForeground: isForeground)
+        let outcome = await cloudSyncCoordinator.backgroundRefresh(isForeground: isForeground)
+        await appIconBadge?.waitForBackgroundRefresh()
+        return outcome
     }
 
     func requestCloudKitSync(reportProgress: Bool = true, requireFollowUpIfBusy: Bool = true) {
