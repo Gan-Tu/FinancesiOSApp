@@ -1,5 +1,13 @@
 import SwiftUI
 
+/// A short group fade with coordinated layout movement, shared by explicit
+/// disclosure controls. Do not attach this to arbitrary journal data updates.
+enum FinanceMotion {
+    static func disclosure(reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .easeInOut(duration: 0.28)
+    }
+}
+
 /// A record-based upload bar, or an activity bar when CloudKit has no total.
 struct CloudSyncProgressBar: View {
     let progress: CloudSyncProgress

@@ -7,6 +7,7 @@ enum TransactionEditorField: Hashable {
 
 struct TransactionEditorView: View {
     @EnvironmentObject private var store: MobileLedgerStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dismiss) private var dismiss
     var title: String
     private let initialDraft: TransactionDraft
@@ -53,14 +54,19 @@ struct TransactionEditorView: View {
                                     changeAmount: { text in
                                         if let index = draft.postings.firstIndex(where: { $0.id == posting.id }) { updateAmount(text, at: index) }
                                     }, chooseAccount: { focusedField = nil; accountPostingID = posting.id }) {
-                                        draft.postings.removeAll { $0.id == posting.id }
+                                        withAnimation(FinanceMotion.disclosure(reduceMotion: reduceMotion)) {
+                                            draft.postings.removeAll { $0.id == posting.id }
+                                        }
                                     }
                             }
+                            .transition(.opacity)
                         }
                     }
                     HStack {
                         Button {
-                            draft.postings.append(PostingDraft(accountID: store.leafAccountNodes(ledgerID: draft.ledgerID).first?.account.id, amount: ""))
+                            withAnimation(FinanceMotion.disclosure(reduceMotion: reduceMotion)) {
+                                draft.postings.append(PostingDraft(accountID: store.leafAccountNodes(ledgerID: draft.ledgerID).first?.account.id, amount: ""))
+                            }
                         } label: {
                             Image(systemName: "plus.circle.fill").font(.system(size: 22)).foregroundStyle(.green)
                         }
@@ -577,6 +583,7 @@ struct JournalEditorView: View {
 
 struct TemplateEditorView: View {
     @EnvironmentObject private var store: MobileLedgerStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dismiss) private var dismiss
     @State private var draft: TransactionTemplateDraft
     @State private var showingDeleteConfirmation = false
@@ -605,15 +612,20 @@ struct TemplateEditorView: View {
                                     .buttonStyle(.plain)
                                     if draft.postings.count > 2 {
                                         Button("Remove Posting", systemImage: "minus.circle", role: .destructive) {
-                                            draft.postings.removeAll { $0.id == posting.id }
+                                            withAnimation(FinanceMotion.disclosure(reduceMotion: reduceMotion)) {
+                                                draft.postings.removeAll { $0.id == posting.id }
+                                            }
                                         }.labelStyle(.iconOnly).buttonStyle(.plain).foregroundStyle(.red)
                                     }
                                 }
                             }
+                            .transition(.opacity)
                         }
                     }
                     Button {
-                        draft.postings.append(PostingTemplateDraft(accountID: store.leafAccountNodes(ledgerID: draft.ledgerID).first?.id))
+                        withAnimation(FinanceMotion.disclosure(reduceMotion: reduceMotion)) {
+                            draft.postings.append(PostingTemplateDraft(accountID: store.leafAccountNodes(ledgerID: draft.ledgerID).first?.id))
+                        }
                     } label: {
                         Image(systemName: "plus.circle.fill").font(.system(size: 22)).foregroundStyle(.green)
                     }

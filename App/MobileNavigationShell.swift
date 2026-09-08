@@ -151,7 +151,7 @@ struct JournalOverviewScreen: View {
             TransactionLinksSection(ledgerID: ledgerID) { navigationPath.append(.templates(ledgerID)) }
             Section {
                 ForEach(AccountKind.allCases) { kind in
-                    Button { withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { toggleKind(kind) } } label: {
+                    Button { withAnimation(FinanceMotion.disclosure(reduceMotion: reduceMotion)) { toggleKind(kind) } } label: {
                         HStack {
                             Text(groupTitle(kind)).fontWeight(.semibold)
                                 .accessibilityIdentifier("account-kind-title-\(kind.rawValue)")
@@ -161,7 +161,8 @@ struct JournalOverviewScreen: View {
                                     Text(moneyString(row.amount, symbol: row.symbol)).foregroundStyle(.secondary).monospacedDigit().font(.subheadline)
                                 }
                             }
-                            Image(systemName: expandedKinds.contains(kind) ? "chevron.down" : "chevron.right")
+                            Image(systemName: "chevron.down")
+                                .rotationEffect(.degrees(expandedKinds.contains(kind) ? 180 : 0))
                                 .font(.subheadline.weight(.semibold)).foregroundStyle(.blue)
                                 .accessibilityHidden(true)
                         }
@@ -188,12 +189,13 @@ struct JournalOverviewScreen: View {
                                         .labelStyle(.iconOnly).buttonStyle(.borderless)
                                 }
                             }
+                            .transition(.opacity)
                             .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
                             .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
                             .contextMenu {
                                 if node.hasChildren {
                                     Button(collapsedAccounts.contains(node.id) ? "Expand Subaccounts" : "Collapse Subaccounts") {
-                                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { toggleAccount(node.id) }
+                                        withAnimation(FinanceMotion.disclosure(reduceMotion: reduceMotion)) { toggleAccount(node.id) }
                                     }
                                 }
 
@@ -236,6 +238,10 @@ struct JournalOverviewScreen: View {
             }
         }
         .listStyle(.insetGrouped)
+        // AppStorage may publish outside the button's animation transaction.
+        // Scope the list animation to the persisted disclosure values too.
+        .animation(FinanceMotion.disclosure(reduceMotion: reduceMotion), value: expandedKindIDs)
+        .animation(FinanceMotion.disclosure(reduceMotion: reduceMotion), value: collapsedAccountIDs)
         .compactGroupedForm()
         .safeAreaPadding(.top, 24)
         .navigationTitle(store.ledger(ledgerID)?.name ?? "Journal")
@@ -369,11 +375,12 @@ struct TransactionListScreen: View {
                         .padding(.horizontal, 20).padding(.vertical, 8)
                         .background(Color(uiColor: .systemBackground))
                         .overlay(alignment: .bottom) { Divider() }
-                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .transition(.opacity)
                         .accessibilityElement(children: .contain)
                         .accessibilityIdentifier("register-chart-panel")
                 }
             }
+            .animation(FinanceMotion.disclosure(reduceMotion: reduceMotion), value: showsChart)
             .contentMargins(.bottom, 24, for: .scrollContent)
             .environment(\.defaultMinListRowHeight, 0)
             .overlay {
@@ -390,7 +397,7 @@ struct TransactionListScreen: View {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     if dateInterval == nil {
                         Button(showsChart ? "Hide Chart" : "Show Chart", systemImage: showsChart ? "chart.bar.fill" : "chart.bar") {
-                            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.22)) { showsChart.toggle() }
+                            withAnimation(FinanceMotion.disclosure(reduceMotion: reduceMotion)) { showsChart.toggle() }
                         }
                         .accessibilityIdentifier("toggle-transaction-chart")
                         .accessibilityValue(showsChart ? "Shown" : "Hidden")
@@ -581,6 +588,7 @@ struct RegisterRow: View, Equatable {
 
 struct TemplateListScreen: View {
     @EnvironmentObject private var store: MobileLedgerStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let ledgerID: UUID
     @Binding var route: EditorRoute?
 
@@ -634,7 +642,7 @@ struct TemplateListScreen: View {
     private func templateRow(_ template: TransactionTemplate, included: Bool) -> some View {
         HStack(spacing: 12) {
             Button {
-                withAnimation { store.setTransactionTemplateIncluded(template.id, included: !included) }
+                withAnimation(FinanceMotion.disclosure(reduceMotion: reduceMotion)) { store.setTransactionTemplateIncluded(template.id, included: !included) }
             } label: {
                 Image(systemName: included ? "minus.circle.fill" : "plus.circle.fill")
                     .font(.system(size: 22))
@@ -651,6 +659,7 @@ struct TemplateListScreen: View {
             .accessibilityLabel("Edit template \(template.name)")
         }
         .buttonStyle(.plain)
+        .transition(.opacity)
         .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
     }
 }
