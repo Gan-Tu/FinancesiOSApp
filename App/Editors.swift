@@ -17,6 +17,7 @@ struct TransactionEditorView: View {
     @State private var accountPostingID: UUID?
     @State private var showingRecurringSaveScope = false
     @State private var hasAppliedInitialFocus = false
+    @State private var showingDatePicker = false
 
     init(title: String, initialDraft: TransactionDraft, scanInvoice: Bool = false) {
         self.title = title
@@ -82,11 +83,31 @@ struct TransactionEditorView: View {
 
                 FinanceFormCard {
                     FinanceFormRow {
-                        NavigationLink {
-                            TransactionDateEditor(date: $draft.date)
+                        Button {
+                            hasAppliedInitialFocus = true
+                            focusedField = nil
+                            withAnimation(FinanceMotion.disclosure(reduceMotion: reduceMotion)) {
+                                showingDatePicker.toggle()
+                            }
                         } label: {
                             FinanceFormLabel(title: "Date", value: compactTransactionDate(draft.date), chevron: false)
-                        }.buttonStyle(.plain)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("transaction-date-toggle")
+                        .accessibilityLabel("Date")
+                        .accessibilityValue(compactTransactionDate(draft.date))
+                        .accessibilityHint(showingDatePicker ? "Collapse date picker" : "Expand date picker")
+                    }
+                    if showingDatePicker {
+                        DatePicker("Date", selection: $draft.date, displayedComponents: [.date, .hourAndMinute])
+                            .datePickerStyle(.wheel)
+                            .labelsHidden()
+                            .frame(maxWidth: .infinity)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 8)
+                            .overlay(alignment: .bottom) { Divider().padding(.leading, 20) }
+                            .accessibilityIdentifier("transaction-date-picker")
+                            .transition(.opacity)
                     }
                     FinanceFormRow {
                         VStack(alignment: .leading, spacing: 2) {
@@ -174,8 +195,15 @@ struct TransactionEditorView: View {
                 guard initialDraft.id == nil, !scanInvoice, !hasAppliedInitialFocus else { return }
                 hasAppliedInitialFocus = true
                 do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
-                guard focusedField == nil, accountPostingID == nil else { return }
+                guard focusedField == nil, accountPostingID == nil, !showingDatePicker else { return }
                 focusedField = draft.postings.first.map { .amount($0.id) }
+            }
+            .onChange(of: focusedField) { _, field in
+                if field != nil && showingDatePicker {
+                    withAnimation(FinanceMotion.disclosure(reduceMotion: reduceMotion)) {
+                        showingDatePicker = false
+                    }
+                }
             }
             .confirmationDialog(
                 recurrencePolicy.requiresScheduleConfirmation ? "Update repeating schedule" : "Save recurring transaction changes",

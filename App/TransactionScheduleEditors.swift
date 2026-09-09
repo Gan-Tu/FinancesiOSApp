@@ -24,19 +24,6 @@ func repeatEndDescription(_ draft: TransactionDraft) -> String {
     return "Never"
 }
 
-struct TransactionDateEditor: View {
-    @Binding var date: Date
-    var body: some View {
-        FinanceForm {
-            FinanceFormCard {
-                DatePicker("Date", selection: $date, displayedComponents: [.date, .hourAndMinute])
-                    .datePickerStyle(.wheel).labelsHidden().padding(.horizontal, 8)
-            }
-        }
-        .navigationTitle("Date").navigationBarTitleDisplayMode(.inline)
-    }
-}
-
 struct RepeatFrequencyEditor: View {
     @Environment(\.dismiss) private var dismiss
     @Binding var draft: TransactionDraft
