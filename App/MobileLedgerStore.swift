@@ -1996,10 +1996,24 @@ final class MobileLedgerStore: ObservableObject {
         let templatePostings = template.postings
             .sorted { $0.listIndex < $1.listIndex }
             .map { PostingDraft(accountID: $0.accountID, amount: "0.00") }
-        if templatePostings.count >= 2 {
-            draft.postings = templatePostings
+        draft.postings = templatePostings
+        while draft.postings.count < 2 {
+            draft.postings.append(PostingDraft(accountID: nil, amount: "0.00"))
         }
         return draft
+    }
+
+    /// Resolve unspecified postings and broad categories before opening a template's editor.
+    /// Balance-sheet accounts can carry transactions and sub-accounts at the same time,
+    /// so a specified bank/card account is retained even when it has children.
+    func templateAccountSelectionPostingIDs(in draft: TransactionDraft) -> [UUID] {
+        let categoryGroups = Set(accountNodes(ledgerID: draft.ledgerID).filter {
+            $0.hasChildren && ($0.account.kind == .expense || $0.account.kind == .income)
+        }.map(\.id))
+        return draft.postings.filter { posting in
+            guard let account = account(posting.accountID), account.ledgerID == draft.ledgerID else { return true }
+            return account.isGroup || categoryGroups.contains(account.id)
+        }.map(\.id)
     }
 
     private func refreshRecurringProjections(referenceDate: Date = Date(), syncCloud: Bool) {

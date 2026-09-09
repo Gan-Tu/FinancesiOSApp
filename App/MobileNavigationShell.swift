@@ -1514,7 +1514,7 @@ struct QuickSearchSheet: View {
 
     private func useTemplate(_ template: TransactionTemplate) {
         store.selectLedger(template.ledgerID)
-        route = .transaction(store.draft(for: template), "New From Template", scanInvoice: template.scanInvoice)
+        route = .newFromTemplate(template, "New From Template")
         dismissSheet()
     }
 

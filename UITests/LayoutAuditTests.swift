@@ -41,7 +41,7 @@ final class LayoutAuditTests: XCTestCase {
 
     func testTransactionAndPickerScreens() throws {
         openJournal()
-        tap("New Transaction"); tap("Expense")
+        tap("New Transaction"); tap("Expense"); app.chooseTemplateAccount()
         capture("11 New Transaction")
         tap("transaction-date-toggle")
         let datePicker = app.descendants(matching: .any).matching(identifier: "transaction-date-picker").firstMatch
@@ -106,7 +106,7 @@ final class LayoutAuditTests: XCTestCase {
 
     func testLongAccountLabelsKeepSelectionInsideCard() throws {
         openJournal()
-        tap("New Transaction"); tap("Expense")
+        tap("New Transaction"); tap("Expense"); app.chooseTemplateAccount()
         tap("Checking"); tap("New Account")
         let name = "Household essentials and everyday grocery shopping"
         app.textFields["Name"].tap(); app.textFields["Name"].typeText(name)

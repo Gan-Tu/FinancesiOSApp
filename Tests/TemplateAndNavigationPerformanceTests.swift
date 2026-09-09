@@ -38,6 +38,52 @@ final class TemplateAndNavigationPerformanceTests: XCTestCase {
         XCTAssertTrue(final.transactionTemplates(for: existingLedger).isEmpty)
     }
 
+    func testTemplateEntrySelectsOnlyUnspecifiedAccountsAndBroadCategories() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var data = DemoData.fixture(includeTemplates: true)
+        let checking = try XCTUnwrap(data.accounts.first { $0.name == "Checking" })
+        let groceries = try XCTUnwrap(data.accounts.first { $0.name == "Groceries" })
+        let expenses = try XCTUnwrap(data.accounts.first { $0.name == "Expenses" })
+        data.accounts.append(Account(ledgerID: checking.ledgerID, parentID: checking.id,
+            commodityID: checking.commodityID, name: "Checking sub-account", kind: .asset))
+        let store = MobileLedgerStore(supportDirectory: directory, initialData: data)
+        let income = try XCTUnwrap(data.transactionTemplates.first { $0.name == "Income" })
+        XCTAssertTrue(store.templateAccountSelectionPostingIDs(in: store.draft(for: income)).isEmpty,
+            "A complete template must open directly, even when its bank account has children")
+        var template = try XCTUnwrap(data.transactionTemplates.first { $0.name == "Expense" })
+        template.note = "Keep note"; template.payee = "Keep payee"; template.cleared = false
+        let grouped = store.draft(for: template)
+        XCTAssertEqual(store.templateAccountSelectionPostingIDs(in: grouped), [grouped.postings[0].id])
+        XCTAssertEqual(grouped.postings[1].accountID, checking.id)
+        XCTAssertEqual(grouped.note, template.note)
+        XCTAssertEqual(grouped.payee, template.payee)
+        XCTAssertFalse(grouped.cleared)
+
+        template.postings[0].accountID = groceries.id
+        XCTAssertTrue(store.templateAccountSelectionPostingIDs(in: store.draft(for: template)).isEmpty)
+        template.postings[0].accountID = expenses.id
+        let rootCategory = store.draft(for: template)
+        XCTAssertEqual(store.templateAccountSelectionPostingIDs(in: rootCategory), [rootCategory.postings[0].id])
+        template.postings[0].accountID = nil
+        let missing = store.draft(for: template)
+        XCTAssertNil(missing.postings[0].accountID)
+        XCTAssertEqual(missing.postings[1].accountID, checking.id)
+        XCTAssertEqual(store.templateAccountSelectionPostingIDs(in: missing), [missing.postings[0].id])
+
+        template.postings = [PostingTemplate(accountID: checking.id)]
+        let onePosting = store.draft(for: template)
+        XCTAssertEqual(onePosting.postings.count, 2)
+        XCTAssertEqual(onePosting.postings[0].accountID, checking.id)
+        XCTAssertNil(onePosting.postings[1].accountID)
+        XCTAssertEqual(store.templateAccountSelectionPostingIDs(in: onePosting), [onePosting.postings[1].id])
+        template.postings = []
+        let empty = store.draft(for: template)
+        XCTAssertEqual(empty.postings.count, 2)
+        XCTAssertTrue(empty.postings.allSatisfy { $0.accountID == nil })
+        XCTAssertEqual(store.templateAccountSelectionPostingIDs(in: empty), empty.postings.map(\.id))
+    }
+
     func testSyncProgressDoesNotInvalidateJournalObservers() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

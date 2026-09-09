@@ -3,6 +3,7 @@ import UIKit
 
 enum EditorRoute: Identifiable {
     case transaction(TransactionDraft, String, scanInvoice: Bool = false)
+    case newFromTemplate(TransactionTemplate, String)
     case account(MobileAccountDraft)
     case currency(CurrencyDraft)
     case journalNew
@@ -13,6 +14,8 @@ enum EditorRoute: Identifiable {
         switch self {
         case .transaction(let draft, let title, let scanInvoice):
             "transaction-\(draft.id?.uuidString ?? "new")-\(title)-\(scanInvoice)"
+        case .newFromTemplate(let template, let title):
+            "template-transaction-\(template.id)-\(title)"
         case .account(let draft):
             "account-\(draft.id?.uuidString ?? "new")"
         case .currency(let draft):
@@ -94,7 +97,7 @@ struct AppShellView: View {
         }
         .confirmationDialog("New Transaction", isPresented: $showingNewTransactionDialog, titleVisibility: .visible) {
             ForEach((currentLedgerID.map { store.transactionTemplates(for: $0) } ?? []).filter(\.enabled)) { template in
-                Button(template.name) { route = .transaction(store.draft(for: template), "New Transaction", scanInvoice: template.scanInvoice) }
+                Button(template.name) { route = .newFromTemplate(template, "New Transaction") }
             }
             if let ledgerID = currentLedgerID {
                 Button("Customize Templates…") { presentedSheet = .templates(ledgerID) }
@@ -296,10 +299,16 @@ private struct LockedAppView: View {
 
 
 struct EditorSheet: View {
+    @EnvironmentObject private var store: MobileLedgerStore
     let route: EditorRoute
     var body: some View {
         switch route {
-        case .transaction(let draft, let title, let scanInvoice): TransactionEditorView(title: title, initialDraft: draft, scanInvoice: scanInvoice)
+        case .transaction(let draft, let title, let scanInvoice):
+            NavigationStack { TransactionEditorView(title: title, initialDraft: draft, scanInvoice: scanInvoice) }
+        case .newFromTemplate(let template, let title):
+            let draft = store.draft(for: template)
+            TemplateTransactionEntryView(title: title, initialDraft: draft,
+                accountPostingIDs: store.templateAccountSelectionPostingIDs(in: draft), scanInvoice: template.scanInvoice)
         case .account(let draft): AccountEditorView(initialDraft: draft)
         case .currency(let draft): CurrencyEditorView(initialDraft: draft)
         case .journalNew: JournalEditorView(mode: .create)

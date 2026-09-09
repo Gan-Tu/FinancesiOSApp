@@ -5,6 +5,49 @@ enum TransactionEditorField: Hashable {
     case amount(UUID), notes, payee, number
 }
 
+/// Keep account selection in the original transaction sheet, without briefly
+/// presenting the detailed editor or its amount keyboard underneath the picker.
+struct TemplateTransactionEntryView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let title: String
+    let scanInvoice: Bool
+    @State private var draft: TransactionDraft
+    @State private var accountPostingIDs: [UUID]
+
+    init(title: String, initialDraft: TransactionDraft, accountPostingIDs: [UUID], scanInvoice: Bool) {
+        self.title = title
+        self.scanInvoice = scanInvoice
+        _draft = State(initialValue: initialDraft)
+        _accountPostingIDs = State(initialValue: accountPostingIDs)
+    }
+
+    var body: some View {
+        NavigationStack {
+            if let postingID = accountPostingIDs.first,
+               let index = draft.postings.firstIndex(where: { $0.id == postingID }) {
+                AccountPickerScreen(ledgerID: draft.ledgerID, selected: $draft.postings[index].accountID,
+                    onSelection: { accountID in
+                        guard accountPostingIDs.first == postingID,
+                              let index = draft.postings.firstIndex(where: { $0.id == postingID }) else { return }
+                        withAnimation(FinanceMotion.disclosure(reduceMotion: reduceMotion)) {
+                            draft.postings[index].accountID = accountID
+                            _ = accountPostingIDs.removeFirst()
+                        }
+                    })
+                    .id(postingID)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                    }
+                    .transition(.opacity)
+            } else {
+                TransactionEditorView(title: title, initialDraft: draft, scanInvoice: scanInvoice)
+                    .transition(.opacity)
+            }
+        }
+    }
+}
+
 struct TransactionEditorView: View {
     @EnvironmentObject private var store: MobileLedgerStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -45,188 +88,186 @@ struct TransactionEditorView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            FinanceForm(spacing: 0) {
-                VStack(spacing: 7) {
-                    FinanceFormCard {
-                        ForEach($draft.postings) { $posting in
-                            FinanceFormRow(last: posting.id == draft.postings.last?.id) {
-                                PostingEditorRow(posting: $posting, ledgerID: draft.ledgerID, focusedField: $focusedField, canRemove: draft.postings.count > 2,
-                                    changeAmount: { text in
-                                        if let index = draft.postings.firstIndex(where: { $0.id == posting.id }) { updateAmount(text, at: index) }
-                                    }, chooseAccount: { focusedField = nil; accountPostingID = posting.id }) {
-                                        withAnimation(FinanceMotion.disclosure(reduceMotion: reduceMotion)) {
-                                            draft.postings.removeAll { $0.id == posting.id }
-                                        }
+        FinanceForm(spacing: 0) {
+            VStack(spacing: 7) {
+                FinanceFormCard {
+                    ForEach($draft.postings) { $posting in
+                        FinanceFormRow(last: posting.id == draft.postings.last?.id) {
+                            PostingEditorRow(posting: $posting, ledgerID: draft.ledgerID, focusedField: $focusedField, canRemove: draft.postings.count > 2,
+                                changeAmount: { text in
+                                    if let index = draft.postings.firstIndex(where: { $0.id == posting.id }) { updateAmount(text, at: index) }
+                                }, chooseAccount: { focusedField = nil; accountPostingID = posting.id }) {
+                                    withAnimation(FinanceMotion.disclosure(reduceMotion: reduceMotion)) {
+                                        draft.postings.removeAll { $0.id == posting.id }
                                     }
-                            }
-                            .transition(.opacity)
+                                }
                         }
+                        .transition(.opacity)
                     }
-                    HStack {
-                        Button {
-                            withAnimation(FinanceMotion.disclosure(reduceMotion: reduceMotion)) {
-                                draft.postings.append(PostingDraft(accountID: store.leafAccountNodes(ledgerID: draft.ledgerID).first?.account.id, amount: ""))
-                            }
-                        } label: {
-                            Image(systemName: "plus.circle.fill").font(.system(size: 22)).foregroundStyle(.green)
+                }
+                HStack {
+                    Button {
+                        withAnimation(FinanceMotion.disclosure(reduceMotion: reduceMotion)) {
+                            draft.postings.append(PostingDraft(accountID: store.leafAccountNodes(ledgerID: draft.ledgerID).first?.account.id, amount: ""))
                         }
-                        .accessibilityLabel("Posting")
-                        Spacer()
-                        Button("Balance") { balanceLastPosting() }.font(.footnote).foregroundStyle(.tint)
+                    } label: {
+                        Image(systemName: "plus.circle.fill").font(.system(size: 22)).foregroundStyle(.green)
+                    }
+                    .accessibilityLabel("Posting")
+                    Spacer()
+                    Button("Balance") { balanceLastPosting() }.font(.footnote).foregroundStyle(.tint)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 8)
+                .frame(height: 28)
+            }
+            .padding(.bottom, 32)
+
+            FinanceFormCard {
+                FinanceFormRow {
+                    Button {
+                        hasAppliedInitialFocus = true
+                        focusedField = nil
+                        withAnimation(FinanceMotion.disclosure(reduceMotion: reduceMotion)) {
+                            showingDatePicker.toggle()
+                        }
+                    } label: {
+                        FinanceFormLabel(title: "Date", value: compactTransactionDate(draft.date), chevron: false)
                     }
                     .buttonStyle(.plain)
-                    .padding(.horizontal, 8)
-                    .frame(height: 28)
+                    .accessibilityIdentifier("transaction-date-toggle")
+                    .accessibilityLabel("Date")
+                    .accessibilityValue(compactTransactionDate(draft.date))
+                    .accessibilityHint(showingDatePicker ? "Collapse date picker" : "Expand date picker")
                 }
-                .padding(.bottom, 32)
-
-                FinanceFormCard {
-                    FinanceFormRow {
-                        Button {
-                            hasAppliedInitialFocus = true
-                            focusedField = nil
-                            withAnimation(FinanceMotion.disclosure(reduceMotion: reduceMotion)) {
-                                showingDatePicker.toggle()
-                            }
-                        } label: {
-                            FinanceFormLabel(title: "Date", value: compactTransactionDate(draft.date), chevron: false)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("transaction-date-toggle")
-                        .accessibilityLabel("Date")
-                        .accessibilityValue(compactTransactionDate(draft.date))
-                        .accessibilityHint(showingDatePicker ? "Collapse date picker" : "Expand date picker")
-                    }
-                    if showingDatePicker {
-                        DatePicker("Date", selection: $draft.date, displayedComponents: [.date, .hourAndMinute])
-                            .datePickerStyle(.wheel)
-                            .labelsHidden()
-                            .frame(maxWidth: .infinity)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 8)
-                            .overlay(alignment: .bottom) { Divider().padding(.leading, 20) }
-                            .accessibilityIdentifier("transaction-date-picker")
-                            .transition(.opacity)
-                    }
-                    FinanceFormRow {
-                        VStack(alignment: .leading, spacing: 2) {
-                            if !draft.note.isEmpty { Text("Notes").font(.caption).foregroundStyle(.secondary) }
-                            TextField("Notes", text: $draft.note, axis: .vertical).accessibilityLabel("Notes").focused($focusedField, equals: .notes)
-                        }
-                        .frame(minHeight: draft.note.isEmpty ? 0 : 44, alignment: .leading)
-                    }
-                    FinanceFormRow { TextField("Payee", text: $draft.payee).textInputAutocapitalization(.words).focused($focusedField, equals: .payee) }
-                    FinanceFormRow(last: true) { TextField("Number", text: $draft.number).focused($focusedField, equals: .number) }
+                if showingDatePicker {
+                    DatePicker("Date", selection: $draft.date, displayedComponents: [.date, .hourAndMinute])
+                        .datePickerStyle(.wheel)
+                        .labelsHidden()
+                        .frame(maxWidth: .infinity)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 8)
+                        .overlay(alignment: .bottom) { Divider().padding(.leading, 20) }
+                        .accessibilityIdentifier("transaction-date-picker")
+                        .transition(.opacity)
                 }
-                .padding(.bottom, 40)
+                FinanceFormRow {
+                    VStack(alignment: .leading, spacing: 2) {
+                        if !draft.note.isEmpty { Text("Notes").font(.caption).foregroundStyle(.secondary) }
+                        TextField("Notes", text: $draft.note, axis: .vertical).accessibilityLabel("Notes").focused($focusedField, equals: .notes)
+                    }
+                    .frame(minHeight: draft.note.isEmpty ? 0 : 44, alignment: .leading)
+                }
+                FinanceFormRow { TextField("Payee", text: $draft.payee).textInputAutocapitalization(.words).focused($focusedField, equals: .payee) }
+                FinanceFormRow(last: true) { TextField("Number", text: $draft.number).focused($focusedField, equals: .number) }
+            }
+            .padding(.bottom, 40)
 
-                FinanceFormCard {
+            FinanceFormCard {
+                FinanceFormRow {
+                    NavigationLink {
+                        RepeatFrequencyEditor(draft: $draft)
+                    } label: { FinanceFormLabel(title: "Repeat", value: repeatDescription(draft)) }
+                    .buttonStyle(.plain)
+                    .disabled(!recurrencePolicy.canEditRepeatSettings)
+                }
+                if draft.repeatFrequency != .never {
                     FinanceFormRow {
                         NavigationLink {
-                            RepeatFrequencyEditor(draft: $draft)
-                        } label: { FinanceFormLabel(title: "Repeat", value: repeatDescription(draft)) }
+                            RepeatEndEditor(draft: $draft)
+                        } label: { FinanceFormLabel(title: "End Repeat", value: repeatEndDescription(draft)) }
                         .buttonStyle(.plain)
                         .disabled(!recurrencePolicy.canEditRepeatSettings)
                     }
-                    if draft.repeatFrequency != .never {
-                        FinanceFormRow {
-                            NavigationLink {
-                                RepeatEndEditor(draft: $draft)
-                            } label: { FinanceFormLabel(title: "End Repeat", value: repeatEndDescription(draft)) }
-                            .buttonStyle(.plain)
-                            .disabled(!recurrencePolicy.canEditRepeatSettings)
-                        }
-                    }
-                    FinanceFormRow(last: true) { Toggle("Cleared", isOn: $draft.cleared) }
                 }
-                .padding(.bottom, 40)
-                if !recurrencePolicy.canEditRepeatSettings {
-                    Text("Repeat settings belong to the first entry in this series.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
+                FinanceFormRow(last: true) { Toggle("Cleared", isOn: $draft.cleared) }
+            }
+            .padding(.bottom, 40)
+            if !recurrencePolicy.canEditRepeatSettings {
+                Text("Repeat settings belong to the first entry in this series.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
 
-                FinanceFormCard {
-                    ForEach(draft.attachments) { asset in
-                        FinanceFormRow {
-                            HStack {
-                                Text(asset.originalFilename).lineLimit(1)
-                                Spacer()
-                                Button("Remove Attachment", systemImage: "minus.circle", role: .destructive) {
-                                    draft.attachments.removeAll { $0.id == asset.id }
-                                }.labelStyle(.iconOnly)
-                            }
+            FinanceFormCard {
+                ForEach(draft.attachments) { asset in
+                    FinanceFormRow {
+                        HStack {
+                            Text(asset.originalFilename).lineLimit(1)
+                            Spacer()
+                            Button("Remove Attachment", systemImage: "minus.circle", role: .destructive) {
+                                draft.attachments.removeAll { $0.id == asset.id }
+                            }.labelStyle(.iconOnly)
                         }
                     }
-                    FinanceFormRow(last: true) { ReceiptPicker(assets: $draft.attachments, textOnly: true, startWithScan: scanInvoice) }
+                }
+                FinanceFormRow(last: true) { ReceiptPicker(assets: $draft.attachments, textOnly: true, startWithScan: scanInvoice) }
+            }
+        }
+        .navigationDestination(item: $accountPostingID) { id in
+            if let index = draft.postings.firstIndex(where: { $0.id == id }) {
+                AccountPickerScreen(ledgerID: draft.ledgerID, selected: $draft.postings[index].accountID)
+            }
+        }
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") {
+                    dismiss()
                 }
             }
-            .navigationDestination(item: $accountPostingID) { id in
-                if let index = draft.postings.firstIndex(where: { $0.id == id }) {
-                    AccountPickerScreen(ledgerID: draft.ledgerID, selected: $draft.postings[index].accountID)
-                }
-            }
-            .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        dismiss()
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Save") {
+                    if initialDraft.recurrenceRuleID != nil {
+                        showingRecurringSaveScope = true
+                    } else {
+                        save(scope: .occurrence)
                     }
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        if initialDraft.recurrenceRuleID != nil {
-                            showingRecurringSaveScope = true
-                        } else {
-                            save(scope: .occurrence)
-                        }
-                    }
-                    .disabled(draft.postings.count < 2 || draft.postings.contains { $0.accountID == nil || decimalFromInput($0.amount) == nil } || !draft.postings.contains { (decimalFromInput($0.amount) ?? 0) != 0 })
-                }
-                ToolbarItem(placement: .keyboard) {
-                    AmountKeyboardToolbar(showOperators: focusedAmountID != nil,
-                        negate: { calculate(negate: true) }, appendOperator: appendOperator,
-                        calculate: { calculate() }, done: { focusedField = nil })
-                }
-
+                .disabled(draft.postings.count < 2 || draft.postings.contains { $0.accountID == nil || decimalFromInput($0.amount) == nil } || !draft.postings.contains { (decimalFromInput($0.amount) ?? 0) != 0 })
             }
-            .task {
-                guard initialDraft.id == nil, !scanInvoice, !hasAppliedInitialFocus else { return }
-                hasAppliedInitialFocus = true
-                do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
-                guard focusedField == nil, accountPostingID == nil, !showingDatePicker else { return }
-                focusedField = draft.postings.first.map { .amount($0.id) }
+            ToolbarItem(placement: .keyboard) {
+                AmountKeyboardToolbar(showOperators: focusedAmountID != nil,
+                    negate: { calculate(negate: true) }, appendOperator: appendOperator,
+                    calculate: { calculate() }, done: { focusedField = nil })
             }
-            .onChange(of: focusedField) { _, field in
-                if field != nil && showingDatePicker {
-                    withAnimation(FinanceMotion.disclosure(reduceMotion: reduceMotion)) {
-                        showingDatePicker = false
-                    }
-                }
-            }
-            .confirmationDialog(
-                recurrencePolicy.requiresScheduleConfirmation ? "Update repeating schedule" : "Save recurring transaction changes",
-                isPresented: $showingRecurringSaveScope,
-                titleVisibility: .visible
-            ) {
-                if recurrencePolicy.requiresScheduleConfirmation {
-                    Button("Update Repeating Schedule") { save(scope: .future) }
-                } else {
-                    Button("This Occurrence Only") { save(scope: .occurrence) }
-                    Button("This and Future Occurrences") { save(scope: .future) }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text(recurrencePolicy.requiresScheduleConfirmation
-                    ? "Changing the first entry's date or Repeat settings updates the repeating series and regenerates later occurrences."
-                    : "Choose whether to update only this entry or this entry and later entries in the same series. Other occurrence dates, receipts, and cleared status remain unchanged.")
-            }
-            .alert("Couldn’t Save Transaction", isPresented: Binding(get: { store.validationError != nil }, set: { if !$0 { store.validationError = nil } })) {
-                Button("OK") { store.validationError = nil }
-            } message: { Text(store.validationError?.message ?? "") }
 
         }
+        .task {
+            guard initialDraft.id == nil, !scanInvoice, !hasAppliedInitialFocus else { return }
+            hasAppliedInitialFocus = true
+            do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
+            guard focusedField == nil, accountPostingID == nil, !showingDatePicker else { return }
+            focusedField = draft.postings.first.map { .amount($0.id) }
+        }
+        .onChange(of: focusedField) { _, field in
+            if field != nil && showingDatePicker {
+                withAnimation(FinanceMotion.disclosure(reduceMotion: reduceMotion)) {
+                    showingDatePicker = false
+                }
+            }
+        }
+        .confirmationDialog(
+            recurrencePolicy.requiresScheduleConfirmation ? "Update repeating schedule" : "Save recurring transaction changes",
+            isPresented: $showingRecurringSaveScope,
+            titleVisibility: .visible
+        ) {
+            if recurrencePolicy.requiresScheduleConfirmation {
+                Button("Update Repeating Schedule") { save(scope: .future) }
+            } else {
+                Button("This Occurrence Only") { save(scope: .occurrence) }
+                Button("This and Future Occurrences") { save(scope: .future) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(recurrencePolicy.requiresScheduleConfirmation
+                ? "Changing the first entry's date or Repeat settings updates the repeating series and regenerates later occurrences."
+                : "Choose whether to update only this entry or this entry and later entries in the same series. Other occurrence dates, receipts, and cleared status remain unchanged.")
+        }
+        .alert("Couldn’t Save Transaction", isPresented: Binding(get: { store.validationError != nil }, set: { if !$0 { store.validationError = nil } })) {
+            Button("OK") { store.validationError = nil }
+        } message: { Text(store.validationError?.message ?? "") }
+
     }
 
     private func updateAmount(_ value: String, at index: Int) {
@@ -360,28 +401,37 @@ struct AccountPickerScreen: View {
     @EnvironmentObject private var store: MobileLedgerStore
     let ledgerID: UUID?
     @Binding var selected: UUID?
+    var onSelection: ((UUID) -> Void)? = nil
     @State private var search = ""
     @State private var creating = false
     var body: some View {
-        List {
-            ForEach(AccountKind.allCases) { kind in
-                let rows = options(for: kind)
-                if !rows.isEmpty {
-                    Section(kind.title) {
-                        ForEach(rows) { node in
-                            AccountPickerChoice(node: node, selected: $selected)
-                                .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
+        ScrollViewReader { proxy in
+            List {
+                ForEach(AccountKind.allCases) { kind in
+                    let rows = options(for: kind)
+                    if !rows.isEmpty {
+                        Section(kind.title) {
+                            ForEach(rows) { node in
+                                AccountPickerChoice(node: node, selected: $selected, onSelection: onSelection)
+                                    .id(node.id)
+                                    .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
+                            }
                         }
                     }
                 }
             }
+            .listStyle(.insetGrouped)
+            .compactGroupedForm(sectionSpacing: 0)
+            .onAppear {
+                guard let account = store.account(selected), account.ledgerID == ledgerID else { return }
+                let target = account.isGroup ? options(for: account.kind).first?.id : account.id
+                if let target { proxy.scrollTo(target, anchor: .center) }
+            }
+            .searchable(text: $search, prompt: "Find an account")
+            .navigationTitle("Choose Account").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("New Account", systemImage: "plus") { creating = true } } }
+            .sheet(isPresented: $creating) { AccountEditorView(initialDraft: ledgerID.map { store.newAccountDraft(ledgerID: $0) } ?? store.draft(for: nil)) }
         }
-        .listStyle(.insetGrouped)
-        .compactGroupedForm(sectionSpacing: 0)
-        .searchable(text: $search, prompt: "Find an account")
-        .navigationTitle("Choose Account").navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("New Account", systemImage: "plus") { creating = true } } }
-        .sheet(isPresented: $creating) { AccountEditorView(initialDraft: ledgerID.map { store.newAccountDraft(ledgerID: $0) } ?? store.draft(for: nil)) }
     }
     private func options(for kind: AccountKind) -> [MobileAccountNode] {
         store.accountNodes(kind: kind, ledgerID: ledgerID).filter { node in
@@ -728,11 +778,16 @@ private struct AccountPickerChoice: View {
     @Environment(\.dismissSearch) private var dismissSearch
     let node: MobileAccountNode
     @Binding var selected: UUID?
+    var onSelection: ((UUID) -> Void)? = nil
     var body: some View {
         Button {
             dismissSearch()
-            selected = node.id
-            dismiss()
+            if let onSelection {
+                onSelection(node.id)
+            } else {
+                selected = node.id
+                dismiss()
+            }
         } label: {
             AccountSelectionLabel(account: node.account, depth: max(node.depth - 1, 0), currency: currencySymbol, selected: selected == node.id)
         }.buttonStyle(.plain)

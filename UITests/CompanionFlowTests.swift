@@ -206,7 +206,7 @@ final class CompanionFlowTests: XCTestCase {
         app.navigationBars["Settings"].buttons["Done"].tap()
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Personal,")).firstMatch.tap()
         app.buttons["New Transaction"].tap()
-        app.buttons["Expense"].tap()
+        app.buttons["Expense"].tap(); app.chooseTemplateAccount()
         let cleared = app.switches["Cleared"]
         XCTAssertTrue(cleared.waitForExistence(timeout: 5))
         cleared.tap()
@@ -284,7 +284,7 @@ final class CompanionFlowTests: XCTestCase {
         app.buttons["Show Chart"].tap()
         XCTAssertTrue(app.staticTexts["Cash Flow"].waitForExistence(timeout: 5))
         app.buttons["New Transaction"].tap()
-        app.buttons["Expense"].tap()
+        app.buttons["Expense"].tap(); app.chooseTemplateAccount()
         XCTAssertTrue(app.navigationBars["New Transaction"].waitForExistence(timeout: 5))
         let amount = app.textFields.matching(NSPredicate(format: "label BEGINSWITH %@", "Amount for")).firstMatch
         XCTAssertTrue(amount.waitForExistence(timeout: 5))
@@ -321,7 +321,7 @@ final class CompanionFlowTests: XCTestCase {
         app.buttons["Save"].tap()
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Household")).firstMatch.waitForExistence(timeout: 5))
         app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Household")).firstMatch.tap()
-        app.buttons["New Transaction"].tap(); app.buttons["Expense"].tap()
+        app.buttons["New Transaction"].tap(); app.buttons["Expense"].tap(); app.chooseTemplateAccount()
         XCTAssertTrue(app.navigationBars["New Transaction"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.textFields["Amount for Checking"].waitForExistence(timeout: 5))
         app.buttons["Checking"].tap()
@@ -383,7 +383,7 @@ final class CompanionFlowTests: XCTestCase {
         app.launchArguments = ["--demo", "--reset-demo"]
         app.launch()
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Personal,")).firstMatch.tap()
-        app.buttons["New Transaction"].tap(); app.buttons["Expense"].tap()
+        app.buttons["New Transaction"].tap(); app.buttons["Expense"].tap(); app.chooseTemplateAccount()
         XCTAssertTrue(app.navigationBars["New Transaction"].waitForExistence(timeout: 5))
         let amounts = app.textFields.matching(NSPredicate(format: "label BEGINSWITH %@", "Amount for"))
         XCTAssertTrue(amounts.firstMatch.waitForExistence(timeout: 5))
@@ -415,7 +415,7 @@ final class CompanionFlowTests: XCTestCase {
         app.launchArguments = ["--demo", "--reset-demo"]
         app.launch()
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Personal,")).firstMatch.tap()
-        app.buttons["New Transaction"].tap(); app.buttons["Expense"].tap()
+        app.buttons["New Transaction"].tap(); app.buttons["Expense"].tap(); app.chooseTemplateAccount()
         XCTAssertTrue(app.navigationBars["New Transaction"].waitForExistence(timeout: 5))
         let fields = app.textFields.matching(NSPredicate(format: "label BEGINSWITH %@", "Amount for"))
         XCTAssertTrue(fields.firstMatch.waitForExistence(timeout: 5))
@@ -463,7 +463,7 @@ final class CompanionFlowTests: XCTestCase {
         app.launchArguments = ["--demo", "--reset-demo"]
         app.launch()
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Personal,")).firstMatch.tap()
-        app.buttons["New Transaction"].tap(); app.buttons["Expense"].tap()
+        app.buttons["New Transaction"].tap(); app.buttons["Expense"].tap(); app.chooseTemplateAccount()
         XCTAssertTrue(app.navigationBars["New Transaction"].waitForExistence(timeout: 5))
         app.buttons["Checking"].tap()
         XCTAssertTrue(app.navigationBars["Choose Account"].waitForExistence(timeout: 5))

@@ -50,6 +50,32 @@ final class TemplateInteractionTests: XCTestCase {
         XCTAssertFalse(app.buttons["Edit template Spending"].exists)
     }
 
+    func testTemplateAccountSelectionPrecedesEditorAndCompleteTemplatesSkipIt() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        defer { app.terminate() }
+        app.launchArguments = ["--demo", "--reset-demo"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Journals"].waitForExistence(timeout: 10))
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Personal,")).firstMatch.tap()
+        app.buttons["New Transaction"].tap(); app.sheets.buttons["Income"].tap()
+        XCTAssertTrue(app.navigationBars["New Transaction"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.navigationBars["Choose Account"].exists)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        app.navigationBars.buttons["Cancel"].tap()
+
+        app.buttons["New Transaction"].tap(); app.buttons["Expense"].tap()
+        XCTAssertTrue(app.navigationBars["Choose Account"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.navigationBars["New Transaction"].exists, "Account selection should appear before the detailed editor")
+        XCTAssertFalse(app.keyboards.firstMatch.exists, "Do not focus an amount underneath the account picker")
+        let pickerImage = XCTAttachment(screenshot: app.screenshot())
+        pickerImage.name = "Template chooses expense account first"; pickerImage.lifetime = .keepAlways; add(pickerImage)
+        app.chooseTemplateAccount()
+        XCTAssertTrue(app.buttons["Checking"].exists, "Keep the source account specified by the template")
+        XCTAssertTrue(app.buttons["Groceries"].exists)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "Start amount entry after choosing the account")
+    }
+
     func testAmountAutoFocusAndLargeCalculatorKeys() throws {
         let app = XCUIApplication()
         defer { app.terminate() }
@@ -57,7 +83,7 @@ final class TemplateInteractionTests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.navigationBars["Journals"].waitForExistence(timeout: 10))
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Personal,")).firstMatch.tap()
-        app.buttons["New Transaction"].tap(); app.buttons["Expense"].tap()
+        app.buttons["New Transaction"].tap(); app.buttons["Expense"].tap(); app.chooseTemplateAccount()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "A new transaction should focus its first amount automatically")
         let amount = app.textFields.matching(NSPredicate(format: "label BEGINSWITH %@", "Amount for")).firstMatch
         app.typeText("25")
@@ -108,7 +134,7 @@ final class TemplateInteractionTests: XCTestCase {
         XCTAssertTrue(template.waitForExistence(timeout: 5))
         app.navigationBars["Templates"].buttons.element(boundBy: 0).tap()
         app.buttons["New Transaction"].tap()
-        app.buttons["Scan template"].tap()
+        app.buttons["Scan template"].tap(); app.chooseTemplateAccount(expectEditor: false)
         // Recent Simulator runtimes expose the document scanner even without
         // a real camera. Verify the actual UI rather than assuming unsupported.
         let permission = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
@@ -124,5 +150,17 @@ final class TemplateInteractionTests: XCTestCase {
             XCTAssertTrue(app.buttons["Auto"].waitForExistence(timeout: 5), "The template should present the native document scanner.")
         }
         #endif
+    }
+}
+
+@MainActor
+extension XCUIApplication {
+    /// The demo Expense template uses the Food category and now starts with its account picker.
+    func chooseTemplateAccount(expectEditor: Bool = true) {
+        XCTAssertTrue(navigationBars["Choose Account"].waitForExistence(timeout: 5))
+        let account = buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Groceries")).firstMatch
+        XCTAssertTrue(account.waitForExistence(timeout: 5))
+        account.tap()
+        if expectEditor { XCTAssertTrue(navigationBars["New Transaction"].waitForExistence(timeout: 5)) }
     }
 }
