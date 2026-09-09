@@ -326,8 +326,11 @@ private struct TransactionLinksSection: View {
                 HStack {
                     Label("Uncleared", systemImage: "circle")
                     Spacer()
-                    Text("\(store.unclearedTransactionCount(ledgerID: ledgerID))")
-                        .foregroundStyle(.secondary)
+                    let count = store.unclearedTransactionCount(ledgerID: ledgerID)
+                    if count > 0 {
+                        Text("\(count)")
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
             NavigationLink(value: MobileRoute.transactions(scope: .repeating, title: "Repeating", ledgerID: ledgerID)) {
