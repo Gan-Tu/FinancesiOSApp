@@ -42,7 +42,7 @@ enum ShellSheet: Identifiable {
 
 struct JournalsHomeScreen: View {
     @EnvironmentObject private var store: MobileLedgerStore
-    @Environment(\.editMode) private var editMode
+    @State private var journalEditMode: EditMode = .inactive
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var navigationPath: [MobileRoute]
     @Binding var route: EditorRoute?
@@ -62,19 +62,32 @@ struct JournalsHomeScreen: View {
         List {
             Section {
                 ForEach(visibleJournals) { ledger in
-                    NavigationLink(value: MobileRoute.journal(ledger.id)) {
-                        HStack(spacing: 14) {
-                            Image(systemName: "folder").font(.title2).foregroundStyle(.tint)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(ledger.name)
-                                Text("\(store.transactions(scope: .all, ledgerID: ledger.id).count.formatted()) Transactions")
-                                    .font(.caption).foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        if journalEditMode.isEditing {
+                            Button { pendingDelete = ledger } label: {
+                                Image(systemName: "minus.circle.fill")
+                                    .font(.system(size: 22)).foregroundStyle(.red)
+                                    .frame(width: 44, height: 44)
+                                    .contentShape(Rectangle())
                             }
-                            Spacer(minLength: 8)
-                            let count = store.unclearedTransactionCount(ledgerID: ledger.id)
-                            if count > 0 { Text(count.formatted()).foregroundStyle(.secondary).monospacedDigit() }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("Delete \(ledger.name)")
                         }
-                        .padding(.vertical, 2)
+                        NavigationLink(value: MobileRoute.journal(ledger.id)) {
+                            HStack(spacing: 14) {
+                                Image(systemName: "folder").font(.title2).foregroundStyle(.tint)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(ledger.name)
+                                    Text("\(store.transactions(scope: .all, ledgerID: ledger.id).count.formatted()) Transactions")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer(minLength: 8)
+                                let count = store.unclearedTransactionCount(ledgerID: ledger.id)
+                                if count > 0 { Text(count.formatted()).foregroundStyle(.secondary).monospacedDigit() }
+                            }
+                            .padding(.vertical, 2)
+                        }
+                        .disabled(journalEditMode.isEditing)
                     }
                     .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
                     .contextMenu {
@@ -86,12 +99,9 @@ struct JournalsHomeScreen: View {
                         Button("Hide", systemImage: "archivebox") { hide(ledger) }.tint(.gray)
                     }
                     .swipeActions(allowsFullSwipe: false) {
-                        Button("Delete", role: .destructive) { pendingDelete = ledger }.tint(.red)
+                        Button("Delete") { pendingDelete = ledger }.tint(.red)
                         Button("Rename") { route = .journalRename(ledger) }.tint(.blue)
                     }
-                }
-                .onDelete { offsets in
-                    if let index = offsets.first { pendingDelete = visibleJournals[index] }
                 }
                 .onMove { offsets, destination in
                     store.moveJournals(from: offsets, to: destination, excluding: visibility.hiddenIDs)
@@ -100,6 +110,7 @@ struct JournalsHomeScreen: View {
         }
         .listStyle(.insetGrouped)
         .compactGroupedForm()
+        .environment(\.editMode, $journalEditMode)
         .animation(FinanceMotion.disclosure(reduceMotion: reduceMotion), value: hiddenJournalIDs)
         .contentMargins(.top, 16, for: .scrollContent)
         .overlay {
@@ -130,7 +141,7 @@ struct JournalsHomeScreen: View {
             ToolbarItem(placement: .topBarLeading) {
                 Button("New Journal", systemImage: "plus") { route = .journalNew }
             }
-            ToolbarItem(placement: .topBarTrailing) { EditButton() }
+            ToolbarItem(placement: .topBarTrailing) { EditButton().environment(\.editMode, $journalEditMode) }
         }
         .confirmationDialog("Delete Journal?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }), presenting: pendingDelete) { ledger in
             Button("Delete \(ledger.name)", role: .destructive) { store.deleteJournal(ledger.id) }
@@ -234,7 +245,7 @@ struct JournalOverviewScreen: View {
                                 Button("Delete Account", systemImage: "trash", role: .destructive) { pendingAccountDelete = node.account }
                             }
                             .swipeActions(allowsFullSwipe: false) {
-                                Button("Delete", role: .destructive) { pendingAccountDelete = node.account }.tint(.red)
+                                Button("Delete") { pendingAccountDelete = node.account }.tint(.red)
                                 Button("Edit") { route = .account(store.draft(for: node.account)) }.tint(.blue)
                             }
                         }
@@ -532,7 +543,10 @@ struct TransactionListScreen: View {
                     .listRowInsets(EdgeInsets())
                     .listRowSeparator(.hidden)
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                        Button("Delete", role: .destructive) { requestDeletion(transaction) }.tint(.red)
+                        // Destructive swipe roles remove the cell optimistically.
+                        // Confirmation and async register updates must own the deletion,
+                        // or UIKit can abort with an invalid section item count.
+                        Button("Delete") { requestDeletion(transaction) }.tint(.red)
                         Button("Duplicate") { pendingDuplication = transaction }.tint(.gray)
                     }
                     .swipeActions(edge: .leading) {

@@ -10,6 +10,20 @@ enum DemoData {
             MobileDisplayPreferences.defaults.removePersistentDomain(forName: MobileDisplayPreferences.demoSuiteName)
         }
         var data = fixture(includeFutureEntries: CommandLine.arguments.contains("--demo-future"), includeRecurringEntries: CommandLine.arguments.contains("--demo-recurring"), includeTemplates: true)
+        if CommandLine.arguments.contains("--demo-backfilled-recurring") {
+            // A past cleared anchor, today's sole uncleared occurrence, and one
+            // future month reproduce section removal with an imported cursor.
+            let calendar = Calendar.current
+            let today = calendar.date(bySettingHour: 12, minute: 0, second: 0, of: Date())!
+            let ids = data.transactions.filter { $0.recurrenceRule != nil }.sorted { $0.date < $1.date }.map(\.id)
+            for (offset, id) in ids.enumerated() {
+                guard let index = data.transactions.firstIndex(where: { $0.id == id }) else { continue }
+                data.transactions[index].date = calendar.date(byAdding: .month, value: offset - 1, to: today)!
+                data.transactions[index].cleared = offset == 0
+                data.transactions[index].note = offset == 1 ? "Backfilled recurring entry" : (offset == 0 ? "Prior recurring entry" : "Future recurring entry")
+            }
+            data = RecurringJournalEditor.preparingRecurrencesForBackup(data, calendar: calendar)
+        }
         if CommandLine.arguments.contains("--demo-hierarchy"), let ledgerID = data.selectedLedgerID {
             let currencyID = data.commodities.first { $0.ledgerID == ledgerID }?.id
             let liabilities = Account(ledgerID: ledgerID, commodityID: currencyID, name: "Liabilities", kind: .liability)
