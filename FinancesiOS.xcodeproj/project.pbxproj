@@ -10,12 +10,15 @@
 		09900F281EB6EA2962611344 /* CloudKitSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17797728AE53448A820518DB /* CloudKitSyncService.swift */; };
 		0A78DFFD1BDCDCBE480F6862 /* CloudKitPeerVerification.swift in Sources */ = {isa = PBXBuildFile; fileRef = A916586B55A0A3DE57B6F567 /* CloudKitPeerVerification.swift */; };
 		13EA8A72F52A9E6777F855D7 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEB4BFC9144352620F8B0F32 /* SettingsView.swift */; };
+		14CD76B6C978769690059270 /* SQLiteRecurrenceWriteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65B145F3A688528284A0B08D /* SQLiteRecurrenceWriteTests.swift */; };
 		15816CBF8157A84732B317CE /* LargeJournalInteractionBenchmarks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5018D37072200F5B7461FD36 /* LargeJournalInteractionBenchmarks.swift */; };
+		1A57E85A7A16D5790F878B34 /* RecurringPostingIdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BC663A357FE5F8BD1691CD1 /* RecurringPostingIdentityTests.swift */; };
 		1E7101472456F582591DBCDD /* CloudKitForegroundSyncTriggers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 373409D19DBB842FA8DBF66B /* CloudKitForegroundSyncTriggers.swift */; };
 		1F649B78D9BF9D8140ADE4DC /* libsqlite3.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 090311332FA6B7D2C0A46636 /* libsqlite3.tbd */; };
 		20D640316C3F2980B6332704 /* RecurringJournalEditorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EB71C1D6F61E19732CE91FD /* RecurringJournalEditorTests.swift */; };
 		214D62CBAC332E8BF318958D /* TransactionGutter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3560BF5AF03AF9DAEC248778 /* TransactionGutter.swift */; };
 		2715B02450F90A81EE36BA28 /* DemoData.swift in Sources */ = {isa = PBXBuildFile; fileRef = E06C3C3000BC78FFEFC1832F /* DemoData.swift */; };
+		2741BF12B568448CF41C78DB /* SQLiteRecurrenceWriteFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79642389758C71B0814F4A5A /* SQLiteRecurrenceWriteFixture.swift */; };
 		2A77E3BE503FBA5EF39D3661 /* AttachmentDuplicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13D968B89685C6F8CBB70B08 /* AttachmentDuplicator.swift */; };
 		2CD7ED12257DA6357A891A6B /* RegisterPresentationCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E63B9786D38FC2374CC4FE0 /* RegisterPresentationCache.swift */; };
 		2D0728A18A5AF3C4252F4681 /* InteractionLatencyBenchmarks.swift in Sources */ = {isa = PBXBuildFile; fileRef = D539465D89C5406A7CCFF365 /* InteractionLatencyBenchmarks.swift */; };
@@ -83,6 +86,7 @@
 		DFAA3797ECAAE3598D60097F /* RecurringTransactionEditPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63A781D63578BFDFCB5A639B /* RecurringTransactionEditPolicy.swift */; };
 		E1F35FF8D262DDDC0560CDD8 /* ReceiptAttachmentSaveStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21B989D67F448714EB5C9FC8 /* ReceiptAttachmentSaveStateTests.swift */; };
 		E28C69C20E4088DBD7564D94 /* SQLiteIncrementalWriteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F514FB414AF5A943BF911F24 /* SQLiteIncrementalWriteTests.swift */; };
+		E2E034EAC556ABAF361BDC37 /* SQLiteRecurrenceWriteBenchmarks.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8FA19A83A7334214EBA5C73 /* SQLiteRecurrenceWriteBenchmarks.swift */; };
 		E4E66736DEF771E72AF959E5 /* RecurrenceContinuation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8057323718282AD542602493 /* RecurrenceContinuation.swift */; };
 		E59D628186964F4F78170C44 /* MobileSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = F479A4FC0F82E7BCD578DB19 /* MobileSupport.swift */; };
 		EBC0DF95B3517E544EB5342C /* MobileLedgerStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5F296A3FA7118E5D32C8CB5 /* MobileLedgerStore.swift */; };
@@ -135,6 +139,7 @@
 		3560BF5AF03AF9DAEC248778 /* TransactionGutter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransactionGutter.swift; sourceTree = "<group>"; };
 		373409D19DBB842FA8DBF66B /* CloudKitForegroundSyncTriggers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitForegroundSyncTriggers.swift; sourceTree = "<group>"; };
 		408D6E0F17126A4ADBF38962 /* SQLiteWriteBenchmarks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLiteWriteBenchmarks.swift; sourceTree = "<group>"; };
+		4BC663A357FE5F8BD1691CD1 /* RecurringPostingIdentityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecurringPostingIdentityTests.swift; sourceTree = "<group>"; };
 		4D5403346BB22199DDE0FB93 /* BackupArchiveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupArchiveTests.swift; sourceTree = "<group>"; };
 		4EB1C17FDE952A8B6F910D73 /* SQLiteWriteTestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLiteWriteTestSupport.swift; sourceTree = "<group>"; };
 		5018D37072200F5B7461FD36 /* LargeJournalInteractionBenchmarks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LargeJournalInteractionBenchmarks.swift; sourceTree = "<group>"; };
@@ -144,12 +149,14 @@
 		600C8341210C80036086F4C1 /* AsyncRecurrencePersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AsyncRecurrencePersistenceTests.swift; sourceTree = "<group>"; };
 		63A781D63578BFDFCB5A639B /* RecurringTransactionEditPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecurringTransactionEditPolicy.swift; sourceTree = "<group>"; };
 		646414B7AA5605EC2E6D0932 /* SQLiteJournalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLiteJournalStore.swift; sourceTree = "<group>"; };
+		65B145F3A688528284A0B08D /* SQLiteRecurrenceWriteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLiteRecurrenceWriteTests.swift; sourceTree = "<group>"; };
 		698576CA66FD282D25C41EFF /* FinancesiOSUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = FinancesiOSUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		7331FE1CCF089396B76A3CA1 /* RecurringTransactionEditPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecurringTransactionEditPolicyTests.swift; sourceTree = "<group>"; };
 		745410D34470319B0E56B85F /* RegisterInitialPositionProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RegisterInitialPositionProbe.swift; sourceTree = "<group>"; };
 		7548B898E4141D1151E39251 /* JournalVisibilityAndSearchUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JournalVisibilityAndSearchUITests.swift; sourceTree = "<group>"; };
 		75D95CF8AF0F4F1544A5FF86 /* AsyncInteractionLatencyBenchmarks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AsyncInteractionLatencyBenchmarks.swift; sourceTree = "<group>"; };
 		77F5414AD4EB3080873A37E8 /* TransactionScheduleEditors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransactionScheduleEditors.swift; sourceTree = "<group>"; };
+		79642389758C71B0814F4A5A /* SQLiteRecurrenceWriteFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLiteRecurrenceWriteFixture.swift; sourceTree = "<group>"; };
 		7B106AB2E1A34CB2428A021A /* FinancesMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinancesMobileApp.swift; sourceTree = "<group>"; };
 		7D2918BF16A82E35047FA336 /* AmountExpressionEvaluator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AmountExpressionEvaluator.swift; sourceTree = "<group>"; };
 		7EF14114397C09CE29C86309 /* FinancePerformanceTrace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinancePerformanceTrace.swift; sourceTree = "<group>"; };
@@ -165,6 +172,7 @@
 		A916586B55A0A3DE57B6F567 /* CloudKitPeerVerification.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitPeerVerification.swift; sourceTree = "<group>"; };
 		B5CD3AA6662EAAD3753AF40F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B699F730EDBC2E09BA478486 /* CloudKitLiveVerification.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitLiveVerification.swift; sourceTree = "<group>"; };
+		B8FA19A83A7334214EBA5C73 /* SQLiteRecurrenceWriteBenchmarks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLiteRecurrenceWriteBenchmarks.swift; sourceTree = "<group>"; };
 		BCC8DCD29B30E3C7B6B9188F /* CloudKitJournalSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitJournalSyncTests.swift; sourceTree = "<group>"; };
 		C26FF8CDA5AAF5178BFAA8C2 /* FinancesiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = FinancesiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C3FE4DE9349447E40CA9A063 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
@@ -309,11 +317,15 @@
 				21B989D67F448714EB5C9FC8 /* ReceiptAttachmentSaveStateTests.swift */,
 				598381BF3B9CDB3140C13284 /* RecurrenceContinuationTests.swift */,
 				0EB71C1D6F61E19732CE91FD /* RecurringJournalEditorTests.swift */,
+				4BC663A357FE5F8BD1691CD1 /* RecurringPostingIdentityTests.swift */,
 				7331FE1CCF089396B76A3CA1 /* RecurringTransactionEditPolicyTests.swift */,
 				8A6B648C527863512ED49DC3 /* RegisterPresentationCacheTests.swift */,
 				15246DDD0437BC92E0557861 /* SQLiteCloudKitBatchingTests.swift */,
 				FD57D4F7D32FD381F1F005DC /* SQLiteCloudKitSyncTests.swift */,
 				F514FB414AF5A943BF911F24 /* SQLiteIncrementalWriteTests.swift */,
+				B8FA19A83A7334214EBA5C73 /* SQLiteRecurrenceWriteBenchmarks.swift */,
+				79642389758C71B0814F4A5A /* SQLiteRecurrenceWriteFixture.swift */,
+				65B145F3A688528284A0B08D /* SQLiteRecurrenceWriteTests.swift */,
 				408D6E0F17126A4ADBF38962 /* SQLiteWriteBenchmarks.swift */,
 				4EB1C17FDE952A8B6F910D73 /* SQLiteWriteTestSupport.swift */,
 				103A5A6578909BEC17466757 /* TemplateAndNavigationPerformanceTests.swift */,
@@ -526,11 +538,15 @@
 				E1F35FF8D262DDDC0560CDD8 /* ReceiptAttachmentSaveStateTests.swift in Sources */,
 				D2B215C0D218B139A0889E91 /* RecurrenceContinuationTests.swift in Sources */,
 				20D640316C3F2980B6332704 /* RecurringJournalEditorTests.swift in Sources */,
+				1A57E85A7A16D5790F878B34 /* RecurringPostingIdentityTests.swift in Sources */,
 				D523165B8458E84586A691E8 /* RecurringTransactionEditPolicyTests.swift in Sources */,
 				CDB2D0623B24482BE4F1F85C /* RegisterPresentationCacheTests.swift in Sources */,
 				B23435F545F1EC6F9D2B8B23 /* SQLiteCloudKitBatchingTests.swift in Sources */,
 				95BA27FC95A9553680156841 /* SQLiteCloudKitSyncTests.swift in Sources */,
 				E28C69C20E4088DBD7564D94 /* SQLiteIncrementalWriteTests.swift in Sources */,
+				E2E034EAC556ABAF361BDC37 /* SQLiteRecurrenceWriteBenchmarks.swift in Sources */,
+				2741BF12B568448CF41C78DB /* SQLiteRecurrenceWriteFixture.swift in Sources */,
+				14CD76B6C978769690059270 /* SQLiteRecurrenceWriteTests.swift in Sources */,
 				DE83C871AD5C4C70ECF0DC58 /* SQLiteWriteBenchmarks.swift in Sources */,
 				5801FE3A51D736D8C622739A /* SQLiteWriteTestSupport.swift in Sources */,
 				3E8D07BF4411549E6BAD758B /* TemplateAndNavigationPerformanceTests.swift in Sources */,

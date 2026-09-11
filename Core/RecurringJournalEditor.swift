@@ -166,8 +166,14 @@ enum RecurringJournalEditor {
                 result.transactions[index].payee = edited.payee
                 result.transactions[index].note = edited.note
                 result.transactions[index].number = edited.number
-                result.transactions[index].postings = edited.postings.enumerated().map { index, posting in
-                    Posting(accountID: posting.accountID, commodityID: posting.commodityID, amount: posting.amount, listIndex: index)
+                let destinationPostings = result.transactions[index].postings.sorted(by: postingDisplayPrecedes)
+                result.transactions[index].postings = edited.postings.enumerated().map { position, posting in
+                    // Posting identity belongs to this occurrence's displayed
+                    // position, not to the edited occurrence or account value.
+                    // Preserve it even for zero amounts and repeated accounts.
+                    Posting(id: destinationPostings.indices.contains(position) ? destinationPostings[position].id : UUID(),
+                            accountID: posting.accountID, commodityID: posting.commodityID,
+                            amount: posting.amount, listIndex: position)
                 }
             }
         }
@@ -181,6 +187,10 @@ enum RecurringJournalEditor {
             result = materialized(result, referenceDate: referenceDate, calendar: calendar, deletedIDs: deletedIDs)
         }
         return result
+    }
+
+    private static func postingDisplayPrecedes(_ lhs: Posting, _ rhs: Posting) -> Bool {
+        lhs.listIndex == rhs.listIndex ? lhs.id.canonicallyPrecedes(rhs.id) : lhs.listIndex < rhs.listIndex
     }
 
     static func materialized(_ journal: JournalData, referenceDate: Date = Date(), calendar: Calendar = .current, deletedIDs: Set<UUID> = []) -> JournalData {

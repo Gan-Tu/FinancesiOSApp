@@ -350,18 +350,15 @@ struct JournalDataDiff {
             + templatesChanged.count + templateIDsDeleted.count
     }
 
-    /// Even a bulk clear/unclear should update only transaction rows. Falling
-    /// back to a full replacement would rewrite the entire journal and blobs.
-    var changesOnlyTransactionOrTemplateFields: Bool {
+    /// Recurring edits can touch most rows while leaving every parent entity
+    /// intact. Keep these child-family edits incremental so unrelated journals,
+    /// accounts and receipts are not rewritten just because the diff is large.
+    /// Parent changes still use the existing replacement-size heuristic.
+    var changesOnlyTransactionsOrTemplates: Bool {
         ledgersChanged.isEmpty && ledgerIDsDeleted.isEmpty
             && commoditiesChanged.isEmpty && commodityIDsDeleted.isEmpty
             && accountsChanged.isEmpty && accountIDsDeleted.isEmpty
             && sourcesChanged.isEmpty && sourceIDsDeleted.isEmpty
-            && transactionIDsDeleted.isEmpty && templateIDsDeleted.isEmpty
-            && transactionPostingsUnchanged.count == transactionsChanged.count
-            && transactionAttachmentsUnchanged.count == transactionsChanged.count
-            && transactionRecurrenceUnchanged.count == transactionsChanged.count
-            && templatePostingsUnchanged.count == templatesChanged.count
     }
 
     static func between(_ old: JournalData, _ new: JournalData) -> JournalDataDiff {
@@ -714,8 +711,8 @@ final class SQLiteJournalStore: @unchecked Sendable {
     /// caller keeps the last snapshot it successfully persisted; diffing two
     /// value snapshots is cheap (unchanged families compare by array storage
     /// identity), so a routine edit touches a handful of rows. Falls back to the
-    /// full rewrite on first save, when the diff is disproportionally large
-    /// (imports, restores), or when there is no baseline.
+    /// full rewrite on first save or without a baseline, and for large parent
+    /// entity changes. Imports/restores retain their explicit replacement path.
     func persist(_ data: JournalData, previous: JournalData?, trackSyncChanges: Bool = true) throws {
         guard let previous else {
             try replaceData(data, trackSyncChanges: trackSyncChanges)
@@ -725,7 +722,7 @@ final class SQLiteJournalStore: @unchecked Sendable {
         guard !diff.isEmpty else { return }
         let totalRecords = data.ledgers.count + data.commodities.count + data.accounts.count
             + data.sources.count + data.transactions.count + data.transactionTemplates.count
-        if diff.touchedRecordCount > max(64, totalRecords / 4), !diff.changesOnlyTransactionOrTemplateFields {
+        if diff.touchedRecordCount > max(64, totalRecords / 4), !diff.changesOnlyTransactionsOrTemplates {
             try replaceData(data, trackSyncChanges: trackSyncChanges)
             return
         }
@@ -893,9 +890,9 @@ final class SQLiteJournalStore: @unchecked Sendable {
             }
         }
 
-        // Statements for the changed-transaction loop are prepared once
-        // and reused; bulk edits can route thousands of records through
-        // this path before the full-rewrite threshold kicks in.
+        var writtenRecurrenceRules: [UUID: RecurrenceRule] = [:]
+        // Statements are prepared once and reused for both small edits and
+        // broad transaction-only changes, including long recurring series.
         try withPreparedStatement("DELETE FROM postings WHERE id = ? AND transaction_id = ?", database) { deletePosting in
         try withPreparedStatement("DELETE FROM attachment_assets WHERE transaction_id = ?", database) { deleteAssets in
         try withPreparedStatement("DELETE FROM attachment_containers WHERE transaction_id = ?", database) { deleteContainers in
@@ -983,7 +980,7 @@ final class SQLiteJournalStore: @unchecked Sendable {
                     }
                 }
                 if !diff.transactionRecurrenceUnchanged.contains(transaction.id), let rule = transaction.recurrenceRule {
-                    try upsertRecurrenceRule(rule, database: database)
+                    try upsertRecurrenceRule(rule, writtenRules: &writtenRecurrenceRules, database: database)
                 }
                 if !diff.transactionAttachmentsUnchanged.contains(transaction.id), let attachment = transaction.attachment {
                     try upsertAttachmentContainer(
@@ -2508,6 +2505,7 @@ final class SQLiteJournalStore: @unchecked Sendable {
     private func replaceAppRows(_ data: JournalData, envelopes: [SyncEnvelope], database: OpaquePointer) throws {
         let dateFormatter = Self.makeISOFormatter()
         let now = dateFormatter.string(from: Date())
+        var writtenRecurrenceRules: [UUID: RecurrenceRule] = [:]
         let metadata = try JSONEncoder.appEncoder.encode(JournalMetadata(data: data))
         let attachmentUploadStates = try readAttachmentUploadStates(database)
         try upsertMetadata("journal", value: String(decoding: metadata, as: UTF8.self), database: database)
@@ -2636,7 +2634,7 @@ final class SQLiteJournalStore: @unchecked Sendable {
                     }
 
                     if let rule = transaction.recurrenceRule {
-                        try upsertRecurrenceRule(rule, database: database)
+                        try upsertRecurrenceRule(rule, writtenRules: &writtenRecurrenceRules, database: database)
                     }
                     if let attachment = transaction.attachment {
                         try upsertAttachmentContainer(
@@ -2722,6 +2720,19 @@ final class SQLiteJournalStore: @unchecked Sendable {
         }
     }
 
+    private func upsertRecurrenceRule(
+        _ rule: RecurrenceRule,
+        writtenRules: inout [UUID: RecurrenceRule],
+        database: OpaquePointer
+    ) throws {
+        // A coherent series shares one identical value across its occurrences.
+        // Remember the last successfully written value, not merely the ID: an
+        // existing A/B/A input must keep its original ordered last-value behavior.
+        guard writtenRules[rule.id] != rule else { return }
+        try upsertRecurrenceRule(rule, database: database)
+        writtenRules[rule.id] = rule
+    }
+
     private func upsertRecurrenceRule(_ rule: RecurrenceRule, database: OpaquePointer) throws {
         try executePrepared(
             """
@@ -2756,6 +2767,8 @@ final class SQLiteJournalStore: @unchecked Sendable {
                 ON CONFLICT(rule_id) DO UPDATE SET
                     occurrence_count = excluded.occurrence_count,
                     end_date = excluded.end_date
+                WHERE recurrence_ends.occurrence_count IS NOT excluded.occurrence_count
+                   OR recurrence_ends.end_date IS NOT excluded.end_date
                 """,
                 database
             ) { statement in
