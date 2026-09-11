@@ -384,22 +384,96 @@ final class MobileCompanionTests: XCTestCase {
         }
     }
 
-    func testDuplicatePreservesDateOrUsesTodayAsSelected() throws {
+    func testDuplicateDraftWaitsForSaveAndPreservesChosenDate() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
         let store = MobileLedgerStore(supportDirectory: folder, initialData: DemoData.fixture(referenceDate: Date().addingTimeInterval(-90 * 86400)))
         let original = try XCTUnwrap(store.data.transactions.first)
-        var ids = Set(store.data.transactions.map(\.id))
-        store.duplicateTransaction(original.id, useToday: false)
-        let datedCopy = try XCTUnwrap(store.data.transactions.first { !ids.contains($0.id) })
+        let before = store.data
+        let datedCopy = try XCTUnwrap(store.duplicateTransactionDraft(original.id, useToday: false))
+        XCTAssertNil(datedCopy.id)
         XCTAssertEqual(datedCopy.date, original.date)
-        ids.insert(datedCopy.id)
-        let before = Date()
-        store.duplicateTransaction(original.id, useToday: true)
-        let todayCopy = try XCTUnwrap(store.data.transactions.first { !ids.contains($0.id) })
-        XCTAssertGreaterThanOrEqual(todayCopy.date, before)
-        XCTAssertLessThanOrEqual(todayCopy.date, Date())
-        XCTAssertEqual(todayCopy.postings.map(\.amount), original.postings.map(\.amount))
+        XCTAssertEqual(datedCopy.postings.map(\.amount), original.postings.sortedForDisplay().map { decimalInputString($0.amount) })
+        XCTAssertTrue(Set(datedCopy.postings.map(\.id)).isDisjoint(with: original.postings.map(\.id)))
+        let now = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970))
+        var todayCopy = try XCTUnwrap(store.duplicateTransactionDraft(original.id, useToday: true, now: now))
+        XCTAssertEqual(todayCopy.date, now)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        XCTAssertEqual(try encoder.encode(store.data), try encoder.encode(before), "Preparing or abandoning either duplicate must not save anything")
+        todayCopy.note = "Edited duplicate"
+        store.saveTransactionAndFlush(todayCopy)
+        XCTAssertNil(store.validationError)
+        XCTAssertEqual(store.data.transactions.count, before.transactions.count + 1)
+        let saved = try XCTUnwrap(store.data.transactions.first { $0.note == "Edited duplicate" })
+        XCTAssertEqual(saved.date, now)
+        XCTAssertEqual(store.transaction(original.id), original)
+        let reopened = MobileLedgerStore(supportDirectory: folder)
+        XCTAssertEqual(reopened.transaction(saved.id), saved)
+    }
+
+    func testDuplicateRetainsImportedZeroSplitAndStillRejectsAllZero() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        var data = DemoData.fixture()
+        let first = data.transactions[0].postings[0]
+        data.transactions[0].postings.append(Posting(accountID: first.accountID, commodityID: first.commodityID, amount: 0, listIndex: 2))
+        let store = MobileLedgerStore(supportDirectory: folder, initialData: data)
+        let original = try XCTUnwrap(store.transaction(data.transactions[0].id))
+        var copy = try XCTUnwrap(store.duplicateTransactionDraft(original.id, useToday: false)).preparedForAmountEntry
+        XCTAssertEqual(copy.postings.last?.amount, "0.00")
+        copy.note = "Zero split copy"
+        store.saveTransactionAndFlush(copy)
+        XCTAssertNil(store.validationError)
+        let saved = try XCTUnwrap(store.data.transactions.first { $0.note == copy.note })
+        XCTAssertEqual(saved.postings.map(\.amount), original.postings.sortedForDisplay().map(\.amount))
+        XCTAssertEqual(store.transaction(original.id), original)
+        let count = store.data.transactions.count
+        for index in copy.postings.indices { copy.postings[index].amount = "0.00" }
+        store.saveTransactionAndFlush(copy)
+        XCTAssertNotNil(store.validationError)
+        XCTAssertEqual(store.data.transactions.count, count)
+    }
+
+    func testDuplicatedOccurrenceCopiesReceiptsOnlyOnSaveAndLeavesScheduleAlone() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let attachments = folder.appendingPathComponent("Attachments")
+        try FileManager.default.createDirectory(at: attachments, withIntermediateDirectories: true)
+        let source = attachments.appendingPathComponent("source.txt")
+        let bytes = Data("Receipt fixture".utf8)
+        try bytes.write(to: source)
+        let asset = AttachmentAsset(originalFilename: "source.txt", storedPath: "Attachments/source.txt", mimeType: "text/plain", sizeBytes: Int64(bytes.count))
+        var data = DemoData.fixture()
+        data.transactions[0].attachment = AttachmentContainer(assets: [asset])
+        data.transactions[0].recurrenceRule = RecurrenceRule(frequency: .monthly, occurrenceCount: 2)
+        let store = MobileLedgerStore(supportDirectory: folder, initialData: data)
+        let original = try XCTUnwrap(store.transaction(data.transactions[0].id))
+        let before = store.data
+        var copy = try XCTUnwrap(store.duplicateTransactionDraft(original.id, useToday: true))
+        XCTAssertNil(copy.recurrenceRuleID)
+        XCTAssertEqual(copy.repeatFrequency, .never)
+        XCTAssertNil(copy.repeatOccurrenceCount)
+        XCTAssertEqual(copy.attachments, [asset], "Show the original receipt in the unsaved draft")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: attachments.path), ["source.txt"])
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        XCTAssertEqual(try encoder.encode(store.data), try encoder.encode(before))
+        copy.note = "Independent copy"
+        store.saveTransactionAndFlush(copy)
+        XCTAssertNil(store.validationError)
+        XCTAssertEqual(store.data.transactions.count, before.transactions.count + 1)
+        let saved = try XCTUnwrap(store.data.transactions.first { $0.note == "Independent copy" })
+        XCTAssertNil(saved.recurrenceRule)
+        let receipt = try XCTUnwrap(saved.attachment?.assets.first)
+        XCTAssertNotEqual(saved.attachment?.id, original.attachment?.id)
+        XCTAssertNotEqual(receipt.id, asset.id)
+        XCTAssertNotEqual(receipt.storedPath, asset.storedPath)
+        XCTAssertEqual(try Data(contentsOf: store.attachmentURL(for: receipt)), bytes)
+        XCTAssertEqual(store.transaction(original.id), original)
+        store.deleteTransaction(saved.id)
+        XCTAssertNil(store.validationError)
+        XCTAssertEqual(try Data(contentsOf: source), bytes, "Deleting a duplicate must retain the original receipt")
     }
 
     func testCurrentBalancesExcludeFutureOnLoadEditAndDelete() throws {

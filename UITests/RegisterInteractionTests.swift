@@ -40,11 +40,51 @@ final class RegisterInteractionTests: XCTestCase {
         app.buttons["Duplicate"].tap()
         XCTAssertTrue(app.buttons["Duplicate With Today's Date"].waitForExistence(timeout: 3))
         capture(app, "Duplicate date choices")
-        app.buttons["Duplicate With Today's Date"].tap()
+        app.alerts.buttons["Duplicate With Today's Date"].tap()
+        XCTAssertTrue(app.navigationBars["New Transaction"].waitForExistence(timeout: 5))
+        app.navigationBars["New Transaction"].buttons["Cancel"].tap()
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
         row.swipeLeft()
         app.buttons["Delete"].tap()
         XCTAssertFalse(row.waitForExistence(timeout: 1))
         XCTAssertFalse(app.buttons["Delete Only This Transaction"].exists)
+    }
+
+    func testDuplicateEditorCanCancelOrSaveChangesFromRegisterAndDetails() throws {
+        continueAfterFailure = false
+        let app = launch()
+        defer { app.terminate() }
+        app.buttons["All"].tap()
+        let originals = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Weekly groceries"))
+        XCTAssertTrue(originals.firstMatch.waitForExistence(timeout: 5))
+        let originalCount = originals.count
+        originals.firstMatch.swipeLeft(); app.buttons["Duplicate"].tap()
+        let chooser = app.alerts.firstMatch
+        XCTAssertTrue(chooser.waitForExistence(timeout: 5))
+        XCTAssertLessThan(abs(chooser.frame.midY - app.frame.midY), app.frame.height * 0.2, "Duplicate choices should be centered")
+        capture(app, "Centered duplicate chooser")
+        chooser.buttons["Duplicate With Today's Date"].tap()
+        XCTAssertTrue(app.navigationBars["New Transaction"].waitForExistence(timeout: 5))
+        XCTAssertTrue((app.buttons["transaction-date-toggle"].value as? String)?.contains("Today") == true)
+        app.navigationBars["New Transaction"].buttons["Cancel"].tap()
+        XCTAssertEqual(originals.count, originalCount, "Cancel must leave the original without creating a copy")
+        originals.firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Details"].waitForExistence(timeout: 5))
+        app.buttons["Transaction Actions"].tap(); app.buttons["Duplicate"].tap()
+        XCTAssertTrue(chooser.waitForExistence(timeout: 5))
+        chooser.buttons["Duplicate"].tap()
+        XCTAssertTrue(app.navigationBars["New Transaction"].waitForExistence(timeout: 5))
+        app.buttons["Done"].tap()
+        let notes = app.textFields["Notes"].exists ? app.textFields["Notes"] : app.textViews["Notes"]
+        notes.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5)).tap()
+        notes.typeText(" edited copy")
+        XCTAssertEqual(notes.value as? String, "Weekly groceries edited copy")
+        app.navigationBars["New Transaction"].buttons["Save"].tap()
+        XCTAssertTrue(app.navigationBars["Details"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Weekly groceries"].exists, "The original stays unchanged")
+        app.navigationBars["Details"].buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Weekly groceries edited copy")).firstMatch.waitForExistence(timeout: 5))
+        XCTAssertEqual(originals.count, originalCount + 1)
     }
 
     func testRecurringDeletionOffersSingleAndFutureChoices() throws {

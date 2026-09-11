@@ -468,7 +468,7 @@ struct TransactionListScreen: View {
                 }
             }
             .modifier(TransactionDeletionConfirmation(transaction: $pendingDeletion))
-            .modifier(TransactionDuplicateConfirmation(transaction: $pendingDuplication))
+            .modifier(TransactionDuplicateConfirmation(transaction: $pendingDuplication, route: $route))
             .onAppear { isActive = true; scheduleRefresh() }
             .onDisappear { isActive = false; renderRequest = nil }
             .onReceive(store.$registerContentRevision.debounce(for: .milliseconds(40), scheduler: RunLoop.main)) { _ in scheduleRefresh() }
@@ -542,18 +542,8 @@ struct TransactionListScreen: View {
                     .accessibilityIdentifier("register-row-\(transaction.id.uuidString)")
                     .listRowInsets(EdgeInsets())
                     .listRowSeparator(.hidden)
-                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                        // Destructive swipe roles remove the cell optimistically.
-                        // Confirmation and async register updates must own the deletion,
-                        // or UIKit can abort with an invalid section item count.
-                        Button("Delete") { requestDeletion(transaction) }.tint(.red)
-                        Button("Duplicate") { pendingDuplication = transaction }.tint(.gray)
-                    }
-                    .swipeActions(edge: .leading) {
-                        Button(transaction.cleared ? "Uncleared" : "Cleared") {
-                            store.setTransactionCleared(transaction.id, cleared: !transaction.cleared)
-                        }.tint(.blue)
-                    }
+                    .modifier(TransactionRowSwipeActions(transaction: transaction,
+                        pendingDeletion: $pendingDeletion, pendingDuplication: $pendingDuplication))
                 }
             }
         }.listSectionSeparator(.hidden)
@@ -575,11 +565,6 @@ struct TransactionListScreen: View {
                 }
             }
         }
-    }
-
-    private func requestDeletion(_ row: LedgerTransaction) {
-        if let rule = row.recurrenceRule, rule.frequency != .never { pendingDeletion = row }
-        else { store.deleteTransaction(row.id, scope: .occurrence) }
     }
 
     private func registerDayTitle(_ date: Date) -> String {
@@ -859,7 +844,7 @@ struct TransactionDetailScreen: View {
             .overlay(alignment: .top) { Divider() }
         }
         .modifier(TransactionDeletionConfirmation(transaction: $pendingDeletion, onDeleted: { dismiss() }))
-        .modifier(TransactionDuplicateConfirmation(transaction: $pendingDuplication))
+        .modifier(TransactionDuplicateConfirmation(transaction: $pendingDuplication, route: $route))
     }
 
     private func requestDeletion() {
@@ -1226,6 +1211,11 @@ struct QuickSearchSheet: View {
     @Binding var navigationPath: [MobileRoute]
     @Binding var presentedSheet: ShellSheet?
     @Binding var route: EditorRoute?
+    @State private var pendingDeletion: LedgerTransaction?
+    @State private var pendingDuplication: LedgerTransaction?
+    @State private var inlineEditorRoute: EditorRoute?
+    @State private var resultsQuery = ""
+    @State private var hasInitializedSearch = false
     @State private var searchText = ""
     @State private var searchResults = MobileQuickSearchResults.empty
     @State private var isSearchPresented = false
@@ -1291,9 +1281,9 @@ struct QuickSearchSheet: View {
                                 .accessibilityIdentifier("search-filter-\(field.rawValue)")
                         }
                     }
-                    if isSearching {
+                    if isSearching && searchResults.isEmpty {
                         ProgressView("Searching")
-                    } else if searchResults.isEmpty {
+                    } else if !isSearching && searchResults.isEmpty {
                         Section {
                             Text("No Results")
                                 .foregroundStyle(.secondary)
@@ -1322,6 +1312,8 @@ struct QuickSearchSheet: View {
                                 .buttonStyle(TransactionRowButtonStyle())
                                 .listRowInsets(EdgeInsets())
                                 .accessibilityIdentifier("search-transaction-\(transaction.id.uuidString)")
+                                .modifier(TransactionRowSwipeActions(transaction: transaction,
+                                    pendingDeletion: $pendingDeletion, pendingDuplication: $pendingDuplication))
                             }
                         }
                     }
@@ -1406,7 +1398,20 @@ struct QuickSearchSheet: View {
                 }
             }
         }
+        .modifier(TransactionDeletionConfirmation(transaction: $pendingDeletion))
+        .modifier(TransactionDuplicateConfirmation(transaction: $pendingDuplication, route: $inlineEditorRoute))
+        .sheet(item: $inlineEditorRoute) { EditorSheet(route: $0) }
+        .background {
+            Color.clear.alert(item: Binding(
+                get: { inlineEditorRoute == nil ? store.validationError : nil },
+                set: { _ in store.validationError = nil }
+            )) { error in
+                Alert(title: Text("Finances"), message: Text(error.message), dismissButton: .default(Text("OK")))
+            }
+        }
         .onAppear {
+            guard !hasInitializedSearch else { return }
+            hasInitializedSearch = true
             if let initialQuery { searchText = initialQuery.text }
             isSearchPresented = true
         }
@@ -1425,11 +1430,15 @@ struct QuickSearchSheet: View {
         let trimmedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedSearch.isEmpty else {
             searchResults = .empty
+            resultsQuery = ""
             isSearching = false
             return
         }
         isSearching = true
-        searchResults = .empty
+        if resultsQuery != trimmedSearch {
+            searchResults = .empty
+            resultsQuery = trimmedSearch
+        }
         let scope = contextScope ?? .all
         let matchingRows: [LedgerTransaction]
         do {

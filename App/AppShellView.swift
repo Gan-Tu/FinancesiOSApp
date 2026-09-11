@@ -108,10 +108,7 @@ struct AppShellView: View {
             if scenePhase != .active { store.lockApp() }
         }
         .onDisappear { store.setSceneActive(false, sceneID: sceneID) }
-        .alert(item: Binding(
-            get: { route == nil ? store.validationError : nil },
-            set: { _ in store.validationError = nil }
-        )) { error in
+        .alert(item: shellValidationError) { error in
             Alert(title: Text("Finances"), message: Text(error.message), dismissButton: .default(Text("OK")))
         }
     }
@@ -126,6 +123,13 @@ struct AppShellView: View {
                 newTransaction: { showingNewTransactionDialog = true }
             )
         }
+    }
+
+    private var shellValidationError: Binding<ValidationError?> {
+        Binding(get: {
+            if case .quickSearch? = presentedSheet { return nil }
+            return route == nil ? store.validationError : nil
+        }, set: { _ in store.validationError = nil })
     }
 
     private var showsGlobalBottomBar: Bool {

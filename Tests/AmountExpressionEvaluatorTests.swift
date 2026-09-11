@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 @testable import FinancesClone
 
 final class AmountExpressionEvaluatorTests: XCTestCase {
@@ -164,4 +165,98 @@ final class AmountExpressionEvaluatorTests: XCTestCase {
         assertEvaluates("10\u{00F7}4", to: "2.5")     // division sign
         assertEvaluates("\u{2212}5+3", to: "-2")      // unicode minus
     }
+}
+
+@MainActor
+final class AmountEntryTests: XCTestCase {
+    func testOnlyFirstEmptyNewAmountStartsNegative() {
+        for first in ["", "0", "0.00", "-0.00"] {
+            var draft = TransactionDraft()
+            draft.postings = [PostingDraft(amount: first), PostingDraft(amount: "0.00")]
+            XCTAssertEqual(draft.preparedForAmountEntry.postings.map(\.amount), ["-", ""])
+        }
+        var existing = TransactionDraft()
+        existing.id = UUID()
+        existing.postings = [PostingDraft(amount: "0.00"), PostingDraft(amount: "5")]
+        XCTAssertEqual(existing.preparedForAmountEntry, existing)
+        var duplicate = existing
+        duplicate.id = nil
+        duplicate.postings[0].amount = "-5"
+        XCTAssertEqual(duplicate.preparedForAmountEntry, duplicate, "Duplicated amounts keep their signs and values")
+        duplicate.postings[0].amount = "5"
+        XCTAssertEqual(duplicate.preparedForAmountEntry, duplicate)
+        duplicate.isDuplicate = true
+        duplicate.postings = [PostingDraft(amount: "0.00"), PostingDraft(amount: "-5"), PostingDraft(amount: "5")]
+        XCTAssertEqual(duplicate.preparedForAmountEntry, duplicate, "Keep every copied amount, including imported zero-valued lines")
+    }
+
+    func testSignToggleSupportsEmptyAmountsAndExpressions() {
+        XCTAssertEqual(AmountKeyboardInput.togglingSign(of: "-"), "")
+        XCTAssertEqual(AmountKeyboardInput.togglingSign(of: ""), "-")
+        XCTAssertEqual(AmountKeyboardInput.togglingSign(of: "-5"), "5.00")
+        XCTAssertEqual(AmountKeyboardInput.togglingSign(of: "5"), "-5.00")
+        XCTAssertEqual(AmountKeyboardInput.togglingSign(of: "-5+2"), "3.00")
+        XCTAssertNil(AmountKeyboardInput.togglingSign(of: "5*"))
+    }
+
+    func testOperatorInsertionUsesNativeCaretSelectionAndEditingEvents() throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previousKeyWindow = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = UIViewController()
+        let field = UITextField(frame: CGRect(x: 20, y: 100, width: 240, height: 44))
+        window.rootViewController?.view.addSubview(field)
+        window.makeKeyAndVisible()
+        defer {
+            field.resignFirstResponder()
+            window.isHidden = true
+            previousKeyWindow?.makeKeyAndVisible()
+        }
+        XCTAssertTrue(field.becomeFirstResponder())
+        let changes = AmountEditingEvents()
+        field.addTarget(changes, action: #selector(AmountEditingEvents.changed(_:)), for: .editingChanged)
+
+        func select(_ offset: Int, length: Int = 0) throws {
+            let start = try XCTUnwrap(field.position(from: field.beginningOfDocument, offset: offset))
+            let end = try XCTUnwrap(field.position(from: start, offset: length))
+            field.selectedTextRange = field.textRange(from: start, to: end)
+        }
+        field.text = "-"
+        try select(0)
+        AmountKeyboardInput.moveAfterLoneSign()
+        field.insertText("2")
+        field.insertText("5")
+        XCTAssertEqual(field.text, "-25", "A tap on a lone sign should start magnitude entry after it")
+        field.text = "-"
+        try select(0, length: 1)
+        AmountKeyboardInput.moveAfterLoneSign()
+        field.insertText("5")
+        XCTAssertEqual(field.text, "5", "Selecting and replacing the sign must allow positive entry")
+        field.text = "5"
+        try select(0)
+        AmountKeyboardInput.moveAfterLoneSign()
+        XCTAssertEqual(field.offset(from: field.beginningOfDocument, to: try XCTUnwrap(field.selectedTextRange).start), 0,
+            "Existing numbers must retain the user's chosen insertion point")
+        AmountKeyboardInput.insertOperator("−")
+        XCTAssertEqual(field.text, "-5")
+        XCTAssertEqual(changes.lastText, "-5", "Native edits must notify the SwiftUI binding and rebalance the other posting")
+        field.deleteBackward()
+        XCTAssertEqual(field.text, "5", "Removing the inserted sign must leave a positive number")
+        try select(1)
+        AmountKeyboardInput.insertOperator("−")
+        field.insertText("2")
+        XCTAssertEqual(field.text, "5-2")
+        XCTAssertEqual(decimalFromInput(field.text ?? ""), 3, "Subtraction at the end must continue to work")
+        field.text = "123"
+        try select(1, length: 1)
+        AmountKeyboardInput.insertOperator("+")
+        XCTAssertEqual(field.text, "1+3", "An operator replaces selected text, rather than appending")
+        XCTAssertEqual(changes.lastText, "1+3")
+    }
+}
+
+@MainActor
+private final class AmountEditingEvents: NSObject {
+    var lastText: String?
+    @objc func changed(_ field: UITextField) { lastText = field.text }
 }

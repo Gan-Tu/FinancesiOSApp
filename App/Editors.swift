@@ -5,6 +5,51 @@ enum TransactionEditorField: Hashable {
     case amount(UUID), notes, payee, number
 }
 
+extension TransactionDraft {
+    /// Seed a sign once when opening a new, empty amount. Subsequent edits,
+    /// including deleting the sign, belong entirely to the user.
+    var preparedForAmountEntry: TransactionDraft {
+        guard id == nil, !isDuplicate else { return self }
+        var editable = self
+        for index in editable.postings.indices {
+            let text = editable.postings[index].amount
+            if text.isEmpty || decimalFromInput(text) == 0 {
+                editable.postings[index].amount = index == 0 ? "-" : ""
+            }
+        }
+        return editable
+    }
+}
+
+@MainActor
+enum AmountKeyboardInput {
+    static func insertOperator(_ symbol: String) {
+        // Use the active field's native selection/caret and editing events so
+        // SwiftUI updates the draft and its balancing posting just as typing does.
+        UIApplication.shared.sendAction(#selector(UIKeyInput.insertText(_:)), to: nil,
+            from: symbol == "−" ? "-" : symbol, for: nil)
+    }
+
+    static func moveAfterLoneSign() {
+        UIApplication.shared.sendAction(#selector(UIResponder.moveAfterLoneAmountSign), to: nil, from: nil, for: nil)
+    }
+
+    static func togglingSign(of text: String) -> String? {
+        switch text.trimmingCharacters(in: .whitespacesAndNewlines) {
+        case "": return "-"
+        case "-", "−": return ""
+        default: return decimalFromInput(text).map { decimalInputString(-$0) }
+        }
+    }
+}
+
+extension UIResponder {
+    @objc fileprivate func moveAfterLoneAmountSign() {
+        guard let field = self as? UITextField, field.text == "-", field.selectedTextRange?.isEmpty == true else { return }
+        field.selectedTextRange = field.textRange(from: field.endOfDocument, to: field.endOfDocument)
+    }
+}
+
 /// Keep account selection in the original transaction sheet, without briefly
 /// presenting the detailed editor or its amount keyboard underneath the picker.
 struct TemplateTransactionEntryView: View {
@@ -66,13 +111,7 @@ struct TransactionEditorView: View {
         self.title = title
         self.initialDraft = initialDraft
         self.scanInvoice = scanInvoice
-        var editable = initialDraft
-        if initialDraft.id == nil {
-            for index in editable.postings.indices where decimalFromInput(editable.postings[index].amount) == 0 {
-                editable.postings[index].amount = ""
-            }
-        }
-        _draft = State(initialValue: editable)
+        _draft = State(initialValue: initialDraft.preparedForAmountEntry)
     }
 
     private var focusedAmountID: UUID? {
@@ -228,7 +267,7 @@ struct TransactionEditorView: View {
             }
             ToolbarItem(placement: .keyboard) {
                 AmountKeyboardToolbar(showOperators: focusedAmountID != nil,
-                    negate: { calculate(negate: true) }, appendOperator: appendOperator,
+                    negate: { calculate(negate: true) }, insertOperator: insertOperator,
                     calculate: { calculate() }, done: { focusedField = nil })
             }
 
@@ -274,15 +313,18 @@ struct TransactionEditorView: View {
         draft = PostingBalance.settingAmount(value, at: index, in: draft, accounts: store.data.accounts, commodities: store.data.commodities)
     }
 
-    private func appendOperator(_ symbol: String) {
-        guard let index = draft.postings.firstIndex(where: { $0.id == focusedAmountID }) else { return }
-        updateAmount(draft.postings[index].amount + (symbol == "−" ? "-" : symbol), at: index)
+    private func insertOperator(_ symbol: String) {
+        guard focusedAmountID != nil else { return }
+        AmountKeyboardInput.insertOperator(symbol)
     }
 
     private func calculate(negate: Bool = false) {
-        guard let index = draft.postings.firstIndex(where: { $0.id == focusedAmountID }),
-              let value = decimalFromInput(draft.postings[index].amount) else { return }
-        updateAmount(decimalInputString(negate ? -value : value), at: index)
+        guard let index = draft.postings.firstIndex(where: { $0.id == focusedAmountID }) else { return }
+        let text = draft.postings[index].amount
+        let result = negate ? AmountKeyboardInput.togglingSign(of: text)
+            : decimalFromInput(text).map(decimalInputString)
+        guard let result else { return }
+        updateAmount(result, at: index)
     }
 
     private func save(scope: RecurringJournalEditor.Scope) {
@@ -303,7 +345,7 @@ struct TransactionEditorView: View {
 private struct AmountKeyboardToolbar: View {
     let showOperators: Bool
     let negate: () -> Void
-    let appendOperator: (String) -> Void
+    let insertOperator: (String) -> Void
     let calculate: () -> Void
     let done: () -> Void
 
@@ -312,7 +354,7 @@ private struct AmountKeyboardToolbar: View {
             if showOperators {
                 key("±", highlighted: true, action: negate)
                 ForEach(["÷", "×", "−", "+"], id: \.self) { symbol in
-                    key(symbol) { appendOperator(symbol) }
+                    key(symbol) { insertOperator(symbol) }
                 }
                 key("=", highlighted: true, action: calculate)
             } else { Spacer() }
@@ -376,6 +418,12 @@ struct PostingEditorRow: View {
                 .focused(focusedField, equals: .amount(posting.id))
                 .frame(width: amountWidth).monospacedDigit()
                 .accessibilityLabel("Amount for \(store.account(posting.accountID)?.name ?? "account")")
+                .simultaneousGesture(TapGesture().onEnded {
+                    guard posting.amount == "-" else { return }
+                    // Let UITextField finish placing its caret before correcting
+                    // a tap on an otherwise empty amount's default sign.
+                    DispatchQueue.main.async { AmountKeyboardInput.moveAfterLoneSign() }
+                })
             Menu {
                 Button("Account Currency") { posting.commodityID = nil }
                 ForEach(ledgerID.map { store.commodities(for: $0) } ?? []) { currency in

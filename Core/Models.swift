@@ -566,6 +566,8 @@ struct TransactionDraft: Identifiable, Equatable {
     var postings: [PostingDraft] = []
     var attachmentContainer: AttachmentContainer?
     var attachments: [AttachmentAsset] = []
+    // Draft-only intent: receipt files are copied only when the duplicate is saved.
+    var isDuplicate = false
 
     static func new(defaultDebit: UUID?, defaultCredit: UUID?, ledgerID: UUID? = nil) -> TransactionDraft {
         var draft = TransactionDraft(ledgerID: ledgerID)

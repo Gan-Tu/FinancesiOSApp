@@ -2,6 +2,104 @@ import XCTest
 
 @MainActor
 final class JournalVisibilityAndSearchUITests: XCTestCase {
+    func testQuickSearchSupportsClearDuplicateAndDeleteWithoutLeavingSearch() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        defer { app.terminate() }
+        app.launchArguments = ["--demo", "--reset-demo"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Journals"].waitForExistence(timeout: 10))
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Personal,")).firstMatch.tap()
+        app.buttons["Quick Search"].tap()
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        search.tap(); search.typeText("Weekly")
+        let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "search-transaction-"))
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5))
+        app.buttons["search-filter-anywhere"].tap()
+        XCTAssertTrue(app.buttons["Quick Search"].waitForExistence(timeout: 5))
+        app.buttons["Quick Search"].tap()
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        XCTAssertEqual(search.value as? String, "Weekly")
+        search.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5)).tap()
+        search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 6) + "Weekly groceries")
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5))
+        let originalCount = rows.count
+        let rowID = rows.firstMatch.identifier
+        let row = app.buttons[rowID]
+        row.swipeRight()
+        let firstAction = app.buttons["Uncleared"].exists ? "Uncleared" : "Cleared"
+        XCTAssertTrue(app.buttons[firstAction].waitForExistence(timeout: 5))
+        app.buttons[firstAction].tap()
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        row.swipeRight()
+        let oppositeAction = firstAction == "Uncleared" ? "Cleared" : "Uncleared"
+        XCTAssertTrue(app.buttons[oppositeAction].waitForExistence(timeout: 5))
+        app.buttons[oppositeAction].tap()
+        XCTAssertTrue(app.navigationBars["Quick Search"].exists)
+        row.swipeLeft()
+        XCTAssertTrue(app.buttons["Delete"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Duplicate"].exists)
+        let image = XCTAttachment(screenshot: app.screenshot())
+        image.name = "Quick Search direct swipe actions"; image.lifetime = .keepAlways; add(image)
+        app.buttons["Duplicate"].tap()
+        XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 5))
+        app.alerts.buttons["Duplicate With Today's Date"].tap()
+        XCTAssertTrue(app.navigationBars["New Transaction"].waitForExistence(timeout: 5))
+        app.navigationBars["New Transaction"].buttons["Cancel"].tap()
+        XCTAssertTrue(app.navigationBars["Quick Search"].waitForExistence(timeout: 5))
+        XCTAssertEqual(search.value as? String, "Weekly groceries")
+        XCTAssertEqual(rows.count, originalCount)
+        row.swipeLeft(); app.buttons["Duplicate"].tap()
+        app.alerts.buttons["Duplicate With Today's Date"].tap()
+        XCTAssertTrue(app.navigationBars["New Transaction"].waitForExistence(timeout: 5))
+        app.navigationBars["New Transaction"].buttons["Save"].tap()
+        XCTAssertTrue(app.navigationBars["Quick Search"].waitForExistence(timeout: 5))
+        let copied = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == %d", originalCount + 1), object: rows)
+        XCTAssertEqual(XCTWaiter.wait(for: [copied], timeout: 5), .completed)
+        XCTAssertEqual(search.value as? String, "Weekly groceries")
+        row.swipeLeft(); app.buttons["Delete"].tap()
+        let removed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: row)
+        XCTAssertEqual(XCTWaiter.wait(for: [removed], timeout: 5), .completed)
+        XCTAssertTrue(app.navigationBars["Quick Search"].exists)
+        XCTAssertEqual(search.value as? String, "Weekly groceries")
+        XCTAssertEqual(rows.count, originalCount)
+    }
+
+    func testQuickSearchRecurringDeletionSupportsCancelSingleAndFutureScope() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        defer { app.terminate() }
+        app.launchArguments = ["--demo", "--reset-demo", "--demo-recurring"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Journals"].waitForExistence(timeout: 10))
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Personal,")).firstMatch.tap()
+        app.buttons["Quick Search"].tap()
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        search.tap(); search.typeText("Repeating sample\n")
+        app.buttons["Show All Future Entries"].tap()
+        let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "search-transaction-"))
+        let threeRows = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 3"), object: rows)
+        XCTAssertEqual(XCTWaiter.wait(for: [threeRows], timeout: 5), .completed)
+        let earliest = try XCTUnwrap(rows.allElementsBoundByIndex.first)
+        let earliestID = earliest.identifier
+        earliest.swipeLeft(); app.buttons["Delete"].tap()
+        XCTAssertTrue(app.sheets.buttons["Delete Only This Transaction"].waitForExistence(timeout: 5))
+        app.sheets.buttons["Cancel"].tap()
+        XCTAssertEqual(rows.count, 3)
+        app.buttons[earliestID].swipeLeft(); app.buttons["Delete"].tap()
+        app.sheets.buttons["Delete Only This Transaction"].tap()
+        let twoRows = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 2"), object: rows)
+        XCTAssertEqual(XCTWaiter.wait(for: [twoRows], timeout: 5), .completed)
+        try XCTUnwrap(rows.allElementsBoundByIndex.first).swipeLeft(); app.buttons["Delete"].tap()
+        app.sheets.buttons["Delete All Future Transactions"].tap()
+        let removed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 0"), object: rows)
+        XCTAssertEqual(XCTWaiter.wait(for: [removed], timeout: 5), .completed)
+        XCTAssertTrue(app.navigationBars["Quick Search"].exists)
+        XCTAssertEqual(search.value as? String, "Repeating sample")
+    }
+
     func testHideJournalSurvivesRelaunchAndCanBeRestoredInSettings() throws {
         continueAfterFailure = false
         let app = XCUIApplication()

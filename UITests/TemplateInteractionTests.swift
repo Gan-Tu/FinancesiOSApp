@@ -87,7 +87,7 @@ final class TemplateInteractionTests: XCTestCase {
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "A new transaction should focus its first amount automatically")
         let amount = app.textFields.matching(NSPredicate(format: "label BEGINSWITH %@", "Amount for")).firstMatch
         app.typeText("25")
-        XCTAssertEqual(amount.value as? String, "25")
+        XCTAssertEqual(amount.value as? String, "-25")
         for symbol in ["±", "÷", "×", "−", "+", "="] {
             let key = app.buttons["amount-key-\(symbol)"]
             XCTAssertTrue(key.isHittable)
@@ -95,9 +95,17 @@ final class TemplateInteractionTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(key.frame.height, 44)
         }
         app.buttons["amount-key-+"].tap(); app.typeText("3"); app.buttons["amount-key-="].tap()
-        XCTAssertEqual(amount.value as? String, "28.00")
+        XCTAssertEqual(amount.value as? String, "-22.00")
         app.buttons["amount-key-±"].tap()
-        XCTAssertEqual(amount.value as? String, "-28.00")
+        XCTAssertEqual(amount.value as? String, "22.00")
+        // Tap before the right-aligned number, then insert a unary minus there.
+        amount.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)).tap()
+        app.buttons["amount-key-−"].tap()
+        XCTAssertEqual(amount.value as? String, "-22.00")
+        app.typeText(XCUIKeyboardKey.delete.rawValue)
+        XCTAssertEqual(amount.value as? String, "22.00", "Deleting the sign must keep the amount positive")
+        app.typeText("5")
+        XCTAssertEqual(amount.value as? String, "522.00", "Continue typing at the cursor without restoring the sign")
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = "Large calculator keys and focused amount"; attachment.lifetime = .keepAlways; add(attachment)
         app.buttons["Done"].tap()
@@ -107,6 +115,27 @@ final class TemplateInteractionTests: XCTestCase {
         app.buttons["Done"].tap()
         let hidden = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.keyboards.firstMatch)
         XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 3), .completed, "Done should dismiss the keyboard from Payee too")
+    }
+
+    func testInitialAmountSignCanBeOverriddenBeforeTyping() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        defer { app.terminate() }
+        app.launchArguments = ["--demo", "--reset-demo"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Journals"].waitForExistence(timeout: 10))
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Personal,")).firstMatch.tap()
+        app.buttons["New Transaction"].tap(); app.sheets.buttons["Income"].tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        let amounts = app.textFields.matching(NSPredicate(format: "label BEGINSWITH %@", "Amount for"))
+        XCTAssertEqual(amounts.firstMatch.value as? String, "-")
+        app.buttons["amount-key-±"].tap()
+        app.typeText("5")
+        XCTAssertEqual(amounts.firstMatch.value as? String, "5")
+        XCTAssertEqual(amounts.element(boundBy: 1).value as? String, "-5.00")
+        app.buttons["amount-key-±"].tap()
+        XCTAssertEqual(amounts.firstMatch.value as? String, "-5.00")
+        XCTAssertEqual(amounts.element(boundBy: 1).value as? String, "5.00")
     }
 
     func testInvoiceTemplateRequestsReceiptScanning() throws {

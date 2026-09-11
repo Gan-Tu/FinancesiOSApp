@@ -288,7 +288,9 @@ final class CompanionFlowTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["New Transaction"].waitForExistence(timeout: 5))
         let amount = app.textFields.matching(NSPredicate(format: "label BEGINSWITH %@", "Amount for")).firstMatch
         XCTAssertTrue(amount.waitForExistence(timeout: 5))
-        amount.tap()
+        // Delete from after the seeded sign; tapping its left would correctly
+        // put the caret before it, where backspace cannot remove anything.
+        amount.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5)).tap()
         amount.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 4) + "25")
         XCTAssertEqual(amount.value as? String, "25")
         XCTAssertEqual(app.textFields["Amount for Checking"].value as? String, "-25.00")
@@ -388,6 +390,8 @@ final class CompanionFlowTests: XCTestCase {
         let amounts = app.textFields.matching(NSPredicate(format: "label BEGINSWITH %@", "Amount for"))
         XCTAssertTrue(amounts.firstMatch.waitForExistence(timeout: 5))
         amounts.element(boundBy: 0).tap(); amounts.element(boundBy: 0).typeText("25")
+        XCTAssertEqual(amounts.element(boundBy: 0).value as? String, "-25")
+        XCTAssertEqual(amounts.element(boundBy: 1).value as? String, "25.00")
         app.buttons["Done"].tap()
         app.buttons["Posting"].tap()
         XCTAssertEqual(amounts.count, 3)
@@ -401,7 +405,7 @@ final class CompanionFlowTests: XCTestCase {
         app.buttons["Remove Posting"].tap()
         XCTAssertEqual(amounts.count, 2)
         app.buttons["Balance"].tap()
-        XCTAssertEqual(amounts.element(boundBy: 1).value as? String, "-25.00")
+        XCTAssertEqual(amounts.element(boundBy: 1).value as? String, "25.00")
         let notes = app.textFields["Notes"]
         notes.tap(); notes.typeText("Split control acceptance")
         app.buttons["Save"].tap()

@@ -29,11 +29,12 @@ struct TransactionDeletionConfirmation: ViewModifier {
 struct TransactionDuplicateConfirmation: ViewModifier {
     @EnvironmentObject private var store: MobileLedgerStore
     @Binding var transaction: LedgerTransaction?
+    @Binding var route: EditorRoute?
 
     func body(content: Content) -> some View {
-        content.confirmationDialog("Duplicate Transaction", isPresented: Binding(
+        content.alert("Duplicate Transaction", isPresented: Binding(
             get: { transaction != nil }, set: { if !$0 { transaction = nil } }
-        ), titleVisibility: .hidden, presenting: transaction) { row in
+        ), presenting: transaction) { row in
             Button("Duplicate") { duplicate(row, useToday: false) }
             Button("Duplicate With Today's Date") { duplicate(row, useToday: true) }
             Button("Cancel", role: .cancel) {}
@@ -41,11 +42,42 @@ struct TransactionDuplicateConfirmation: ViewModifier {
     }
 
     private func duplicate(_ row: LedgerTransaction, useToday: Bool) {
-        store.duplicateTransaction(row.id, useToday: useToday)
-        if store.validationError == nil {
-            do { try store.flushLocalChanges() }
-            catch { store.validationError = ValidationError(message: "Duplicate failed: \(error.localizedDescription)") }
+        guard let draft = store.duplicateTransactionDraft(row.id, useToday: useToday) else {
+            transaction = nil
+            store.validationError = ValidationError(message: "This transaction no longer exists.")
+            return
         }
         transaction = nil
+        route = .transaction(draft, "New Transaction")
+    }
+}
+
+/// Register and Quick Search use identical actions and confirmation rules.
+struct TransactionRowSwipeActions: ViewModifier {
+    @EnvironmentObject private var store: MobileLedgerStore
+    let transaction: LedgerTransaction
+    @Binding var pendingDeletion: LedgerTransaction?
+    @Binding var pendingDuplication: LedgerTransaction?
+
+    func body(content: Content) -> some View {
+        let targetCleared = !(store.transaction(transaction.id) ?? transaction).cleared
+        content
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                // A destructive role removes the cell optimistically, before
+                // confirmation or asynchronous query refresh has updated the list.
+                Button("Delete") {
+                    if let rule = transaction.recurrenceRule, rule.frequency != .never {
+                        pendingDeletion = transaction
+                    } else {
+                        store.deleteTransaction(transaction.id, scope: .occurrence, expected: transaction)
+                    }
+                }.tint(.red)
+                Button("Duplicate") { pendingDuplication = transaction }.tint(.gray)
+            }
+            .swipeActions(edge: .leading) {
+                Button(targetCleared ? "Cleared" : "Uncleared") {
+                    store.setTransactionCleared(transaction.id, cleared: targetCleared)
+                }.tint(.blue)
+            }
     }
 }

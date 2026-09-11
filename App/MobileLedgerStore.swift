@@ -2019,7 +2019,7 @@ final class MobileLedgerStore: ObservableObject {
         }
 
         do {
-            try validate(postings: postings, ledgerID: ledgerID)
+            try validate(postings: postings, ledgerID: ledgerID, permitsZeroPostings: draft.isDuplicate)
         } catch let error as ValidationError {
             validationError = error
             return
@@ -2028,7 +2028,7 @@ final class MobileLedgerStore: ObservableObject {
             return
         }
 
-        let transaction = LedgerTransaction(
+        var transaction = LedgerTransaction(
             id: draft.id ?? UUID(),
             ledgerID: ledgerID,
             sourceID: previous?.sourceID,
@@ -2042,7 +2042,23 @@ final class MobileLedgerStore: ObservableObject {
             attachment: attachmentContainer(from: draft),
             externalTransactionID: previous?.externalTransactionID
         )
+        var copiedReceipts: AttachmentContainer?
+        var committed = false
+        defer {
+            if !committed, let copiedReceipts {
+                for asset in copiedReceipts.assets {
+                    try? FileManager.default.removeItem(at: attachmentURL(for: asset))
+                }
+            }
+        }
         do {
+            if draft.isDuplicate, draft.id == nil, let originalReceipts = transaction.attachment {
+                let copy = try AttachmentDuplicator.duplicate(originalReceipts, into: attachmentsDirectory) {
+                    attachmentURL(for: $0)
+                }
+                copiedReceipts = copy
+                transaction.attachment = copy
+            }
             let expectedSingleRowCount = data.transactions.count + (previous == nil ? 1 : 0)
             let candidate = try RecurringJournalEditor.apply(
                 transaction, replacing: draft.id, in: data, scope: scope,
@@ -2050,6 +2066,7 @@ final class MobileLedgerStore: ObservableObject {
             )
             try Self.validateCandidateData(candidate, operation: "Transaction")
             data = candidate
+            committed = true
             if previous?.recurrenceRule == nil && transaction.recurrenceRule == nil,
                candidate.transactions.count == expectedSingleRowCount {
                 refreshDerivedCacheForTransactionReplacement(previous: previous, updated: transaction)
@@ -2096,44 +2113,26 @@ final class MobileLedgerStore: ObservableObject {
         catch { validationError = ValidationError(message: "Delete failed: \(error.localizedDescription)") }
     }
 
-    func duplicateTransaction(_ transactionID: UUID, useToday: Bool = true) {
-        guard allowJournalMutation() else { return }
-        validationError = nil
-        guard let transaction = data.transactions.first(where: { $0.id == transactionID }) else { return }
-        var copy = transaction
-        copy.id = UUID()
-        copy.sourceID = nil
-        copy.externalTransactionID = nil
-        if useToday {
-            copy.date = Date()
-        }
-        copy.postings = copy.postings.enumerated().map { index, posting in
+    /// Preparing a duplicate never writes data or receipt files. It is a new,
+    /// independent entry; the original repeating schedule remains untouched.
+    func duplicateTransactionDraft(_ transactionID: UUID, useToday: Bool, now: Date = Date()) -> TransactionDraft? {
+        guard let original = transaction(transactionID) else { return nil }
+        var copy = draft(for: original)
+        copy.id = nil
+        if useToday { copy.date = now }
+        copy.postings = copy.postings.map { posting in
             var posting = posting
             posting.id = UUID()
-            posting.listIndex = index
             return posting
         }
-        if var rule = copy.recurrenceRule {
-            rule.id = UUID()
-            rule.templateHistory = RecurrenceTemplateHistory(baseTemplate: RecurrenceTransactionTemplate(transaction: copy))
-            copy.recurrenceRule = rule
-        }
-        if let attachment = copy.attachment {
-            do {
-                copy.attachment = try AttachmentDuplicator.duplicate(attachment, into: attachmentsDirectory) {
-                    attachmentURL(for: $0)
-                }
-            } catch {
-                validationError = ValidationError(message: "Transaction could not be duplicated: \(error.localizedDescription)")
-                return
-            }
-        }
-        do {
-            data = try RecurringJournalEditor.apply(copy, replacing: nil, in: data, deletedIDs: deletedTransactionTombstoneIDs)
-            if copy.recurrenceRule == nil { refreshDerivedCacheForTransactionInsertion(copy) }
-            else { refreshDerivedCache() }
-            save(syncCloud: true, refreshCache: false)
-        } catch { validationError = ValidationError(message: error.localizedDescription) }
+        copy.recurrenceRuleID = nil
+        copy.repeatFrequency = .never
+        copy.repeatIntervalValue = 1
+        copy.repeatOnWorkdays = false
+        copy.repeatOccurrenceCount = nil
+        copy.repeatEndDate = nil
+        copy.isDuplicate = true
+        return copy
     }
 
     func templateDraft(for template: TransactionTemplate?) -> TransactionTemplateDraft {
@@ -2983,11 +2982,12 @@ final class MobileLedgerStore: ObservableObject {
         deletedTransactionTombstoneIDs = (try? sqliteStore.deletedTransactionIDs()) ?? []
     }
 
-    private func validate(postings: [Posting], ledgerID: UUID) throws {
+    private func validate(postings: [Posting], ledgerID: UUID, permitsZeroPostings: Bool = false) throws {
         guard postings.count >= 2 else {
             throw ValidationError(message: "A transaction needs at least two postings.")
         }
-        guard postings.allSatisfy({ !$0.amount.isZero }) else {
+        guard postings.contains(where: { !$0.amount.isZero }),
+              permitsZeroPostings || postings.allSatisfy({ !$0.amount.isZero }) else {
             throw ValidationError(message: "Posting amounts cannot be zero.")
         }
         for posting in postings {
