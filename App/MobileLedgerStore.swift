@@ -1925,7 +1925,9 @@ final class MobileLedgerStore: ObservableObject {
 
     func makeTransactionDraft(kind: MobileNewTransactionKind = .expense, ledgerID requestedLedgerID: UUID? = nil, accountID: UUID? = nil) -> TransactionDraft {
         guard let ledgerID = requestedLedgerID ?? selectedLedgerID else { return TransactionDraft() }
-        let ledgerAccounts = accounts(for: ledgerID)
+        // Default postings follow the visible tree, not UUID-sorted storage groups.
+        // Otherwise a child category can randomly precede its intended parent.
+        let ledgerAccounts = accountNodes(ledgerID: ledgerID).map(\.account)
         let asset = ledgerAccounts.first { $0.kind == .asset && $0.parentID != nil }?.id
         let expense = ledgerAccounts.first { $0.kind == .expense && $0.parentID != nil }?.id
         let income = ledgerAccounts.first { $0.kind == .income && $0.parentID != nil }?.id
@@ -2207,7 +2209,7 @@ final class MobileLedgerStore: ObservableObject {
     func templateDraft(for template: TransactionTemplate?) -> TransactionTemplateDraft {
         guard let template else {
             let ledgerID = selectedLedgerID
-            let ledgerAccounts = ledgerID.map { accounts(for: $0) } ?? []
+            let ledgerAccounts = ledgerID.map { accountNodes(ledgerID: $0).map(\.account) } ?? []
             return TransactionTemplateDraft(ledgerID: ledgerID, postings: [
                 PostingTemplateDraft(accountID: ledgerAccounts.first { $0.kind == .asset && $0.parentID != nil }?.id),
                 PostingTemplateDraft(accountID: ledgerAccounts.first { $0.kind == .expense && $0.parentID != nil }?.id)

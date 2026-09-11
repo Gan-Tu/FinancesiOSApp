@@ -38,6 +38,45 @@ final class TemplateAndNavigationPerformanceTests: XCTestCase {
         XCTAssertTrue(final.transactionTemplates(for: existingLedger).isEmpty)
     }
 
+    func testDefaultTemplateAccountsFollowDisplayOrderRegardlessOfParentUUIDs() throws {
+        for rootSortsFirst in [false, true] {
+            var data = DemoData.fixture()
+            let root = try XCTUnwrap(data.accounts.first { $0.name == "Expenses" })
+            let food = try XCTUnwrap(data.accounts.first { $0.name == "Food & Dining" })
+            let low = try XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-000000000001"))
+            let high = try XCTUnwrap(UUID(uuidString: "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF"))
+            let remapping = [root.id: rootSortsFirst ? low : high, food.id: rootSortsFirst ? high : low]
+            for index in data.accounts.indices {
+                data.accounts[index].id = remapping[data.accounts[index].id] ?? data.accounts[index].id
+                if let parent = data.accounts[index].parentID {
+                    data.accounts[index].parentID = remapping[parent] ?? parent
+                }
+            }
+            for row in data.transactions.indices {
+                for posting in data.transactions[row].postings.indices {
+                    let id = data.transactions[row].postings[posting].accountID
+                    data.transactions[row].postings[posting].accountID = remapping[id] ?? id
+                }
+            }
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let store = MobileLedgerStore(supportDirectory: directory, initialData: data)
+            XCTAssertFalse(store.requiresJournalRecovery)
+            let expense = store.makeTransactionDraft(kind: .expense)
+            XCTAssertEqual(store.account(expense.postings[0].accountID)?.name, "Food & Dining")
+            XCTAssertEqual(store.account(expense.postings[1].accountID)?.name, "Checking")
+            let template = store.templateDraft(for: nil)
+            XCTAssertEqual(store.account(template.postings[0].accountID)?.name, "Checking")
+            XCTAssertEqual(store.account(template.postings[1].accountID)?.name, "Food & Dining")
+            store.addJournal(name: "Household")
+            let ledgerID = try XCTUnwrap(store.selectedLedgerID)
+            let seeded = try XCTUnwrap(store.transactionTemplates(for: ledgerID).first { $0.name == "Expense" })
+            XCTAssertEqual(store.account(seeded.postings[0].accountID)?.name, "Food")
+            XCTAssertEqual(store.account(seeded.postings[1].accountID)?.name, "Checking")
+            try store.flushLocalChanges()
+        }
+    }
+
     func testTemplateEntrySelectsOnlyUnspecifiedAccountsAndBroadCategories() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
