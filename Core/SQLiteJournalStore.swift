@@ -313,7 +313,6 @@ struct JournalDataDiff {
     /// A transaction's canonical payload changes for note/number/payee/cleared
     /// edits, but its normalized children usually do not. Preserve those rows
     /// (and their uploaded receipt state) instead of deleting and rebuilding.
-    var transactionPostingsUnchanged: Set<UUID> = []
     var postingsChangedByTransaction: [UUID: [Posting]] = [:]
     var postingIDsDeletedByTransaction: [UUID: [UUID]] = [:]
     var transactionAttachmentsUnchanged: Set<UUID> = []
@@ -396,9 +395,7 @@ struct JournalDataDiff {
                 }
                 if previous != transaction {
                     diff.transactionsChanged.append(transaction)
-                    if previous.postings == transaction.postings {
-                        diff.transactionPostingsUnchanged.insert(transaction.id)
-                    } else {
+                    if previous.postings != transaction.postings {
                         let previousPostings = Dictionary(previous.postings.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
                         diff.postingsChangedByTransaction[transaction.id] = transaction.postings.filter { previousPostings[$0.id] != $0 }
                         let currentIDs = Set(transaction.postings.map(\.id))
