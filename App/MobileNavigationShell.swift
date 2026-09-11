@@ -286,6 +286,8 @@ struct JournalOverviewScreen: View {
         .animation(FinanceMotion.disclosure(reduceMotion: reduceMotion), value: collapsedAccountIDs)
         .compactGroupedForm()
         .safeAreaPadding(.top, 24)
+        .performanceDestination("journal-navigation")
+        .performanceDestination("register-back-navigation")
         .navigationTitle(store.ledger(ledgerID)?.name ?? "Journal")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -406,14 +408,17 @@ struct TransactionListScreen: View {
     @State private var loadingVisible = false
     @State private var loadError: String?
 
-    private enum ScrollTarget: Hashable { case day(Date), transaction(UUID) }
+    private typealias ScrollTarget = RegisterListItem.ID
 
     var body: some View {
         ScrollViewReader { proxy in
             List {
-                ForEach(presentation.months) { month in monthSection(month) }
+                ForEach(presentation.listItems) { item in
+                    registerListRow(item)
+                }
             }
             .listStyle(.plain)
+            .performanceDestination("register-navigation", ready: contentReady)
             .opacity(contentReady ? 1 : 0)
             .allowsHitTesting(contentReady)
             .accessibilityHidden(!contentReady)
@@ -508,45 +513,46 @@ struct TransactionListScreen: View {
         }
     }
 
-    private func monthSection(_ month: RegisterMonth) -> some View {
-        Section {
+    @ViewBuilder
+    private func registerListRow(_ item: RegisterListItem) -> some View {
+        switch item {
+        case .month(let month):
             monthHeading(month)
+                .id(item.id)
                 .listRowInsets(EdgeInsets(top: 12, leading: 20, bottom: 10, trailing: 20))
                 .listRowSeparator(.hidden)
                 .accessibilityIdentifier("month-heading")
-            ForEach(month.days) { day in
-                Text(registerDayTitle(day.date))
-                    .id(ScrollTarget.day(day.date))
-                    .font(.subheadline.weight(.bold)).foregroundColor(Color(uiColor: .label))
-                    .padding(.top, 14).padding(.bottom, 10)
-                    .background {
-                        if initialDay == day.date && !contentReady {
-                            RegisterInitialPositionProbe(armed: initialScrollRequested) {
-                                guard initialDay == day.date, !contentReady else { return }
-                                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.12)) { contentReady = true }
-                            }
+        case .day(let date):
+            Text(registerDayTitle(date))
+                .id(item.id)
+                .font(.subheadline.weight(.bold)).foregroundColor(Color(uiColor: .label))
+                .padding(.top, 14).padding(.bottom, 10)
+                .background {
+                    if initialDay == date && !contentReady {
+                        RegisterInitialPositionProbe(armed: initialScrollRequested) {
+                            guard initialDay == date, !contentReady else { return }
+                            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.12)) { contentReady = true }
                         }
                     }
-                    .listRowInsets(EdgeInsets(top: 0, leading: 28, bottom: 0, trailing: 20))
-                    .listRowSeparator(.hidden)
-                ForEach(day.transactions) { transaction in
-                    Button {
-                        openTransaction(transaction.id)
-                    } label: {
-                        RegisterRow(transaction: transaction, amounts: presentation.amounts[transaction.id] ?? [], balances: presentation.balances[transaction.id] ?? [], flow: store.accountFlowDisplay(for: transaction), isFuture: RegisterPresentation.isFuture(transaction.date))
-                            .equatable()
-                            .padding(EdgeInsets(top: 8, leading: 28, bottom: 8, trailing: 20))
-                    }
-                    .buttonStyle(TransactionRowButtonStyle())
-                    .id(ScrollTarget.transaction(transaction.id))
-                    .accessibilityIdentifier("register-row-\(transaction.id.uuidString)")
-                    .listRowInsets(EdgeInsets())
-                    .listRowSeparator(.hidden)
-                    .modifier(TransactionRowSwipeActions(transaction: transaction,
-                        pendingDeletion: $pendingDeletion, pendingDuplication: $pendingDuplication))
                 }
+                .listRowInsets(EdgeInsets(top: 0, leading: 28, bottom: 0, trailing: 20))
+                .listRowSeparator(.hidden)
+        case .transaction(let transaction):
+            Button {
+                FinancePerformanceTrace.begin("transaction-detail-navigation"); openTransaction(transaction.id)
+            } label: {
+                RegisterRow(transaction: transaction, amounts: presentation.amounts[transaction.id] ?? [], balances: presentation.balances[transaction.id] ?? [], flow: store.accountFlowDisplay(for: transaction), isFuture: RegisterPresentation.isFuture(transaction.date))
+                    .equatable()
+                    .padding(EdgeInsets(top: 8, leading: 28, bottom: 8, trailing: 20))
             }
-        }.listSectionSeparator(.hidden)
+            .buttonStyle(TransactionRowButtonStyle())
+            .id(item.id)
+            .accessibilityIdentifier("register-row-\(transaction.id.uuidString)")
+            .listRowInsets(EdgeInsets())
+            .listRowSeparator(.hidden)
+            .modifier(TransactionRowSwipeActions(store: store, transaction: transaction,
+                pendingDeletion: $pendingDeletion, pendingDuplication: $pendingDuplication))
+        }
     }
 
     private func monthHeading(_ month: RegisterMonth) -> some View {
@@ -671,6 +677,7 @@ struct RegisterRow: View, Equatable {
         .overlay(alignment: .topLeading) {
             TransactionGutter(cleared: transaction.cleared, hasAttachment: transaction.attachment?.assets.isEmpty == false)
         }
+        .performanceDestination("swipe-clear-\(transaction.id.uuidString)-\(transaction.cleared)")
         .accessibilityValue(transaction.cleared ? "Cleared" : "Uncleared")
         .opacity(isFuture ? 0.48 : 1)
         .accessibilityElement(children: .combine)
@@ -769,20 +776,33 @@ struct TemplateManagementSheet: View {
 }
 
 struct TransactionDetailScreen: View {
+    @EnvironmentObject private var store: MobileLedgerStore
+    let transactionID: UUID
+    @Binding var route: EditorRoute?
+
+    var body: some View {
+        TransactionDetailContent(transactionID: transactionID, route: $route,
+            attachmentSave: store.receiptAttachmentSaves.state(for: transactionID))
+    }
+}
+
+private struct TransactionDetailContent: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var store: MobileLedgerStore
     let transactionID: UUID
     @Binding var route: EditorRoute?
     @State private var pendingDeletion: LedgerTransaction?
     @State private var pendingDuplication: LedgerTransaction?
+    @State private var isDeleting = false
+    @State private var isActive = false
+    @ObservedObject var attachmentSave: ReceiptAttachmentSaveState
+    @State private var receiptOwnerID = UUID()
 
     private var transaction: LedgerTransaction? { store.transaction(transactionID) }
     private var attachments: Binding<[AttachmentAsset]> {
-        Binding(get: { transaction?.attachment?.assets ?? [] }, set: { assets in
-            guard let transaction else { return }
-            var draft = store.draft(for: transaction)
-            draft.attachments = assets
-            store.saveTransactionAndFlush(draft)
+        Binding(get: { store.receiptAttachmentSaves.state(for: transactionID).pendingAssets ?? transaction?.attachment?.assets ?? [] }, set: { assets in
+            guard transaction != nil else { return }
+            store.receiptAttachmentSaves.state(for: transactionID).update(assets, save: saveAttachments)
         })
     }
 
@@ -800,26 +820,41 @@ struct TransactionDetailScreen: View {
                 if !transaction.note.isEmpty { DetailValueRow(label: "Notes", value: transaction.note) }
                 if !transaction.payee.isEmpty { DetailValueRow(label: "Payee", value: transaction.payee) }
                 if !transaction.number.isEmpty { DetailValueRow(label: "Number", value: transaction.number) }
-                if let assets = transaction.attachment?.assets, !assets.isEmpty {
-                    ForEach(assets) { asset in
+                let displayedAssets = attachmentSave.pendingAssets ?? transaction.attachment?.assets ?? []
+                if !displayedAssets.isEmpty {
+                    ForEach(displayedAssets) { asset in
                         ReceiptPreview(asset: asset, showsFilename: false, thumbnailHeight: 210)
                             .padding(.vertical, 4)
                     }
                 } else {
                     ReceiptPicker(assets: attachments, textOnly: true)
                 }
+                if attachmentSave.needsRetry {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("These attachments haven’t been saved yet. They are kept here so you can retry.")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                        Button("Retry Saving Attachments") { attachmentSave.retry(save: saveAttachments) }
+                            .accessibilityIdentifier("retry-saving-attachments")
+                    }
+                }
             }
         }
         .listStyle(.plain)
         .environment(\.defaultMinListRowHeight, 44)
         .contentMargins(.bottom, 16, for: .scrollContent)
+        .performanceDestination("transaction-detail-navigation")
+        .performanceDestination("transaction-editor-cancel")
         .navigationTitle("Details").navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Edit") {
-                    if let transaction { route = .transaction(store.draft(for: transaction), "Edit Transaction") }
-                }
+                    FinancePerformanceTrace.begin("transaction-editor-navigation")
+                    if let transaction {
+                        let draft = store.receiptAttachmentSaves.draftIncludingPendingAttachments(store.draft(for: transaction))
+                        route = .transaction(draft, "Edit Transaction")
+                    }
+                }.disabled(isDeleting || attachmentSave.isSaving)
             }
         }
         .safeAreaInset(edge: .bottom) {
@@ -833,26 +868,45 @@ struct TransactionDetailScreen: View {
                         ReceiptPicker(assets: attachments)
                     } label: {
                         Image(systemName: "plus.square").font(.title3).frame(width: 44, height: 44)
-                    }.accessibilityLabel("Transaction Actions")
+                    }.accessibilityLabel("Transaction Actions").disabled(isDeleting || attachmentSave.isSaving)
                     Spacer()
                 }
                 Button("Delete Transaction") { requestDeletion() }
+                    .disabled(isDeleting || attachmentSave.isSaving)
                     .frame(minHeight: 44).foregroundStyle(.blue)
             }
             .padding(.horizontal, 14).padding(.top, 8).padding(.bottom, 4)
             .background(.regularMaterial)
             .overlay(alignment: .top) { Divider() }
         }
-        .modifier(TransactionDeletionConfirmation(transaction: $pendingDeletion, onDeleted: { dismiss() }))
+        .onAppear {
+            isActive = true
+            store.receiptAttachmentSaves.retainState(for: transactionID, owner: receiptOwnerID)
+        }
+        .onDisappear {
+            isActive = false
+            store.receiptAttachmentSaves.releaseState(for: transactionID, owner: receiptOwnerID)
+        }
+        .modifier(TransactionDeletionConfirmation(transaction: $pendingDeletion, onDeleted: { if isActive { dismiss() } }))
         .modifier(TransactionDuplicateConfirmation(transaction: $pendingDuplication, route: $route))
     }
 
+    private func saveAttachments(_ assets: [AttachmentAsset]) async -> Bool {
+        guard let transaction = store.transaction(transactionID) else { return false }
+        var draft = store.draft(for: transaction)
+        draft.attachments = assets
+        return await store.saveTransactionAndFlushAsync(draft)
+    }
+
     private func requestDeletion() {
-        guard let transaction else { return }
+        guard !isDeleting, !attachmentSave.isSaving, let transaction else { return }
         if let rule = transaction.recurrenceRule, rule.frequency != .never { pendingDeletion = transaction }
         else {
-            store.deleteTransaction(transaction.id, scope: .occurrence)
-            if store.validationError == nil { dismiss() }
+            isDeleting = true
+            Task {
+                defer { isDeleting = false }
+                if await store.deleteTransactionAsync(transaction.id, scope: .occurrence, expected: transaction), isActive { dismiss() }
+            }
         }
     }
 
@@ -992,7 +1046,7 @@ private func transactionTitle(for transaction: LedgerTransaction) -> String {
     return "Transaction"
 }
 
-private struct MobileTransactionPreviewRow: View {
+private struct MobileTransactionPreviewRow: View, Equatable {
     let presentation: MobileTransactionPreviewPresentation
 
     var body: some View {
@@ -1140,6 +1194,7 @@ struct FinanceBottomBar: View {
     var openSearch: () -> Void
     var openCloudSync: () -> Void
     var newTransaction: () -> Void
+    @State private var isRetryingPersistence = false
 
     var body: some View {
         HStack {
@@ -1152,12 +1207,12 @@ struct FinanceBottomBar: View {
 
             Spacer()
 
-            Button(action: openCloudSync) {
+            Button(action: store.localPersistenceError == nil ? openCloudSync : retryLocalSave) {
                 VStack(spacing: 5) {
-                    Text(syncTitle)
+                    Text(store.localPersistenceError == nil ? syncTitle : isRetryingPersistence ? "Retrying Save…" : "Save Failed · Retry")
                         .font(.body)
                         .lineLimit(1)
-                    if syncState.progress.isRunning {
+                    if store.localPersistenceError == nil && syncState.progress.isRunning {
                         CloudSyncProgressBar(progress: syncState.progress)
                             .frame(maxWidth: 160)
                     }
@@ -1165,8 +1220,10 @@ struct FinanceBottomBar: View {
                 .frame(maxWidth: 220, minHeight: 44)
                 .contentShape(Rectangle())
             }
-            .accessibilityLabel("iCloud Sync")
-            .accessibilityValue(syncState.progress.detail.map { "\(syncTitle) \($0)" } ?? syncTitle)
+            .foregroundStyle(store.localPersistenceError == nil ? Color.accentColor : Color.red)
+            .disabled(isRetryingPersistence)
+            .accessibilityLabel(store.localPersistenceError == nil ? "iCloud Sync" : "Retry Saving Changes")
+            .accessibilityValue(store.localPersistenceError?.message ?? (syncState.progress.detail.map { "\(syncTitle) \($0)" } ?? syncTitle))
 
             Spacer()
 
@@ -1187,6 +1244,16 @@ struct FinanceBottomBar: View {
         .background(.regularMaterial)
         .overlay(alignment: .top) {
             Divider()
+        }
+    }
+
+    private func retryLocalSave() {
+        guard !isRetryingPersistence, store.localPersistenceError != nil else { return }
+        isRetryingPersistence = true
+        Task {
+            defer { isRetryingPersistence = false }
+            do { try await store.flushLocalChangesAsync() }
+            catch { /* The store keeps the failed write visible until a newer durable save succeeds. */ }
         }
     }
 
@@ -1307,12 +1374,13 @@ struct QuickSearchSheet: View {
                                     MobileTransactionPreviewRow(
                                         presentation: mobileTransactionPreviewPresentation(for: transaction, store: store)
                                     )
+                                    .equatable()
                                     .padding(EdgeInsets(top: 8, leading: 28, bottom: 8, trailing: 20))
                                 }
                                 .buttonStyle(TransactionRowButtonStyle())
                                 .listRowInsets(EdgeInsets())
                                 .accessibilityIdentifier("search-transaction-\(transaction.id.uuidString)")
-                                .modifier(TransactionRowSwipeActions(transaction: transaction,
+                                .modifier(TransactionRowSwipeActions(store: store, transaction: transaction,
                                     pendingDeletion: $pendingDeletion, pendingDuplication: $pendingDuplication))
                             }
                         }

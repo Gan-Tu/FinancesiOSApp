@@ -106,6 +106,8 @@ struct TransactionEditorView: View {
     @State private var showingRecurringSaveScope = false
     @State private var hasAppliedInitialFocus = false
     @State private var showingDatePicker = false
+    @State private var isSaving = false
+    @State private var isActive = false
 
     init(title: String, initialDraft: TransactionDraft, scanInvoice: Bool = false) {
         self.title = title
@@ -242,28 +244,35 @@ struct TransactionEditorView: View {
                 FinanceFormRow(last: true) { ReceiptPicker(assets: $draft.attachments, textOnly: true, startWithScan: scanInvoice) }
             }
         }
+        .disabled(isSaving)
+        .interactiveDismissDisabled(isSaving)
+        .onAppear { isActive = true }
+        .onDisappear { isActive = false }
         .navigationDestination(item: $accountPostingID) { id in
             if let index = draft.postings.firstIndex(where: { $0.id == id }) {
                 AccountPickerScreen(ledgerID: draft.ledgerID, selected: $draft.postings[index].accountID)
             }
         }
+        .performanceDestination("transaction-editor-navigation")
+        .performanceDestination("template-editor")
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") {
+                    if initialDraft.id != nil { FinancePerformanceTrace.begin("transaction-editor-cancel") }
                     dismiss()
-                }
+                }.disabled(isSaving)
             }
             ToolbarItem(placement: .confirmationAction) {
-                Button("Save") {
+                Button {
                     if initialDraft.recurrenceRuleID != nil {
                         showingRecurringSaveScope = true
                     } else {
                         save(scope: .occurrence)
                     }
-                }
-                .disabled(draft.postings.count < 2 || draft.postings.contains { $0.accountID == nil || decimalFromInput($0.amount) == nil } || !draft.postings.contains { (decimalFromInput($0.amount) ?? 0) != 0 })
+                } label: { EditorSaveLabel(isSaving: isSaving) }
+                .disabled(isSaving || draft.postings.count < 2 || draft.postings.contains { $0.accountID == nil || decimalFromInput($0.amount) == nil } || !draft.postings.contains { (decimalFromInput($0.amount) ?? 0) != 0 })
             }
             ToolbarItem(placement: .keyboard) {
                 AmountKeyboardToolbar(showOperators: focusedAmountID != nil,
@@ -328,9 +337,14 @@ struct TransactionEditorView: View {
     }
 
     private func save(scope: RecurringJournalEditor.Scope) {
-        store.saveTransactionAndFlush(draft, scope: scope)
-        guard store.validationError == nil else { return }
-        dismiss()
+        guard !isSaving else { return }
+        let snapshot = draft
+        isSaving = true
+        focusedField = nil
+        Task {
+            defer { isSaving = false }
+            if await store.saveTransactionAndFlushAsync(snapshot, scope: scope, supersedesPendingAttachments: true), isActive { dismiss() }
+        }
     }
 
     private func balanceLastPosting() {
@@ -492,9 +506,13 @@ struct AccountPickerScreen: View {
 struct AccountEditorView: View {
     @EnvironmentObject private var store: MobileLedgerStore
     @Environment(\.dismiss) private var dismiss
+    private let isNew: Bool
     @State private var draft: MobileAccountDraft
+    @State private var isSaving = false
+    @State private var isActive = false
 
     init(initialDraft: MobileAccountDraft) {
+        isNew = initialDraft.id == nil
         var editable = initialDraft
         if initialDraft.id == nil { editable.name = "" }
         _draft = State(initialValue: editable)
@@ -542,24 +560,32 @@ struct AccountEditorView: View {
                     }
                 }
             }
-            .navigationTitle(draft.id == nil ? "New Account" : "Edit Account")
+            .navigationTitle(isNew ? "New Account" : "Edit Account")
             .navigationBarTitleDisplayMode(.inline)
+            .disabled(isSaving)
+            .interactiveDismissDisabled(isSaving)
+            .onAppear { isActive = true }
+            .onDisappear { isActive = false }
             .journalEditorValidation()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
                         dismiss()
-                    }
+                    }.disabled(isSaving)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        store.saveAccount(draft)
-                        if store.validationError == nil {
-                            do { try store.flushLocalChanges(); dismiss() }
-                            catch { store.validationError = ValidationError(message: error.localizedDescription) }
+                    Button {
+                        guard !isSaving else { return }
+                        isSaving = true
+                        guard let savedID = store.saveAccount(draft) else { isSaving = false; return }
+                        draft.id = savedID
+                        Task {
+                            defer { isSaving = false }
+                            do { try await store.flushLocalChangesAsync(); if isActive { dismiss() } }
+                            catch { /* The store retains and orders persistence errors. Keep this draft for retry. */ }
                         }
-                    }
-                    .disabled(draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    } label: { EditorSaveLabel(isSaving: isSaving) }
+                    .disabled(isSaving || draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
 
@@ -570,9 +596,13 @@ struct AccountEditorView: View {
 struct CurrencyEditorView: View {
     @EnvironmentObject private var store: MobileLedgerStore
     @Environment(\.dismiss) private var dismiss
+    private let isNew: Bool
     @State private var draft: CurrencyDraft
+    @State private var isSaving = false
+    @State private var isActive = false
 
     init(initialDraft: CurrencyDraft) {
+        isNew = initialDraft.id == nil
         _draft = State(initialValue: initialDraft)
     }
 
@@ -590,23 +620,31 @@ struct CurrencyEditorView: View {
                     FinanceFormRow(last: true) { TextField("Name", text: $draft.name) }
                 }
             }
-            .navigationTitle(draft.id == nil ? "New Currency" : "Edit Currency")
+            .navigationTitle(isNew ? "New Currency" : "Edit Currency")
             .navigationBarTitleDisplayMode(.inline)
+            .disabled(isSaving)
+            .interactiveDismissDisabled(isSaving)
+            .onAppear { isActive = true }
+            .onDisappear { isActive = false }
             .journalEditorValidation()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
                         dismiss()
-                    }
+                    }.disabled(isSaving)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        store.saveCurrency(draft)
-                        if store.validationError == nil {
-                            do { try store.flushLocalChanges(); dismiss() }
-                            catch { store.validationError = ValidationError(message: error.localizedDescription) }
+                    Button {
+                        guard !isSaving else { return }
+                        isSaving = true
+                        guard let savedID = store.saveCurrency(draft) else { isSaving = false; return }
+                        draft.id = savedID
+                        Task {
+                            defer { isSaving = false }
+                            do { try await store.flushLocalChangesAsync(); if isActive { dismiss() } }
+                            catch { /* The store retains and orders persistence errors. Keep this draft for retry. */ }
                         }
-                    }.disabled(draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || draft.symbol.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    } label: { EditorSaveLabel(isSaving: isSaving) }.disabled(isSaving || draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || draft.symbol.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }
@@ -625,6 +663,9 @@ struct JournalEditorView: View {
     @State private var name: String
     @State private var currencyName = "US Dollar"
     @State private var template = "Personal"
+    @State private var createdLedgerID: UUID?
+    @State private var isSaving = false
+    @State private var isActive = false
 
     init(mode: JournalEditorMode) {
         self.mode = mode
@@ -650,6 +691,7 @@ struct JournalEditorView: View {
                                 CurrencyCatalogPicker(selectedName: $currencyName)
                             } label: { FinanceFormLabel(title: "Currency", value: currencyName) }
                             .buttonStyle(.plain)
+                            .disabled(createdLedgerID != nil)
                         }
                     }
                     .padding(.bottom, 36)
@@ -664,7 +706,7 @@ struct JournalEditorView: View {
                                             Spacer()
                                             if template == option { Image(systemName: "checkmark").fontWeight(.semibold).foregroundStyle(.tint) }
                                         }.contentShape(Rectangle())
-                                    }.buttonStyle(.plain)
+                                    }.buttonStyle(.plain).disabled(createdLedgerID != nil)
                                 }
                             }
                         }
@@ -673,27 +715,40 @@ struct JournalEditorView: View {
             }
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.large)
+            .disabled(isSaving)
+            .interactiveDismissDisabled(isSaving)
+            .onAppear { isActive = true }
+            .onDisappear { isActive = false }
             .journalEditorValidation()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
                         dismiss()
-                    }
+                    }.disabled(isSaving)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
+                    Button {
+                        guard !isSaving else { return }
+                        isSaving = true
                         switch mode {
                         case .create:
-                            store.addJournal(name: name, currencyName: currencyName, template: template)
+                            if let createdLedgerID {
+                                store.renameJournal(createdLedgerID, name: name)
+                            } else {
+                                guard let savedID = store.addJournal(name: name, currencyName: currencyName, template: template) else { isSaving = false; return }
+                                createdLedgerID = savedID
+                            }
                         case .rename(let ledger):
                             store.renameJournal(ledger.id, name: name)
                         }
-                        if store.validationError == nil {
-                            do { try store.flushLocalChanges(); dismiss() }
-                            catch { store.validationError = ValidationError(message: error.localizedDescription) }
+                        guard store.validationError == nil else { isSaving = false; return }
+                        Task {
+                            defer { isSaving = false }
+                            do { try await store.flushLocalChangesAsync(); if isActive { dismiss() } }
+                            catch { /* The store retains and orders persistence errors. Keep this draft for retry. */ }
                         }
-                    }
-                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    } label: { EditorSaveLabel(isSaving: isSaving) }
+                    .disabled(isSaving || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }
@@ -711,10 +766,14 @@ struct TemplateEditorView: View {
     @EnvironmentObject private var store: MobileLedgerStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dismiss) private var dismiss
+    private let isNew: Bool
     @State private var draft: TransactionTemplateDraft
     @State private var showingDeleteConfirmation = false
+    @State private var isSaving = false
+    @State private var isActive = false
 
     init(initialDraft: TransactionTemplateDraft) {
+        isNew = initialDraft.id == nil
         var editable = initialDraft
         if initialDraft.id == nil { editable.name = "" }
         _draft = State(initialValue: editable)
@@ -775,37 +834,63 @@ struct TemplateEditorView: View {
             }
             .confirmationDialog("Delete this template permanently?", isPresented: $showingDeleteConfirmation, titleVisibility: .visible) {
                 Button("Delete Template", role: .destructive) {
-                    guard let id = draft.id else { return }
+                    guard !isSaving, let id = draft.id else { return }
+                    isSaving = true
                     store.deleteTransactionTemplate(id)
-                    guard store.validationError == nil else { return }
-                    do { try store.flushLocalChanges(); dismiss() }
-                    catch { store.validationError = ValidationError(message: error.localizedDescription) }
+                    guard store.validationError == nil else { isSaving = false; return }
+                    Task {
+                        defer { isSaving = false }
+                        do { try await store.flushLocalChangesAsync(); if isActive { dismiss() } }
+                        catch { /* The store retains and orders persistence errors. Keep this draft for retry. */ }
+                    }
                 }
                 Button("Cancel", role: .cancel) {}
             }
-            .navigationTitle(draft.id == nil ? "New Template" : "Edit Template")
+            .navigationTitle(isNew ? "New Template" : "Edit Template")
             .navigationBarTitleDisplayMode(.inline)
+            .disabled(isSaving)
+            .interactiveDismissDisabled(isSaving)
+            .onAppear { isActive = true }
+            .onDisappear { isActive = false }
             .journalEditorValidation()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
                         dismiss()
-                    }
+                    }.disabled(isSaving)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        store.saveTransactionTemplate(draft)
-                        if store.validationError == nil {
-                            do { try store.flushLocalChanges(); dismiss() }
-                            catch { store.validationError = ValidationError(message: error.localizedDescription) }
+                    Button {
+                        guard !isSaving else { return }
+                        isSaving = true
+                        guard let savedID = store.saveTransactionTemplate(draft) else { isSaving = false; return }
+                        draft.id = savedID
+                        Task {
+                            defer { isSaving = false }
+                            do { try await store.flushLocalChangesAsync(); if isActive { dismiss() } }
+                            catch { /* The store retains and orders persistence errors. Keep this draft for retry. */ }
                         }
-                    }.disabled(draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    } label: { EditorSaveLabel(isSaving: isSaving) }.disabled(isSaving || draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }
     }
 }
 
+
+/// Preserve the toolbar item's dimensions while a durable save is pending.
+private struct EditorSaveLabel: View {
+    let isSaving: Bool
+    var body: some View {
+        ZStack {
+            Text("Save").opacity(isSaving ? 0 : 1)
+            if isSaving { ProgressView().controlSize(.small) }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Save")
+        .accessibilityValue(isSaving ? "Saving" : "")
+    }
+}
 
 private struct JournalEditorValidation: ViewModifier {
     @EnvironmentObject private var store: MobileLedgerStore

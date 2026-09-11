@@ -4,6 +4,7 @@ struct TransactionDeletionConfirmation: ViewModifier {
     @EnvironmentObject private var store: MobileLedgerStore
     @Binding var transaction: LedgerTransaction?
     var onDeleted: () -> Void = {}
+    @State private var isDeleting = false
 
     func body(content: Content) -> some View {
         content.confirmationDialog("You are deleting a repeating transaction.", isPresented: Binding(
@@ -20,9 +21,13 @@ struct TransactionDeletionConfirmation: ViewModifier {
     }
 
     private func remove(_ row: LedgerTransaction, scope: RecurringJournalEditor.Scope) {
-        store.deleteTransaction(row.id, scope: scope, expected: row)
+        guard !isDeleting else { return }
+        isDeleting = true
         transaction = nil
-        if store.validationError == nil { onDeleted() }
+        Task {
+            defer { isDeleting = false }
+            if await store.deleteTransactionAsync(row.id, scope: scope, expected: row) { onDeleted() }
+        }
     }
 }
 
@@ -54,13 +59,16 @@ struct TransactionDuplicateConfirmation: ViewModifier {
 
 /// Register and Quick Search use identical actions and confirmation rules.
 struct TransactionRowSwipeActions: ViewModifier {
-    @EnvironmentObject private var store: MobileLedgerStore
+    // Rows receive immutable display values; they do not each subscribe to the
+    // entire store. Clear actions apply the boolean advertised by this row.
+    let store: MobileLedgerStore
     let transaction: LedgerTransaction
     @Binding var pendingDeletion: LedgerTransaction?
     @Binding var pendingDuplication: LedgerTransaction?
+    @State private var isDeleting = false
 
     func body(content: Content) -> some View {
-        let targetCleared = !(store.transaction(transaction.id) ?? transaction).cleared
+        let targetCleared = !transaction.cleared
         content
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 // A destructive role removes the cell optimistically, before
@@ -69,13 +77,19 @@ struct TransactionRowSwipeActions: ViewModifier {
                     if let rule = transaction.recurrenceRule, rule.frequency != .never {
                         pendingDeletion = transaction
                     } else {
-                        store.deleteTransaction(transaction.id, scope: .occurrence, expected: transaction)
+                        guard !isDeleting else { return }
+                        isDeleting = true
+                        Task {
+                            defer { isDeleting = false }
+                            _ = await store.deleteTransactionAsync(transaction.id, scope: .occurrence, expected: transaction)
+                        }
                     }
-                }.tint(.red)
+                }.tint(.red).disabled(isDeleting)
                 Button("Duplicate") { pendingDuplication = transaction }.tint(.gray)
             }
             .swipeActions(edge: .leading) {
                 Button(targetCleared ? "Cleared" : "Uncleared") {
+                    FinancePerformanceTrace.begin("swipe-clear-\(transaction.id.uuidString)-\(targetCleared)")
                     store.setTransactionCleared(transaction.id, cleared: targetCleared)
                 }.tint(.blue)
             }

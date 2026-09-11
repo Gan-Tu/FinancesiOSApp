@@ -75,6 +75,14 @@ struct AppShellView: View {
                     .safeAreaInset(edge: .bottom, spacing: 0) { globalBottomBar }
                 }
         }
+        .onChange(of: navigationPath) { old, new in
+            if new.count > old.count {
+                if case .journal? = new.last { FinancePerformanceTrace.begin("journal-navigation") }
+                if case .transactions? = new.last { FinancePerformanceTrace.begin("register-navigation") }
+            } else if old.count > new.count, case .transactions? = old.last, case .journal? = new.last {
+                FinancePerformanceTrace.begin("register-back-navigation")
+            }
+        }
         .tint(.blue)
         .sheet(item: $route) { route in
             EditorSheet(route: route)
@@ -97,7 +105,7 @@ struct AppShellView: View {
         }
         .confirmationDialog("New Transaction", isPresented: $showingNewTransactionDialog, titleVisibility: .visible) {
             ForEach((currentLedgerID.map { store.transactionTemplates(for: $0) } ?? []).filter(\.enabled)) { template in
-                Button(template.name) { route = .newFromTemplate(template, "New Transaction") }
+                Button(template.name) { FinancePerformanceTrace.begin("template-editor"); route = .newFromTemplate(template, "New Transaction") }
             }
             if let ledgerID = currentLedgerID {
                 Button("Customize Templates…") { presentedSheet = .templates(ledgerID) }
@@ -120,7 +128,7 @@ struct AppShellView: View {
                 openSettings: { presentedSheet = .settings },
                 openSearch: { presentedSheet = .quickSearch },
                 openCloudSync: { presentedSheet = .cloudSync },
-                newTransaction: { showingNewTransactionDialog = true }
+                newTransaction: { FinancePerformanceTrace.begin("template-menu"); showingNewTransactionDialog = true }
             )
         }
     }

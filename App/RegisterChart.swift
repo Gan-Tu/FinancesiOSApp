@@ -19,10 +19,6 @@ struct RegisterChart: View {
         var seen = Set<UUID>()
         return months.flatMap { $0.income + $0.expenses }.filter { seen.insert($0.id).inserted }.sorted { $0.symbol < $1.symbol }
     }
-    private var selectedCurrency: UUID? {
-        let preferred = UUID(uuidString: currencyID)
-        return currencies.first { $0.id == preferred }?.id ?? currencies.first?.id
-    }
     private var period: Int { [6, 12, 24].contains(monthsShown) ? monthsShown : 6 }
     private var visible: [RegisterMonth] {
         let cutoff = Calendar.current.date(byAdding: .month, value: -(period - 1), to: Calendar.current.dateInterval(of: .month, for: Date())!.start)!
@@ -30,13 +26,19 @@ struct RegisterChart: View {
     }
 
     var body: some View {
+        let availableCurrencies = currencies
+        let preferredCurrency = UUID(uuidString: currencyID)
+        let selectedCurrency = availableCurrencies.first { $0.id == preferredCurrency }?.id ?? availableCurrencies.first?.id
+        let visibleMonths = visible
+        let summary = selectionSummary(visibleMonths: visibleMonths, selectedCurrency: selectedCurrency,
+                                       currencies: availableCurrencies)
         VStack(spacing: 12) {
             HStack {
                 Text("Cash Flow").font(.headline)
                 Spacer()
-                if currencies.count > 1 {
+                if availableCurrencies.count > 1 {
                     Picker("Currency", selection: Binding(get: { selectedCurrency }, set: { currencyID = $0?.uuidString ?? "" })) {
-                        ForEach(currencies) { Text($0.symbol).tag(Optional($0.id)) }
+                        ForEach(availableCurrencies) { Text($0.symbol).tag(Optional($0.id)) }
                     }.labelsHidden()
                 }
                 Picker("Period", selection: Binding(get: { period }, set: { monthsShown = $0 })) {
@@ -45,13 +47,13 @@ struct RegisterChart: View {
             }.frame(minHeight: 32)
             if isLoading {
                 ProgressView("Loading Transactions").font(.footnote).frame(height: 170)
-            } else if visible.isEmpty {
+            } else if visibleMonths.isEmpty {
                 Text("No cash flow in this period").foregroundStyle(.secondary).frame(height: 170)
             } else {
-                Chart(visible) { month in
-                    BarMark(x: .value("Month", month.date, unit: .month), y: .value("Amount", value(month.income)))
+                Chart(visibleMonths) { month in
+                    BarMark(x: .value("Month", month.date, unit: .month), y: .value("Amount", value(month.income, currencyID: selectedCurrency)))
                         .foregroundStyle(by: .value("Type", "Income")).position(by: .value("Type", "Income"))
-                    BarMark(x: .value("Month", month.date, unit: .month), y: .value("Amount", -value(month.expenses)))
+                    BarMark(x: .value("Month", month.date, unit: .month), y: .value("Amount", -value(month.expenses, currencyID: selectedCurrency)))
                         .foregroundStyle(by: .value("Type", "Expenses")).position(by: .value("Type", "Expenses"))
                 }
                 .chartForegroundStyleScale(["Income": Color.green, "Expenses": Color.red])
@@ -59,26 +61,26 @@ struct RegisterChart: View {
                 .chartXSelection(value: $selectedDate)
                 .frame(height: 170)
             }
-            Text(selectionSummary ?? " ")
+            Text(summary ?? " ")
                 .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading).frame(height: captionHeight)
-                .opacity(selectionSummary == nil ? 0 : 1).accessibilityHidden(selectionSummary == nil)
+                .opacity(summary == nil ? 0 : 1).accessibilityHidden(summary == nil)
         }
         .padding(.vertical, 4)
         .onChange(of: currencyID) { selectedDate = nil }
         .onChange(of: monthsShown) { selectedDate = nil }
     }
-    private var selectionSummary: String? {
-        guard !isLoading, !visible.isEmpty else { return nil }
-        let selectedMonth = selectedDate.flatMap { date in visible.first { Calendar.current.isDate($0.date, equalTo: date, toGranularity: .month) } }
-        let months = selectedMonth.map { [$0] } ?? visible
+    private func selectionSummary(visibleMonths: [RegisterMonth], selectedCurrency: UUID?, currencies: [RegisterMoney]) -> String? {
+        guard !isLoading, !visibleMonths.isEmpty else { return nil }
+        let selectedMonth = selectedDate.flatMap { date in visibleMonths.first { Calendar.current.isDate($0.date, equalTo: date, toGranularity: .month) } }
+        let months = selectedMonth.map { [$0] } ?? visibleMonths
         let net = months.reduce(Decimal.zero) { total, month in
             total + (month.income.first { $0.id == selectedCurrency }?.amount ?? 0) + (month.expenses.first { $0.id == selectedCurrency }?.amount ?? 0)
         }
         let label = selectedMonth?.date.formatted(.dateTime.month(.wide).year()) ?? "\(period) months"
         return "\(label): \(moneyString(net, symbol: currencies.first(where: { $0.id == selectedCurrency })?.symbol ?? "USD")) net"
     }
-    private func value(_ values: [RegisterMoney]) -> Double { NSDecimalNumber(decimal: values.first { $0.id == selectedCurrency }?.amount ?? 0).doubleValue }
+    private func value(_ values: [RegisterMoney], currencyID: UUID?) -> Double { NSDecimalNumber(decimal: values.first { $0.id == currencyID }?.amount ?? 0).doubleValue }
 }
 
 struct MonthSummaryView: View {
@@ -90,10 +92,11 @@ struct MonthSummaryView: View {
     var transactionIDs: Set<UUID>? = nil
     @State private var route: EditorRoute?
     @State private var navigationPath: [MobileRoute] = []
+    @State private var cashFlow = RegisterCashFlow(income: [], expenses: [])
+    @State private var hasLoaded = false
+    @State private var loadError: String?
 
     private var interval: DateInterval { Calendar.current.dateInterval(of: .month, for: month)! }
-    private var rows: [LedgerTransaction] { store.transactions(scope: scope, ledgerID: ledgerID).filter { $0.date >= interval.start && $0.date < interval.end && (transactionIDs?.contains($0.id) ?? true) } }
-    private var cashFlow: RegisterCashFlow { RegisterCashFlow.build(data: store.data, rows: rows, scope: scope) }
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
@@ -118,6 +121,29 @@ struct MonthSummaryView: View {
                             }
                         }
                     }
+                }
+            }
+            .overlay {
+                if let loadError {
+                    ContentUnavailableView("Couldn’t Load Summary", systemImage: "exclamationmark.triangle", description: Text(loadError))
+                } else if !hasLoaded {
+                    ProgressView("Loading Summary")
+                }
+            }
+            .task(id: store.registerContentRevision) {
+                let revision = store.registerContentRevision
+                let request = RegisterRenderRequest(data: store.data, rows: store.registerSourceRows(ledgerID: ledgerID),
+                    scope: scope, search: "", dateInterval: interval, transactionIDs: transactionIDs, filtersScope: true)
+                do {
+                    let result = try await RegisterRenderWorker.shared.cashFlow(request)
+                    try Task.checkCancellation()
+                    guard revision == store.registerContentRevision else { return }
+                    var update = Transaction(animation: nil); update.disablesAnimations = true
+                    withTransaction(update) { cashFlow = result; hasLoaded = true; loadError = nil }
+                } catch is CancellationError { /* The old projection stays visible while its replacement loads. */ }
+                catch {
+                    guard revision == store.registerContentRevision, !Task.isCancelled else { return }
+                    loadError = error.localizedDescription
                 }
             }
             .navigationTitle(month.formatted(.dateTime.month(.wide).year()))

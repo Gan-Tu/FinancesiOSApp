@@ -176,6 +176,63 @@ final class RegisterPresentationCacheTests: XCTestCase {
         XCTAssertEqual(projection.balances[checking.id]?.first?.amount, expected)
     }
 
+    func testRegisterHeaderTotalsMatchCashFlowAcrossSplitCurrencyAndCategoryScopes() throws {
+        var data = DemoData.fixture(referenceDate: Date(timeIntervalSince1970: 1_788_858_000))
+        let ledger = data.ledgers[0].id
+        let groceries = try XCTUnwrap(data.accounts.first { $0.name == "Groceries" })
+        let transportation = try XCTUnwrap(data.accounts.first { $0.name == "Transportation" })
+        let usd = try XCTUnwrap(data.commodities.first { $0.ledgerID == ledger })
+        let eur = Commodity(ledgerID: ledger, symbol: "EUR", name: "Euro")
+        data.commodities.append(eur)
+        data.transactions.append(LedgerTransaction(ledgerID: ledger, date: data.transactions[0].date,
+            payee: "Split", note: "Refund and expense", number: "", cleared: true,
+            postings: [Posting(accountID: groceries.id, commodityID: usd.id, amount: -12),
+                       Posting(accountID: transportation.id, commodityID: eur.id, amount: 25)]))
+        let rows = data.transactions.sorted { $0.date > $1.date }
+        for scope in [MobileTransactionScope.all, .account(groceries.parentID ?? groceries.id), .account(transportation.id), .currency(usd.id), .currency(eur.id)] {
+            let presentation = RegisterPresentation.build(data: data, rows: rows, scope: scope)
+            for month in presentation.months {
+                let expected = RegisterCashFlow.build(data: data, rows: month.days.flatMap(\.transactions), scope: scope)
+                XCTAssertEqual(month.income, RegisterCashFlow.totals(expected.income))
+                XCTAssertEqual(month.expenses, RegisterCashFlow.totals(expected.expenses))
+            }
+        }
+    }
+
+    func testBackgroundMonthSummaryPreservesDateScopeAndSelectedTransactionIDs() async throws {
+        let data = DemoData.fixture(referenceDate: Date(timeIntervalSince1970: 1_788_858_000))
+        let row = try XCTUnwrap(data.transactions.first)
+        let month = try XCTUnwrap(Calendar.current.dateInterval(of: .month, for: row.date))
+        let request = RegisterRenderRequest(data: data, rows: data.transactions, scope: .all,
+            search: "", dateInterval: month, transactionIDs: [row.id], filtersScope: true)
+        let actual = try await RegisterRenderWorker.shared.cashFlow(request)
+        let expected = RegisterCashFlow.build(data: data, rows: [row], scope: .all)
+        XCTAssertEqual(RegisterCashFlow.totals(actual.income), RegisterCashFlow.totals(expected.income))
+        XCTAssertEqual(RegisterCashFlow.totals(actual.expenses), RegisterCashFlow.totals(expected.expenses))
+        XCTAssertTrue((actual.income + actual.expenses).allSatisfy { $0.transactionIDs == [row.id] })
+    }
+
+    func testFlatRegisterRowsKeepAllHeadersOrderAndStableTransactionIdentities() throws {
+        var data = DemoData.fixture(referenceDate: Date(timeIntervalSince1970: 1_788_858_000))
+        let rows = data.transactions.sorted { $0.date > $1.date }
+        let presentation = RegisterPresentation.build(data: data, rows: rows, scope: .all)
+        var expected: [RegisterListItem.ID] = []
+        for month in presentation.months {
+            expected.append(.month(month.date))
+            for day in month.days {
+                expected.append(.day(day.date))
+                expected.append(contentsOf: day.transactions.map { .transaction($0.id) })
+            }
+        }
+        XCTAssertEqual(presentation.listItems.map(\.id), expected)
+        XCTAssertEqual(Set(expected).count, expected.count)
+        let firstID = try XCTUnwrap(rows.first?.id)
+        let index = try XCTUnwrap(data.transactions.firstIndex { $0.id == firstID })
+        data.transactions[index].cleared.toggle()
+        let updated = RegisterPresentation.build(data: data, rows: data.transactions.sorted { $0.date > $1.date }, scope: .all)
+        XCTAssertEqual(updated.listItems.map(\.id), expected, "A clear swipe must update a stable row, not recreate the register")
+    }
+
     func testTenThousandEntryRegisterCacheBenchmark() async throws {
         var data = DemoData.fixture(referenceDate: Date(timeIntervalSince1970: 1_788_858_000))
         let prototype = data.transactions[0]

@@ -15,6 +15,28 @@ struct RegisterMonth: Identifiable {
     var id: Date { date }
 }
 
+/// A flat, stable identity collection lets List discover rows without walking
+/// every month's nested day/transaction builders on the main thread.
+enum RegisterListItem: Identifiable {
+    enum ID: Hashable {
+        case month(Date)
+        case day(Date)
+        case transaction(UUID)
+    }
+
+    case month(RegisterMonth)
+    case day(Date)
+    case transaction(LedgerTransaction)
+
+    var id: ID {
+        switch self {
+        case .month(let month): .month(month.date)
+        case .day(let date): .day(date)
+        case .transaction(let transaction): .transaction(transaction.id)
+        }
+    }
+}
+
 struct RegisterCashFlowBucket: Identifiable {
     let account: Account
     var amounts: [RegisterMoney]
@@ -22,7 +44,7 @@ struct RegisterCashFlowBucket: Identifiable {
     var id: UUID { account.id }
 }
 
-struct RegisterCashFlow {
+struct RegisterCashFlow: @unchecked Sendable {
     let income: [RegisterCashFlowBucket]
     let expenses: [RegisterCashFlowBucket]
 
@@ -97,6 +119,23 @@ struct RegisterPresentation {
     let months: [RegisterMonth]
     let amounts: [UUID: [RegisterMoney]]
     let balances: [UUID: [RegisterMoney]]
+    let listItems: [RegisterListItem]
+
+    init(months: [RegisterMonth], amounts: [UUID: [RegisterMoney]], balances: [UUID: [RegisterMoney]]) {
+        self.months = months
+        self.amounts = amounts
+        self.balances = balances
+        var items: [RegisterListItem] = []
+        items.reserveCapacity(amounts.count + months.count * 4)
+        for month in months {
+            items.append(.month(month))
+            for day in month.days {
+                items.append(.day(day.date))
+                items.append(contentsOf: day.transactions.map(RegisterListItem.transaction))
+            }
+        }
+        listItems = items
+    }
 
     /// Sync timestamps, connection preferences, and security state do not change
     /// register calculations. Array equality is cheap for unchanged COW buffers.
@@ -127,6 +166,7 @@ struct RegisterPresentation {
     static func build(data: JournalData, rows: [LedgerTransaction], scope: MobileTransactionScope, calendar: Calendar,
                       cancellationCheck: () throws -> Void) rethrows -> RegisterPresentation {
         try cancellationCheck()
+        guard !rows.isEmpty else { return RegisterPresentation(months: [], amounts: [:], balances: [:]) }
         let accounts = Dictionary(uniqueKeysWithValues: data.accounts.map { ($0.id, $0) })
         let currencies = Dictionary(uniqueKeysWithValues: data.commodities.map { ($0.id, $0) })
         let defaults = Dictionary(grouping: data.commodities, by: \.ledgerID).compactMapValues { $0.first?.id }
@@ -207,19 +247,51 @@ struct RegisterPresentation {
             amounts[transaction.id] = money(displayed)
             balances[transaction.id] = money(running)
         }
-        var grouped: [Date: [LedgerTransaction]] = [:]
+        // Month headers need currency totals, not per-account buckets with a
+        // growing set of transaction IDs. Accumulate them alongside grouping,
+        // sharing the lookups already used for amount/balance projection.
+        var grouped: [Date: [Date: [LedgerTransaction]]] = [:]
+        var monthlyIncome: [Date: [UUID: Decimal]] = [:]
+        var monthlyExpenses: [Date: [UUID: Decimal]] = [:]
+        let summaryAccountIDs: Set<UUID>? = {
+            guard case .account(let id) = scope, let account = accounts[id],
+                  account.kind == .income || account.kind == .expense else { return nil }
+            return scopedAccounts
+        }()
+        var previousDay: Date?
+        var previousMonth: Date?
+        var previousDayEnd: Date?
         for (index, row) in rows.enumerated() {
             if index.isMultiple(of: 128) { try cancellationCheck() }
-            let month = calendar.dateInterval(of: .month, for: row.date)!.start
-            grouped[month, default: []].append(row)
+            let day: Date
+            let month: Date
+            if let cachedDay = previousDay, let dayEnd = previousDayEnd,
+               row.date >= cachedDay, row.date < dayEnd, let cachedMonth = previousMonth {
+                day = cachedDay
+                month = cachedMonth
+            } else {
+                let interval = calendar.dateInterval(of: .day, for: row.date)!
+                day = interval.start
+                month = calendar.dateInterval(of: .month, for: row.date)!.start
+                previousDay = day
+                previousDayEnd = interval.end
+                previousMonth = month
+            }
+            grouped[month, default: [:]][day, default: []].append(row)
+            for posting in row.postings {
+                guard let account = accounts[posting.accountID],
+                      account.kind == .income || account.kind == .expense,
+                      summaryAccountIDs?.contains(account.id) ?? true,
+                      let currencyID = posting.commodityID ?? account.commodityID ?? defaults[row.ledgerID] else { continue }
+                if case .currency(let selected) = scope, selected != currencyID { continue }
+                if posting.amount < 0 { monthlyIncome[month, default: [:]][currencyID, default: 0] -= posting.amount }
+                if posting.amount > 0 { monthlyExpenses[month, default: [:]][currencyID, default: 0] -= posting.amount }
+            }
         }
         let months = try grouped.keys.sorted(by: >).map { month in
             try cancellationCheck()
-            let monthRows = grouped[month]!
-            let cashFlow = try RegisterCashFlow.build(data: data, rows: monthRows, scope: scope, cancellationCheck: cancellationCheck)
-            let days = Dictionary(grouping: monthRows) { calendar.startOfDay(for: $0.date) }
-                .map { MobileTransactionDaySection(date: $0.key, transactions: $0.value) }.sorted { $0.date > $1.date }
-            return RegisterMonth(date: month, days: days, income: RegisterCashFlow.totals(cashFlow.income), expenses: RegisterCashFlow.totals(cashFlow.expenses))
+            let days = grouped[month]!.map { MobileTransactionDaySection(date: $0.key, transactions: $0.value) }.sorted { $0.date > $1.date }
+            return RegisterMonth(date: month, days: days, income: money(monthlyIncome[month] ?? [:]), expenses: money(monthlyExpenses[month] ?? [:]))
         }
         return RegisterPresentation(months: months, amounts: amounts, balances: balances)
     }
@@ -349,6 +421,20 @@ actor RegisterRenderWorker {
                 calendar: request.calendar, cancellationCheck: { try Task.checkCancellation() })
             try Task.checkCancellation()
             return RegisterRenderResult(presentation: presentation)
+        }
+        return try await withTaskCancellationHandler {
+            try await work.value
+        } onCancel: {
+            work.cancel()
+        }
+    }
+
+    nonisolated func cashFlow(_ request: RegisterRenderRequest) async throws -> RegisterCashFlow {
+        let work = Task.detached(priority: Task.currentPriority) {
+            try Task.checkCancellation()
+            let rows = try Self.filteredRows(request)
+            return try RegisterCashFlow.build(data: request.data, rows: rows, scope: request.scope,
+                                               cancellationCheck: { try Task.checkCancellation() })
         }
         return try await withTaskCancellationHandler {
             try await work.value

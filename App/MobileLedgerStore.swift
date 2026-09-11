@@ -372,6 +372,7 @@ final class MobileLedgerStore: ObservableObject {
     @Published private(set) var registerContentRevision: UInt64 = 0
     @Published private(set) var searchContentRevision: UInt64 = 0
     let registerPresentations = RegisterPresentationCache()
+    let receiptAttachmentSaves = ReceiptAttachmentSaveRegistry()
     private var registerPrewarmTask: Task<Void, Never>?
     private var dailyBalanceTask: Task<Void, Never>?
     private var dailyBalanceRequest: (referenceDate: Date, calendar: Calendar, cutoff: Date)?
@@ -390,6 +391,15 @@ final class MobileLedgerStore: ObservableObject {
     private let supportDirectory: URL
     private let sqliteStore: SQLiteJournalStore
     private let persistenceBaseline = MobilePersistenceBaseline()
+    private var pendingDeferredWrite: MobileDeferredPersistenceBatch?
+    private var persistenceSequence: UInt64 = 0
+    private var persistenceOutcomes = MobilePersistenceOutcomeState()
+    @Published private(set) var localPersistenceError: ValidationError?
+    private var transactionSaveTasks: [UUID: Task<Bool, Never>] = [:]
+    private var pendingNewTransactionOperations: Set<UUID> = []
+    private var duplicateReceiptCopiesByOperation: [UUID: [UUID: AttachmentAsset]] = [:]
+    private var completedTransactionSaveOperations: [UUID] = []
+    private var journalReplacementGeneration = UUID()
     private let cloudKitSyncDependencies: CloudKitSyncDependencies
     private let foregroundTriggerDependencies: CloudKitForegroundSyncTriggerDependencies
     private var activeSceneIDs: Set<UUID> = []
@@ -1574,8 +1584,9 @@ final class MobileLedgerStore: ObservableObject {
         return row
     }
 
-    func addJournal(name: String, currencyName: String = "US Dollar", template: String = "Personal") {
-        guard allowJournalMutation() else { return }
+    @discardableResult
+    func addJournal(name: String, currencyName: String = "US Dollar", template: String = "Personal") -> UUID? {
+        guard allowJournalMutation() else { return nil }
         validationError = nil
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let ledger = Ledger(name: trimmed.isEmpty ? "Untitled" : trimmed, listIndex: data.ledgers.count)
@@ -1585,6 +1596,7 @@ final class MobileLedgerStore: ObservableObject {
         refreshDerivedCacheForJournalInsertion(ledgerID: ledger.id)
         seedDefaultTransactionTemplates(ledgerID: ledger.id)
         save(syncCloud: true, refreshCache: false)
+        return ledger.id
     }
 
     func moveJournals(from offsets: IndexSet, to destination: Int, excluding hiddenIDs: Set<UUID> = []) {
@@ -1603,7 +1615,10 @@ final class MobileLedgerStore: ObservableObject {
     func renameJournal(_ ledgerID: UUID, name: String) {
         guard allowJournalMutation() else { return }
         validationError = nil
-        guard let index = data.ledgers.firstIndex(where: { $0.id == ledgerID }) else { return }
+        guard let index = data.ledgers.firstIndex(where: { $0.id == ledgerID }) else {
+            validationError = ValidationError(message: "This journal no longer exists.")
+            return
+        }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             validationError = ValidationError(message: "Journal name is required.")
@@ -1669,21 +1684,23 @@ final class MobileLedgerStore: ObservableObject {
         )
     }
 
-    func saveAccount(_ draft: MobileAccountDraft) {
-        guard allowJournalMutation() else { return }
+    @discardableResult
+    func saveAccount(_ draft: MobileAccountDraft) -> UUID? {
+        guard allowJournalMutation() else { return nil }
         validationError = nil
+        let savedID = draft.id ?? UUID()
         guard let ledgerID = draft.ledgerID ?? selectedLedgerID, ledger(ledgerID) != nil else {
             validationError = ValidationError(message: "This journal no longer exists.")
-            return
+            return nil
         }
         if let id = draft.id, !data.accounts.contains(where: { $0.id == id && $0.ledgerID == ledgerID }) {
             validationError = ValidationError(message: "This account no longer exists in this journal. Create a new account instead.")
-            return
+            return nil
         }
         let trimmed = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             validationError = ValidationError(message: "Account name is required.")
-            return
+            return nil
         }
 
         var parentID = draft.isGroup ? nil : draft.parentID
@@ -1692,32 +1709,32 @@ final class MobileLedgerStore: ObservableObject {
         }
         if let parentID, parentID == draft.id {
             validationError = ValidationError(message: "An account cannot be its own group.")
-            return
+            return nil
         }
         if let parentID {
             guard let parent = account(parentID), parent.ledgerID == ledgerID, parent.kind == draft.kind else {
                 validationError = ValidationError(message: "The group must belong to this journal and match the account type.")
-                return
+                return nil
             }
             if let id = draft.id, descendantIDs(of: id).contains(parentID) {
                 validationError = ValidationError(message: "That group would create an account cycle.")
-                return
+                return nil
             }
         }
         if let commodityID = draft.commodityID,
            !isValidCommodityID(commodityID, forLedger: ledgerID) {
             validationError = ValidationError(message: "The currency must belong to this journal.")
-            return
+            return nil
         }
 
         if let id = draft.id,
            let index = data.accounts.firstIndex(where: { $0.id == id }) {
-            guard data.accounts[index].ledgerID == ledgerID else { return }
+            guard data.accounts[index].ledgerID == ledgerID else { return nil }
             let previousAccount = data.accounts[index]
             if data.accounts[index].kind != draft.kind,
                (accountHasTransactions(id) || !descendantIDs(of: id).isEmpty) {
                 validationError = ValidationError(message: "Accounts with child accounts or transactions cannot change type.")
-                return
+                return nil
             }
             data.accounts[index].name = trimmed
             data.accounts[index].note = draft.note
@@ -1730,10 +1747,11 @@ final class MobileLedgerStore: ObservableObject {
                previousAccount.commodityID == draft.commodityID {
                 refreshDerivedCacheForAccountMetadataChange(data.accounts[index])
                 save(syncCloud: true, refreshCache: false)
-                return
+                return savedID
             }
         } else {
             data.accounts.append(Account(
+                id: savedID,
                 ledgerID: ledgerID,
                 parentID: parentID,
                 commodityID: draft.commodityID,
@@ -1745,9 +1763,10 @@ final class MobileLedgerStore: ObservableObject {
             ))
             refreshDerivedCacheForAccountListChange(ledgerID: ledgerID)
             save(syncCloud: true, refreshCache: false)
-            return
+            return savedID
         }
         save(syncCloud: true)
+        return savedID
     }
 
     func moveAccount(_ accountID: UUID, relativeTo targetID: UUID, placement: AccountMovePlacement) {
@@ -1802,40 +1821,43 @@ final class MobileLedgerStore: ObservableObject {
         return CurrencyDraft(id: commodity.id, ledgerID: commodity.ledgerID, symbol: commodity.symbol, name: commodity.name)
     }
 
-    func saveCurrency(_ draft: CurrencyDraft) {
-        guard allowJournalMutation() else { return }
+    @discardableResult
+    func saveCurrency(_ draft: CurrencyDraft) -> UUID? {
+        guard allowJournalMutation() else { return nil }
         validationError = nil
+        let savedID = draft.id ?? UUID()
         guard let ledgerID = draft.ledgerID ?? selectedLedgerID, ledger(ledgerID) != nil else {
             validationError = ValidationError(message: "This journal no longer exists.")
-            return
+            return nil
         }
         if let id = draft.id, !data.commodities.contains(where: { $0.id == id && $0.ledgerID == ledgerID }) {
             validationError = ValidationError(message: "This currency no longer exists in this journal. Create a new currency instead.")
-            return
+            return nil
         }
         let symbol = draft.symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !symbol.isEmpty else {
             validationError = ValidationError(message: "Currency symbol is required.")
-            return
+            return nil
         }
         guard !name.isEmpty else {
             validationError = ValidationError(message: "Currency name is required.")
-            return
+            return nil
         }
         guard !data.commodities.contains(where: { $0.ledgerID == ledgerID && $0.symbol == symbol && $0.id != draft.id }) else {
             validationError = ValidationError(message: "That currency already exists in this journal.")
-            return
+            return nil
         }
         if let id = draft.id,
            let index = data.commodities.firstIndex(where: { $0.id == id }) {
             data.commodities[index].symbol = symbol
             data.commodities[index].name = name
         } else {
-            data.commodities.append(Commodity(ledgerID: ledgerID, symbol: symbol, name: name))
+            data.commodities.append(Commodity(id: savedID, ledgerID: ledgerID, symbol: symbol, name: name))
         }
         refreshDerivedCacheForCommodityListChange(ledgerID: ledgerID)
         save(syncCloud: true, refreshCache: false)
+        return savedID
     }
 
     func deleteCurrency(_ commodityID: UUID) {
@@ -1978,7 +2000,136 @@ final class MobileLedgerStore: ObservableObject {
         catch { validationError = ValidationError(message: "Save failed: \(error.localizedDescription)") }
     }
 
+    /// UI saves retain ownership through suspension and dismiss only when the
+    /// captured snapshot and offline outbox have committed on the serial writer.
+    /// Repeated taps share one task; retrying a failed new entry reuses its ID.
+    func saveTransactionAndFlushAsync(
+        _ draft: TransactionDraft,
+        scope: RecurringJournalEditor.Scope = .occurrence,
+        supersedesPendingAttachments: Bool = false
+    ) async -> Bool {
+        if let task = transactionSaveTasks[draft.saveOperationID] { return await task.value }
+        let task = Task { await self.performTransactionSaveAsync(draft, scope: scope, supersedesPendingAttachments: supersedesPendingAttachments) }
+        transactionSaveTasks[draft.saveOperationID] = task
+        let result = await task.value
+        transactionSaveTasks.removeValue(forKey: draft.saveOperationID)
+        return result
+    }
+
+    private func performTransactionSaveAsync(_ draft: TransactionDraft, scope: RecurringJournalEditor.Scope, supersedesPendingAttachments: Bool) async -> Bool {
+        guard allowJournalMutation() else { return false }
+        validationError = nil
+        guard Set(draft.attachments.map(\.id)).count == draft.attachments.count else {
+            validationError = ValidationError(message: "This transaction contains duplicate receipt identifiers. Remove the repeated receipt and try again.")
+            return false
+        }
+        let lease = MobilePersistenceBackgroundLease()
+        defer { lease.end() }
+        let generation = journalReplacementGeneration
+        var savingDraft = draft
+        var copiedReceipts: AttachmentContainer?
+        let operationID = draft.saveOperationID
+        if draft.id == nil, let existing = transaction(operationID) {
+            savingDraft.id = existing.id
+            savingDraft.recurrenceRuleID = existing.recurrenceRule?.id
+            if draft.isDuplicate {
+                if !draft.attachments.isEmpty {
+                    guard let copies = duplicateReceiptCopiesByOperation[operationID] else {
+                        validationError = ValidationError(message: "This duplicate was already saved. Open it from the transaction list to edit it.")
+                        return false
+                    }
+                    savingDraft.attachments = draft.attachments.map { copies[$0.id] ?? $0 }
+                }
+                savingDraft.attachmentContainer = existing.attachment
+            }
+        } else if draft.id == nil, pendingNewTransactionOperations.contains(operationID) {
+            validationError = ValidationError(message: "This transaction was removed while saving. Create a new transaction instead.")
+            return false
+        }
+        do {
+            if savingDraft.isDuplicate, savingDraft.id == nil, let original = attachmentContainer(from: savingDraft) {
+                let directory = supportDirectory
+                sealPendingDeferredWrite()
+                copiedReceipts = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<AttachmentContainer, Error>) in
+                    Self.deferredPersistenceQueue.async {
+                        do {
+                            let copy = try AttachmentDuplicator.duplicate(original, into: directory.appending(path: "Attachments")) {
+                                Self.attachmentURL(for: $0, supportDirectory: directory)
+                            }
+                            continuation.resume(returning: copy)
+                        } catch { continuation.resume(throwing: error) }
+                    }
+                }
+            }
+            guard generation == journalReplacementGeneration, allowJournalMutation() else {
+                if let copiedReceipts { discardPreparedReceiptCopy(copiedReceipts) }
+                if validationError == nil {
+                    validationError = ValidationError(message: "The journal changed while preparing this transaction. Open a new editor and try again.")
+                }
+                return false
+            }
+            applyTransactionDraft(savingDraft, scope: scope, schedulePersistence: false,
+                                  newTransactionID: operationID, preparedDuplicateReceipts: copiedReceipts)
+            guard validationError == nil else {
+                if let copiedReceipts { discardPreparedReceiptCopy(copiedReceipts) }
+                return false
+            }
+            if supersedesPendingAttachments {
+                // The editor's validated selection supersedes any prior failed
+                // picker batch. Already accepted writes precede this snapshot.
+                receiptAttachmentSaves.invalidatePendingSaves(for: savingDraft.id ?? operationID)
+            }
+            if draft.id == nil {
+                pendingNewTransactionOperations.insert(operationID)
+                if let copiedReceipts {
+                    duplicateReceiptCopiesByOperation[operationID] = Dictionary(uniqueKeysWithValues: zip(draft.attachments, copiedReceipts.assets).map { ($0.id, $1) })
+                } else if draft.isDuplicate, duplicateReceiptCopiesByOperation[operationID] == nil {
+                    // A failed receipt-free duplicate can acquire a new receipt
+                    // before retry. Empty means no original assets needed copying.
+                    duplicateReceiptCopiesByOperation[operationID] = [:]
+                }
+            }
+            // The writer owns persistence-error sequencing. Its older failure
+            // must not be re-reported after a newer snapshot succeeds.
+            do { try await flushLocalChangesAsync() }
+            catch { return false }
+            pendingNewTransactionOperations.remove(operationID)
+            if draft.id == nil {
+                completedTransactionSaveOperations.removeAll { $0 == operationID }
+                completedTransactionSaveOperations.append(operationID)
+                while completedTransactionSaveOperations.count > 128 {
+                    duplicateReceiptCopiesByOperation.removeValue(forKey: completedTransactionSaveOperations.removeFirst())
+                }
+            }
+            return true
+        } catch {
+            // Only receipt preparation can throw here. Durable-write failures
+            // are handled above, retaining in-memory edits and owned copies.
+            validationError = ValidationError(message: "Save failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    private func discardPreparedReceiptCopy(_ copy: AttachmentContainer) {
+        let directory = supportDirectory
+        Self.deferredPersistenceQueue.async {
+            for asset in copy.assets {
+                try? FileManager.default.removeItem(at: Self.attachmentURL(for: asset, supportDirectory: directory))
+            }
+        }
+    }
+
     func saveTransaction(_ draft: TransactionDraft, scope: RecurringJournalEditor.Scope = .occurrence) {
+        applyTransactionDraft(draft, scope: scope)
+    }
+
+    private func applyTransactionDraft(
+        _ draft: TransactionDraft,
+        scope: RecurringJournalEditor.Scope,
+        schedulePersistence: Bool = true,
+        newTransactionID: UUID? = nil,
+        preparedDuplicateReceipts: AttachmentContainer? = nil
+    ) {
         guard allowJournalMutation() else { return }
         validationError = nil
         let previousIndex = draft.id.flatMap { id in data.transactions.firstIndex { $0.id == id } }
@@ -2031,7 +2182,7 @@ final class MobileLedgerStore: ObservableObject {
         }
 
         var transaction = LedgerTransaction(
-            id: draft.id ?? UUID(),
+            id: draft.id ?? newTransactionID ?? UUID(),
             ledgerID: ledgerID,
             sourceID: previous?.sourceID,
             date: draft.date,
@@ -2047,7 +2198,7 @@ final class MobileLedgerStore: ObservableObject {
         var copiedReceipts: AttachmentContainer?
         var committed = false
         defer {
-            if !committed, let copiedReceipts {
+            if !committed, preparedDuplicateReceipts == nil, let copiedReceipts {
                 for asset in copiedReceipts.assets {
                     try? FileManager.default.removeItem(at: attachmentURL(for: asset))
                 }
@@ -2055,7 +2206,7 @@ final class MobileLedgerStore: ObservableObject {
         }
         do {
             if draft.isDuplicate, draft.id == nil, let originalReceipts = transaction.attachment {
-                let copy = try AttachmentDuplicator.duplicate(originalReceipts, into: attachmentsDirectory) {
+                let copy = try preparedDuplicateReceipts ?? AttachmentDuplicator.duplicate(originalReceipts, into: attachmentsDirectory) {
                     attachmentURL(for: $0)
                 }
                 copiedReceipts = copy
@@ -2076,7 +2227,7 @@ final class MobileLedgerStore: ObservableObject {
                 // A scope edit can affect several accounts, dates and summaries.
                 refreshDerivedCache()
             }
-            save(syncCloud: true, refreshCache: false)
+            if schedulePersistence { save(syncCloud: true, refreshCache: false) }
         } catch {
             validationError = ValidationError(message: error.localizedDescription)
         }
@@ -2094,6 +2245,37 @@ final class MobileLedgerStore: ObservableObject {
     }
 
     func deleteTransaction(_ transactionID: UUID, scope: RecurringJournalEditor.Scope = .occurrence, expected: LedgerTransaction? = nil) {
+        applyTransactionDeletion(transactionID, scope: scope, expected: expected)
+        guard validationError == nil else { return }
+        do { try flushLocalChanges() }
+        catch { validationError = ValidationError(message: "Delete failed: \(error.localizedDescription)") }
+    }
+
+    func deleteTransactionAsync(
+        _ transactionID: UUID,
+        scope: RecurringJournalEditor.Scope = .occurrence,
+        expected: LedgerTransaction? = nil
+    ) async -> Bool {
+        guard allowJournalMutation() else { return false }
+        validationError = nil
+        // A failed commit leaves the user's deletion applied in memory. Retry
+        // its durable snapshot instead of requiring the removed row to reappear.
+        if transaction(transactionID) == nil, deletedTransactionTombstoneIDs.contains(transactionID) {
+            do { try await flushLocalChangesAsync(); return true }
+            catch { return false }
+        }
+        applyTransactionDeletion(transactionID, scope: scope, expected: expected, schedulePersistence: false)
+        guard validationError == nil else { return false }
+        do { try await flushLocalChangesAsync(); return true }
+        catch { return false }
+    }
+
+    private func applyTransactionDeletion(
+        _ transactionID: UUID,
+        scope: RecurringJournalEditor.Scope,
+        expected: LedgerTransaction?,
+        schedulePersistence: Bool = true
+    ) {
         guard allowJournalMutation() else { return }
         validationError = nil
         if let expected, let current = transaction(transactionID), current.date != expected.date || current.recurrenceRule != expected.recurrenceRule {
@@ -2110,9 +2292,7 @@ final class MobileLedgerStore: ObservableObject {
         if removed.count == 1, !deletion.scheduleChanged, let row = removed.first {
             refreshDerivedCacheForTransactionDeletion(row)
         } else { refreshDerivedCache() }
-        save(syncCloud: true, refreshCache: false)
-        do { try flushLocalChanges() }
-        catch { validationError = ValidationError(message: "Delete failed: \(error.localizedDescription)") }
+        if schedulePersistence { save(syncCloud: true, refreshCache: false) }
     }
 
     /// Preparing a duplicate never writes data or receipt files. It is a new,
@@ -2207,21 +2387,23 @@ final class MobileLedgerStore: ObservableObject {
         save(syncCloud: true, refreshCache: false)
     }
 
-    func saveTransactionTemplate(_ draft: TransactionTemplateDraft) {
-        guard allowJournalMutation() else { return }
+    @discardableResult
+    func saveTransactionTemplate(_ draft: TransactionTemplateDraft) -> UUID? {
+        guard allowJournalMutation() else { return nil }
         validationError = nil
+        let savedID = draft.id ?? UUID()
         guard let ledgerID = draft.ledgerID ?? selectedLedgerID, ledger(ledgerID) != nil else {
             validationError = ValidationError(message: "This journal no longer exists.")
-            return
+            return nil
         }
         if let id = draft.id, !data.transactionTemplates.contains(where: { $0.id == id && $0.ledgerID == ledgerID }) {
             validationError = ValidationError(message: "This template no longer exists in this journal. Create a new template instead.")
-            return
+            return nil
         }
         let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else {
             validationError = ValidationError(message: "Template name cannot be blank.")
-            return
+            return nil
         }
         let postings = draft.postings.enumerated().map { index, posting in
             PostingTemplate(id: posting.id, accountID: posting.accountID, listIndex: index)
@@ -2230,7 +2412,7 @@ final class MobileLedgerStore: ObservableObject {
             guard let accountID = posting.accountID else { continue }
             guard let account = account(accountID), account.ledgerID == ledgerID else {
                 validationError = ValidationError(message: "Template accounts must belong to this journal.")
-                return
+                return nil
             }
         }
         if let id = draft.id,
@@ -2245,6 +2427,7 @@ final class MobileLedgerStore: ObservableObject {
         } else {
             let nextIndex = (data.transactionTemplates.filter { $0.ledgerID == ledgerID }.map(\.listIndex).max() ?? -1) + 1
             data.transactionTemplates.append(TransactionTemplate(
+                id: savedID,
                 ledgerID: ledgerID,
                 name: name,
                 note: draft.note,
@@ -2258,6 +2441,7 @@ final class MobileLedgerStore: ObservableObject {
         }
         refreshDerivedCacheForTransactionTemplateListChange(ledgerID: ledgerID)
         save(syncCloud: true, refreshCache: false)
+        return savedID
     }
 
     func deleteTransactionTemplate(_ templateID: UUID) {
@@ -2281,18 +2465,26 @@ final class MobileLedgerStore: ObservableObject {
         return try Self.importAttachment(from: sourceURL, supportDirectory: supportDirectory)
     }
 
-    func importAttachmentAsync(from sourceURL: URL) async throws -> AttachmentAsset {
+    var attachmentImportGeneration: UUID { journalReplacementGeneration }
+
+    func importAttachmentAsync(from sourceURL: URL, expectedGeneration: UUID? = nil,
+                               receive: @MainActor (AttachmentAsset) -> Void = { _ in }) async throws -> AttachmentAsset {
         try requireWritableJournal()
-        let supportDirectory = supportDirectory
-        return try await Task.detached(priority: .userInitiated) {
-            let accessed = sourceURL.startAccessingSecurityScopedResource()
-            defer {
-                if accessed {
-                    sourceURL.stopAccessingSecurityScopedResource()
-                }
-            }
-            return try Self.importAttachment(from: sourceURL, supportDirectory: supportDirectory)
-        }.value
+        let generation = expectedGeneration ?? journalReplacementGeneration
+        let directory = supportDirectory
+        return try await ReceiptImportGenerationGuard.run(expected: generation,
+            current: { self.journalReplacementGeneration }, importFile: {
+                try await Task.detached(priority: .userInitiated) {
+                    let accessed = sourceURL.startAccessingSecurityScopedResource()
+                    defer { if accessed { sourceURL.stopAccessingSecurityScopedResource() } }
+                    return try Self.importAttachment(from: sourceURL, supportDirectory: directory)
+                }.value
+            }, discard: { asset in
+                // This is only the unique file just copied by this operation;
+                // it has not been delivered to any draft or transaction yet.
+                let url = Self.attachmentURL(for: asset, supportDirectory: directory)
+                _ = await Task.detached(priority: .utility) { try? FileManager.default.removeItem(at: url) }.value
+            }, receive: receive)
     }
 
     private nonisolated static func importAttachment(from sourceURL: URL, supportDirectory: URL) throws -> AttachmentAsset {
@@ -2387,6 +2579,7 @@ final class MobileLedgerStore: ObservableObject {
         let snapshot = data, directory = supportDirectory, tombstones = deletedTransactionTombstoneIDs
         let destination = try newBackupURL()
         do {
+            sealPendingDeferredWrite()
             try Self.deferredPersistenceQueue.sync {
                 try Self.validateCandidateData(snapshot, operation: "Backup")
                 try BackupArchive.export(snapshot, to: destination, progress: progress, deletedIDs: tombstones) {
@@ -2406,6 +2599,7 @@ final class MobileLedgerStore: ObservableObject {
         let snapshot = data, directory = supportDirectory, tombstones = deletedTransactionTombstoneIDs
         let destination = try newBackupURL()
         do {
+            sealPendingDeferredWrite()
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 Self.deferredPersistenceQueue.async {
                     do {
@@ -2475,6 +2669,7 @@ final class MobileLedgerStore: ObservableObject {
         defer { if moved && !committed { try? FileManager.default.removeItem(at: destination) } }
         if FileManager.default.fileExists(atPath: prepared.receipts.path) {
             let attachmentsDirectory = attachmentsDirectory
+            sealPendingDeferredWrite()
             try Self.deferredPersistenceQueue.sync {
                 try FileManager.default.createDirectory(at: attachmentsDirectory, withIntermediateDirectories: true)
                 try FileManager.default.moveItem(at: prepared.receipts, to: destination)
@@ -2542,8 +2737,10 @@ final class MobileLedgerStore: ObservableObject {
             return
         }
         if !active && !backupFileOperationInProgress {
-            do { try flushLocalChanges() }
-            catch { validationError = ValidationError(message: "Save failed: \(error.localizedDescription)") }
+            // Capture the latest UI state synchronously, then let the serial
+            // writer's background lease finish it. UIKit's scene transition
+            // must not wait for disk locks or database validation.
+            scheduleDeferredLocalSave()
         }
         appIconBadge?.setActive(isForegroundActive)
         refreshCloudKitForegroundTriggers()
@@ -2611,10 +2808,21 @@ final class MobileLedgerStore: ObservableObject {
 
     func waitForCloudKitSyncIdle() async {
         await cloudSyncCoordinator.waitUntilIdle()
+        sealPendingDeferredWrite()
         await withCheckedContinuation { continuation in
             Self.deferredPersistenceQueue.async { continuation.resume() }
         }
     }
+
+    #if DEBUG
+    /// Test teardown releases its store before draining this queue so weak
+    /// status callbacks cannot open a deleted fixture's WAL/SHM sidecars.
+    static func drainPersistenceQueueForTesting() async {
+        await withCheckedContinuation { continuation in
+            deferredPersistenceQueue.async { continuation.resume() }
+        }
+    }
+    #endif
 
     func cloudKitSyncConflicts() -> [CloudKitSyncConflict] {
         guard !requiresJournalRecovery else { return [] }
@@ -2743,6 +2951,7 @@ final class MobileLedgerStore: ObservableObject {
             let snapshot = updated
             let databaseURL = sqliteStore.databaseURL
             let baseline = persistenceBaseline
+            sealPendingDeferredWrite()
             try Self.deferredPersistenceQueue.sync {
                 do {
                     let store = SQLiteJournalStore(databaseURL: databaseURL)
@@ -2854,6 +3063,48 @@ final class MobileLedgerStore: ObservableObject {
         try persistSnapshot(data, trackSyncChanges: true)
     }
 
+    /// Enqueue before suspension. A following edit gets its own batch behind
+    /// this barrier, and this captured snapshot is never installed back into UI.
+    func flushLocalChangesAsync() async throws {
+        do { try requireWritableJournal() }
+        catch {
+            validationError = ValidationError(message: error.localizedDescription)
+            throw error
+        }
+        sealPendingDeferredWrite()
+        let snapshot = data
+        let databaseURL = sqliteStore.databaseURL
+        let baseline = persistenceBaseline
+        let directory = supportDirectory
+        let sequence = nextPersistenceSequence()
+        let shouldSync = snapshot.syncEnabled
+        let lease = MobilePersistenceBackgroundLease()
+        defer { lease.end() }
+        do {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                Self.deferredPersistenceQueue.async {
+                    do {
+                        try Self.validateCandidateData(snapshot, operation: "Journal")
+                        let previous = baseline.snapshot
+                        try SQLiteJournalStore(databaseURL: databaseURL).persist(snapshot, previous: previous, trackSyncChanges: true)
+                        baseline.snapshot = snapshot
+                        Self.removeObsoleteAttachmentFiles(supportDirectory: directory, previous: previous, data: snapshot)
+                        continuation.resume()
+                    } catch {
+                        baseline.snapshot = nil
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+            finishPersistence(sequence: sequence, error: nil)
+            refreshCloudSyncDataAvailability()
+            if shouldSync { scheduleDeferredCloudSave() }
+        } catch {
+            finishPersistence(sequence: sequence, error: error)
+            throw error
+        }
+    }
+
     private func save(
         syncCloud: Bool,
         persistenceTiming: MobilePersistenceTiming = .deferredLocal,
@@ -2892,10 +3143,12 @@ final class MobileLedgerStore: ObservableObject {
     /// Waiting on this queue drains earlier edits before computing the next diff.
     private func persistSnapshot(_ snapshot: JournalData, trackSyncChanges: Bool, collectCompletedReceipts: Bool = false) throws {
         try requireWritableJournal()
+        let sequence = nextPersistenceSequence()
         let databaseURL = sqliteStore.databaseURL
         let baseline = persistenceBaseline
         let supportDirectory = supportDirectory
-        try Self.deferredPersistenceQueue.sync {
+        sealPendingDeferredWrite()
+        do { try Self.deferredPersistenceQueue.sync {
             do {
                 let previous = baseline.snapshot
                 try SQLiteJournalStore(databaseURL: databaseURL).persist(
@@ -2908,6 +3161,11 @@ final class MobileLedgerStore: ObservableObject {
                 throw error
             }
         }
+            finishPersistence(sequence: sequence, error: nil)
+        } catch {
+            finishPersistence(sequence: sequence, error: error)
+            throw error
+        }
     }
 
     private func scheduleDeferredLocalSave(
@@ -2917,40 +3175,66 @@ final class MobileLedgerStore: ObservableObject {
         refreshCloudStateAfterSuccess: Bool = true
     ) {
         guard allowJournalMutation() else { return }
-        let snapshot = data
+        let request = MobileDeferredPersistenceBatch.Request(
+            snapshot: data, sequence: nextPersistenceSequence(), trackSyncChanges: trackSyncChanges,
+            validateSnapshot: validateSnapshot, scheduleCloudAfterSuccess: scheduleCloudAfterSuccess,
+            refreshCloudStateAfterSuccess: refreshCloudStateAfterSuccess
+        )
+        if pendingDeferredWrite?.replacePending(with: request) == true { return }
+        sealPendingDeferredWrite()
+        let batch = MobileDeferredPersistenceBatch(request)
+        pendingDeferredWrite = batch
         let databaseURL = sqliteStore.databaseURL
         let baseline = persistenceBaseline
         let supportDirectory = supportDirectory
-        Self.deferredPersistenceQueue.async { [weak self, snapshot, databaseURL, baseline, trackSyncChanges, validateSnapshot] in
-            do {
+        let lease = MobilePersistenceBackgroundLease()
+        Self.deferredPersistenceQueue.async { [weak self, batch, databaseURL, baseline, supportDirectory, lease] in
+            let request = batch.take()
+            let outcome = Result<Void, Error> {
                 let previous = baseline.snapshot
-                // A failed prior write clears the baseline; the next persist
-                // becomes a full replacement and must revalidate even if this
-                // request was only a selection change.
-                if validateSnapshot || previous == nil {
-                    try Self.validateCandidateData(snapshot, operation: "Journal")
+                if request.validateSnapshot || previous == nil {
+                    try Self.validateCandidateData(request.snapshot, operation: "Journal")
                 }
                 let store = SQLiteJournalStore(databaseURL: databaseURL)
-                try store.persist(snapshot, previous: previous, trackSyncChanges: trackSyncChanges)
-                baseline.snapshot = snapshot
-                Self.removeObsoleteAttachmentFiles(supportDirectory: supportDirectory, previous: previous, data: snapshot)
-                if refreshCloudStateAfterSuccess {
-                    Task { @MainActor [weak self] in
-                        self?.refreshCloudSyncDataAvailability()
-                    }
-                }
-                if scheduleCloudAfterSuccess {
-                    Task { @MainActor [weak self] in
-                        self?.scheduleDeferredCloudSave()
-                    }
-                }
-            } catch {
-                baseline.snapshot = nil
-                Task { @MainActor [weak self] in
-                    self?.validationError = ValidationError(message: "Save failed: \(error.localizedDescription)")
+                try store.persist(request.snapshot, previous: previous, trackSyncChanges: request.trackSyncChanges)
+                baseline.snapshot = request.snapshot
+                Self.removeObsoleteAttachmentFiles(supportDirectory: supportDirectory, previous: previous, data: request.snapshot)
+            }
+            if case .failure = outcome { baseline.snapshot = nil }
+            Task { @MainActor [weak self] in
+                lease.end()
+                guard let self else { return }
+                switch outcome {
+                case .success:
+                    self.finishPersistence(sequence: request.sequence, error: nil)
+                    if request.refreshCloudStateAfterSuccess { self.refreshCloudSyncDataAvailability() }
+                    if request.scheduleCloudAfterSuccess { self.scheduleDeferredCloudSave() }
+                case .failure(let error):
+                    self.finishPersistence(sequence: request.sequence, error: error)
                 }
             }
         }
+    }
+
+    private func sealPendingDeferredWrite() {
+        pendingDeferredWrite?.seal()
+        pendingDeferredWrite = nil
+    }
+
+    private func nextPersistenceSequence() -> UInt64 {
+        persistenceSequence &+= 1
+        return persistenceSequence
+    }
+
+    private func finishPersistence(sequence: UInt64, error: Error?) {
+        let previousErrorID = persistenceOutcomes.error?.id
+        let reported = error.map { ValidationError(message: "Save failed: \($0.localizedDescription)") }
+        guard persistenceOutcomes.record(sequence: sequence, error: reported) else { return }
+        // Retain disk failures even if another screen clears its transient
+        // validation alert; only a newer durable success resolves this state.
+        if localPersistenceError?.id != reported?.id { localPersistenceError = reported }
+        if let reported { validationError = reported }
+        else if let previousErrorID, validationError?.id == previousErrorID { validationError = nil }
     }
 
     private func scheduleDeferredCloudSave() {
@@ -2980,12 +3264,20 @@ final class MobileLedgerStore: ObservableObject {
         let databaseURL = sqliteStore.databaseURL
         let baseline = persistenceBaseline
         let supportDirectory = supportDirectory
+        sealPendingDeferredWrite()
         try Self.deferredPersistenceQueue.sync {
             let previous = baseline.snapshot
             try SQLiteJournalStore(databaseURL: databaseURL).replaceData(snapshot, trackSyncChanges: true, resetCloudKitState: true)
             baseline.snapshot = snapshot
             Self.removeObsoleteAttachmentFiles(supportDirectory: supportDirectory, previous: previous, data: snapshot)
         }
+        journalReplacementGeneration = UUID()
+        // A confirmed restore supersedes pending attachment selections. Their
+        // accepted writes were drained above; do not replay later queued edits.
+        receiptAttachmentSaves.invalidatePendingSaves()
+        pendingNewTransactionOperations.removeAll()
+        duplicateReceiptCopiesByOperation.removeAll()
+        completedTransactionSaveOperations.removeAll()
         data = snapshot
         refreshDerivedCache()
         deletedTransactionTombstoneIDs = []
@@ -3042,6 +3334,11 @@ final class MobileLedgerStore: ObservableObject {
             throw ValidationError(message: "\(operation) contains duplicate record identifiers.")
         }
 
+        // Uniqueness is checked before dictionary construction. Resolve every
+        // posting/group by ID once instead of rescanning all accounts per row.
+        let accountsByID = Dictionary(uniqueKeysWithValues: candidate.accounts.map { ($0.id, $0) })
+        let commoditiesByID = Dictionary(uniqueKeysWithValues: candidate.commodities.map { ($0.id, $0) })
+
         if let selectedLedgerID = candidate.selectedLedgerID, !ledgerIDs.contains(selectedLedgerID) {
             throw ValidationError(message: "\(operation) selected journal is missing.")
         }
@@ -3053,14 +3350,14 @@ final class MobileLedgerStore: ObservableObject {
                 throw ValidationError(message: "\(operation) contains an account without a journal.")
             }
             if let parentID = account.parentID {
-                guard let parent = candidate.accounts.first(where: { $0.id == parentID }),
+                guard let parent = accountsByID[parentID],
                       parent.ledgerID == account.ledgerID,
                       parent.kind == account.kind else {
                     throw ValidationError(message: "\(operation) contains an invalid account group.")
                 }
             }
             if let commodityID = account.commodityID {
-                guard let commodity = candidate.commodities.first(where: { $0.id == commodityID }),
+                guard let commodity = commoditiesByID[commodityID],
                       commodity.ledgerID == account.ledgerID else {
                     throw ValidationError(message: "\(operation) contains an invalid account currency.")
                 }
@@ -3093,8 +3390,7 @@ final class MobileLedgerStore: ObservableObject {
                 throw ValidationError(message: "\(operation) contains an incomplete transaction.")
             }
             for posting in transaction.postings {
-                guard accountIDs.contains(posting.accountID),
-                      candidate.accounts.first(where: { $0.id == posting.accountID })?.ledgerID == transaction.ledgerID else {
+                guard accountsByID[posting.accountID]?.ledgerID == transaction.ledgerID else {
                     throw ValidationError(message: "\(operation) contains a posting with an invalid account.")
                 }
                 if let commodityID = posting.commodityID, !commodityIDs.contains(commodityID) {
@@ -3418,6 +3714,7 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
         let databaseURL = sqliteStore.databaseURL
         let baseline = persistenceBaseline
         let supportDirectory = supportDirectory
+        sealPendingDeferredWrite()
         try Self.deferredPersistenceQueue.sync {
             do {
                 let previous = baseline.snapshot
@@ -3455,6 +3752,7 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
         let databaseURL = sqliteStore.databaseURL
         let baseline = persistenceBaseline
         let supportDirectory = supportDirectory
+        sealPendingDeferredWrite()
         try Self.deferredPersistenceQueue.sync {
             do {
                 let previous = baseline.snapshot

@@ -550,6 +550,9 @@ struct PostingDraft: Identifiable, Equatable {
 }
 
 struct TransactionDraft: Identifiable, Equatable {
+    /// Transient identity retained across Save retries; never serialized into a
+    /// journal. A failed durable save cannot create a second copy on retry.
+    var saveOperationID = UUID()
     var id: UUID?
     var ledgerID: UUID? = nil
     var date = Date()

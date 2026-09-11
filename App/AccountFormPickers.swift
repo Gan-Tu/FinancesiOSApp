@@ -26,6 +26,10 @@ struct AccountGroupPicker: View {
     }
 
     var body: some View {
+        // Resolve eligibility once per input update. In particular, checking
+        // transaction ownership must not repeat for each category and each row.
+        let groupOptions = groups
+        let selectedID = draft.isGroup ? nil : draft.parentID ?? groupOptions.first { $0.depth == 0 && $0.account.kind == draft.kind }?.id
         List {
             Section {
                 Button {
@@ -39,7 +43,7 @@ struct AccountGroupPicker: View {
                 }.buttonStyle(.plain)
             }
             ForEach(AccountKind.allCases) { kind in
-                let rows = groups.filter { $0.account.kind == kind }
+                let rows = groupOptions.filter { $0.account.kind == kind }
                 if !rows.isEmpty {
                     Section(kind.title) {
                         ForEach(rows) { node in
@@ -52,7 +56,7 @@ struct AccountGroupPicker: View {
                                 draft.isGroup = false
                                 dismiss()
                             } label: {
-                                AccountSelectionLabel(account: node.account, depth: node.depth, selected: selectedGroupID == node.id, showCurrency: false)
+                                AccountSelectionLabel(account: node.account, depth: node.depth, selected: selectedID == node.id, showCurrency: false)
                             }.buttonStyle(.plain)
                         }
                     }
@@ -64,10 +68,6 @@ struct AccountGroupPicker: View {
         .navigationTitle("Group In").navigationBarTitleDisplayMode(.inline)
     }
 
-    private var selectedGroupID: UUID? {
-        if draft.isGroup { return nil }
-        return draft.parentID ?? groups.first { $0.depth == 0 && $0.account.kind == draft.kind }?.id
-    }
 }
 
 struct AccountCurrencyPicker: View {

@@ -310,6 +310,15 @@ struct JournalDataDiff {
     var sourceIDsDeleted: [UUID] = []
     var transactionsChanged: [LedgerTransaction] = []
     var transactionIDsDeleted: [UUID] = []
+    /// A transaction's canonical payload changes for note/number/payee/cleared
+    /// edits, but its normalized children usually do not. Preserve those rows
+    /// (and their uploaded receipt state) instead of deleting and rebuilding.
+    var transactionPostingsUnchanged: Set<UUID> = []
+    var postingsChangedByTransaction: [UUID: [Posting]] = [:]
+    var postingIDsDeletedByTransaction: [UUID: [UUID]] = [:]
+    var transactionAttachmentsUnchanged: Set<UUID> = []
+    var transactionRecurrenceUnchanged: Set<UUID> = []
+    var templatePostingsUnchanged: Set<UUID> = []
     var templatesChanged: [TransactionTemplate] = []
     var templateIDsDeleted: [UUID] = []
     /// Assets present in the previous snapshot but absent from the new one, so
@@ -320,6 +329,7 @@ struct JournalDataDiff {
     /// explicitly or orphan rows accumulate and reload on every launch.
     var recurrenceRuleIDsDeleted: [UUID] = []
     var metadataChanged = false
+    var syncedMetadataChanged = false
 
     var isEmpty: Bool {
         !metadataChanged
@@ -340,6 +350,20 @@ struct JournalDataDiff {
             + templatesChanged.count + templateIDsDeleted.count
     }
 
+    /// Even a bulk clear/unclear should update only transaction rows. Falling
+    /// back to a full replacement would rewrite the entire journal and blobs.
+    var changesOnlyTransactionOrTemplateFields: Bool {
+        ledgersChanged.isEmpty && ledgerIDsDeleted.isEmpty
+            && commoditiesChanged.isEmpty && commodityIDsDeleted.isEmpty
+            && accountsChanged.isEmpty && accountIDsDeleted.isEmpty
+            && sourcesChanged.isEmpty && sourceIDsDeleted.isEmpty
+            && transactionIDsDeleted.isEmpty && templateIDsDeleted.isEmpty
+            && transactionPostingsUnchanged.count == transactionsChanged.count
+            && transactionAttachmentsUnchanged.count == transactionsChanged.count
+            && transactionRecurrenceUnchanged.count == transactionsChanged.count
+            && templatePostingsUnchanged.count == templatesChanged.count
+    }
+
     static func between(_ old: JournalData, _ new: JournalData) -> JournalDataDiff {
         var diff = JournalDataDiff()
         diffFamily(old.ledgers, new.ledgers, changed: &diff.ledgersChanged, deleted: &diff.ledgerIDsDeleted)
@@ -353,6 +377,14 @@ struct JournalDataDiff {
             deleted: &diff.templateIDsDeleted
         )
 
+        if !diff.templatesChanged.isEmpty {
+            var oldTemplates: [UUID: TransactionTemplate] = [:]
+            for template in old.transactionTemplates { oldTemplates[template.id] = template }
+            for template in diff.templatesChanged where oldTemplates[template.id]?.postings == template.postings {
+                diff.templatePostingsUnchanged.insert(template.id)
+            }
+        }
+
         if old.transactions != new.transactions {
             var oldByID = [UUID: LedgerTransaction](minimumCapacity: old.transactions.count)
             for transaction in old.transactions {
@@ -362,10 +394,25 @@ struct JournalDataDiff {
             for transaction in new.transactions {
                 guard let previous = oldByID[transaction.id] else {
                     diff.transactionsChanged.append(transaction)
+                    diff.postingsChangedByTransaction[transaction.id] = transaction.postings
                     continue
                 }
                 if previous != transaction {
                     diff.transactionsChanged.append(transaction)
+                    if previous.postings == transaction.postings {
+                        diff.transactionPostingsUnchanged.insert(transaction.id)
+                    } else {
+                        let previousPostings = Dictionary(previous.postings.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+                        diff.postingsChangedByTransaction[transaction.id] = transaction.postings.filter { previousPostings[$0.id] != $0 }
+                        let currentIDs = Set(transaction.postings.map(\.id))
+                        diff.postingIDsDeletedByTransaction[transaction.id] = previous.postings.filter { !currentIDs.contains($0.id) }.map(\.id)
+                    }
+                    if previous.attachment == transaction.attachment {
+                        diff.transactionAttachmentsUnchanged.insert(transaction.id)
+                    }
+                    if previous.recurrenceRule == transaction.recurrenceRule {
+                        diff.transactionRecurrenceUnchanged.insert(transaction.id)
+                    }
                     let newAssetIDs = Set((transaction.attachment?.assets ?? []).map(\.id))
                     for asset in previous.attachment?.assets ?? [] where !newAssetIDs.contains(asset.id) {
                         removedAssetIDs.append(asset.id)
@@ -394,6 +441,7 @@ struct JournalDataDiff {
             }
         }
 
+        diff.syncedMetadataChanged = SQLiteSyncedJournalMetadata(data: old) != SQLiteSyncedJournalMetadata(data: new)
         diff.metadataChanged = old.selectedLedgerID != new.selectedLedgerID
             || old.lastSyncedAt != new.lastSyncedAt
             || old.syncEnabled != new.syncEnabled
@@ -677,7 +725,7 @@ final class SQLiteJournalStore: @unchecked Sendable {
         guard !diff.isEmpty else { return }
         let totalRecords = data.ledgers.count + data.commodities.count + data.accounts.count
             + data.sources.count + data.transactions.count + data.transactionTemplates.count
-        if diff.touchedRecordCount > max(64, totalRecords / 4) {
+        if diff.touchedRecordCount > max(64, totalRecords / 4), !diff.changesOnlyTransactionOrTemplateFields {
             try replaceData(data, trackSyncChanges: trackSyncChanges)
             return
         }
@@ -711,10 +759,13 @@ final class SQLiteJournalStore: @unchecked Sendable {
         // Scope the sync-hash and upload-state reads to the records this
         // diff touches; the full-table variants scan ~15k rows per save on
         // a real journal, all but a handful discarded.
+        let syncKeys = trackSyncChanges ? diffSyncKeys(diff) : []
         let previousSyncRows = trackSyncChanges
-            ? try readSyncHashes(forKeys: diffSyncKeys(diff), database: database)
+            ? try readSyncHashes(forKeys: syncKeys, database: database)
             : [:]
-        let changedAssetIDs = diff.transactionsChanged.flatMap { transaction in
+        let changedAssetIDs = diff.transactionsChanged.filter {
+            !diff.transactionAttachmentsUnchanged.contains($0.id)
+        }.flatMap { transaction in
             (transaction.attachment?.assets ?? []).map(\.id)
         }
         let attachmentUploadStates = changedAssetIDs.isEmpty
@@ -845,7 +896,7 @@ final class SQLiteJournalStore: @unchecked Sendable {
         // Statements for the changed-transaction loop are prepared once
         // and reused; bulk edits can route thousands of records through
         // this path before the full-rewrite threshold kicks in.
-        try withPreparedStatement("DELETE FROM postings WHERE transaction_id = ?", database) { deletePostings in
+        try withPreparedStatement("DELETE FROM postings WHERE id = ? AND transaction_id = ?", database) { deletePosting in
         try withPreparedStatement("DELETE FROM attachment_assets WHERE transaction_id = ?", database) { deleteAssets in
         try withPreparedStatement("DELETE FROM attachment_containers WHERE transaction_id = ?", database) { deleteContainers in
         try withPreparedStatement(
@@ -874,13 +925,31 @@ final class SQLiteJournalStore: @unchecked Sendable {
             """
             INSERT INTO postings(id, transaction_id, account_id, commodity_id, amount, list_index, payload_json)
             VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                account_id = excluded.account_id,
+                commodity_id = excluded.commodity_id,
+                amount = excluded.amount,
+                list_index = excluded.list_index,
+                payload_json = excluded.payload_json
+            WHERE postings.transaction_id = excluded.transaction_id
             """,
             database
         ) { insertPosting in
             for transaction in diff.transactionsChanged {
-                for statement in [deletePostings, deleteAssets, deleteContainers] {
-                    try executePreparedStatement(statement, database) { statement in
-                        try bind(transaction.id.uuidString, to: statement, at: 1, database)
+                guard Set(transaction.postings.map(\.id)).count == transaction.postings.count else {
+                    throw SQLiteJournalStoreError.stepFailed("A transaction contains duplicate posting identifiers.")
+                }
+                for postingID in diff.postingIDsDeletedByTransaction[transaction.id] ?? [] {
+                    try executePreparedStatement(deletePosting, database) { statement in
+                        try bind(postingID.uuidString, to: statement, at: 1, database)
+                        try bind(transaction.id.uuidString, to: statement, at: 2, database)
+                    }
+                }
+                if !diff.transactionAttachmentsUnchanged.contains(transaction.id) {
+                    for statement in [deleteAssets, deleteContainers] {
+                        try executePreparedStatement(statement, database) { statement in
+                            try bind(transaction.id.uuidString, to: statement, at: 1, database)
+                        }
                     }
                 }
                 try executePreparedStatement(upsertTransaction, database) { statement in
@@ -897,7 +966,7 @@ final class SQLiteJournalStore: @unchecked Sendable {
                     try bind(transaction.externalTransactionID, to: statement, at: 11, database)
                     try bind(encodedString(transaction), to: statement, at: 12, database)
                 }
-                for posting in transaction.postings {
+                for posting in diff.postingsChangedByTransaction[transaction.id] ?? [] {
                     try executePreparedStatement(insertPosting, database) { statement in
                         try bind(posting.id.uuidString, to: statement, at: 1, database)
                         try bind(transaction.id.uuidString, to: statement, at: 2, database)
@@ -907,11 +976,16 @@ final class SQLiteJournalStore: @unchecked Sendable {
                         try bind(Int64(posting.listIndex), to: statement, at: 6, database)
                         try bind(encodedString(posting), to: statement, at: 7, database)
                     }
+                    // Stable IDs can be updated within their own transaction,
+                    // but must never silently steal another transaction's row.
+                    guard sqlite3_changes(database) == 1 else {
+                        throw SQLiteJournalStoreError.stepFailed("A posting identifier belongs to another transaction.")
+                    }
                 }
-                if let rule = transaction.recurrenceRule {
+                if !diff.transactionRecurrenceUnchanged.contains(transaction.id), let rule = transaction.recurrenceRule {
                     try upsertRecurrenceRule(rule, database: database)
                 }
-                if let attachment = transaction.attachment {
+                if !diff.transactionAttachmentsUnchanged.contains(transaction.id), let attachment = transaction.attachment {
                     try upsertAttachmentContainer(
                         attachment,
                         transactionID: transaction.id,
@@ -923,8 +997,10 @@ final class SQLiteJournalStore: @unchecked Sendable {
         }}}}}
 
         for template in diff.templatesChanged {
-            try executePrepared("DELETE FROM posting_templates WHERE template_id = ?", database) { statement in
-                try bind(template.id.uuidString, to: statement, at: 1, database)
+            if !diff.templatePostingsUnchanged.contains(template.id) {
+                try executePrepared("DELETE FROM posting_templates WHERE template_id = ?", database) { statement in
+                    try bind(template.id.uuidString, to: statement, at: 1, database)
+                }
             }
             try executePrepared(
                 """
@@ -944,7 +1020,7 @@ final class SQLiteJournalStore: @unchecked Sendable {
                 try bind(Int64(template.listIndex), to: statement, at: 4, database)
                 try bind(encodedString(template), to: statement, at: 5, database)
             }
-            for posting in template.postings {
+            for posting in template.postings where !diff.templatePostingsUnchanged.contains(template.id) {
                 try executePrepared(
                     """
                     INSERT INTO posting_templates(id, template_id, account_id, list_index, payload_json)
@@ -969,7 +1045,7 @@ final class SQLiteJournalStore: @unchecked Sendable {
         if trackSyncChanges {
             let envelopes = try syncEnvelopes(forDiff: diff, data: data)
             try upsertSyncRecords(envelopes: envelopes, now: now, database: database)
-            var pendingClientChangeIDs = try readPendingOutboxClientChangeIDs(database)
+            var pendingClientChangeIDs = try readPendingOutboxClientChangeIDs(forKeys: syncKeys, database: database)
             try upsertSyncOutboxRows(
                 envelopes: envelopes,
                 previousRows: previousSyncRows,
@@ -1017,7 +1093,7 @@ final class SQLiteJournalStore: @unchecked Sendable {
 
     private func syncEnvelopes(forDiff diff: JournalDataDiff, data: JournalData) throws -> [SyncEnvelope] {
         var envelopes: [SyncEnvelope] = []
-        if diff.metadataChanged {
+        if diff.syncedMetadataChanged {
             try envelopes.append(envelope(
                 "journal_metadata",
                 id: SQLiteSyncedJournalMetadata.recordID,
@@ -1031,7 +1107,7 @@ final class SQLiteJournalStore: @unchecked Sendable {
         try envelopes.append(contentsOf: diff.sourcesChanged.map { try envelope("source", id: $0.id, parentID: $0.ledgerID, payload: $0) })
         for transaction in diff.transactionsChanged {
             try envelopes.append(envelope("transaction", id: transaction.id, parentID: transaction.ledgerID, payload: transaction))
-            if let container = transaction.attachment {
+            if !diff.transactionAttachmentsUnchanged.contains(transaction.id), let container = transaction.attachment {
                 try envelopes.append(contentsOf: container.assets.map {
                     try envelope("attachment_asset", id: $0.id, parentID: container.id, payload: $0)
                 })
@@ -2627,6 +2703,10 @@ final class SQLiteJournalStore: @unchecked Sendable {
                     payload_json = excluded.payload_json,
                     updated_at = excluded.updated_at,
                     deleted_at = NULL
+                WHERE sync_records.content_hash IS NOT excluded.content_hash
+                   OR sync_records.parent_record_id IS NOT excluded.parent_record_id
+                   OR sync_records.payload_json IS NOT excluded.payload_json
+                   OR sync_records.deleted_at IS NOT NULL
                 """,
                 database
             ) { statement in
@@ -2998,6 +3078,43 @@ final class SQLiteJournalStore: @unchecked Sendable {
         }
     }
 
+    private func readPendingOutboxClientChangeIDs(
+        forKeys keys: [(type: String, id: String)],
+        database: OpaquePointer
+    ) throws -> [String: String] {
+        var result: [String: String] = [:]
+        let idsByType = Dictionary(grouping: keys, by: \.type).mapValues { Array(Set($0.map(\.id))) }
+        for (type, ids) in idsByType {
+            for start in stride(from: 0, to: ids.count, by: 200) {
+                let chunk = Array(ids[start..<min(start + 200, ids.count)])
+                let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ", ")
+                let pending = try rows(
+                    """
+                    SELECT record_id, client_change_id FROM sync_outbox
+                    WHERE state = 'pending' AND record_type = ? AND record_id IN (\(placeholders))
+                    ORDER BY id DESC
+                    """,
+                    database: database,
+                    bindValues: { statement in
+                        try bind(type, to: statement, at: 1, database)
+                        for (offset, id) in chunk.enumerated() {
+                            try bind(id, to: statement, at: Int32(offset + 2), database)
+                        }
+                    }
+                ) { statement -> (String, String) in
+                    guard let id = columnText(statement, 0), let clientID = columnText(statement, 1) else {
+                        throw SQLiteJournalStoreError.missingPayload("sync_outbox")
+                    }
+                    return (id, clientID)
+                }
+                for (id, clientID) in pending where result["\(type):\(id)"] == nil {
+                    result["\(type):\(id)"] = clientID
+                }
+            }
+        }
+        return result
+    }
+
     private func readSyncHashes(_ database: OpaquePointer) throws -> [String: String] {
         let rows: [(String, String)] = try rows(
             "SELECT record_type, record_id, content_hash FROM sync_records WHERE deleted_at IS NULL",
@@ -3017,7 +3134,7 @@ final class SQLiteJournalStore: @unchecked Sendable {
     /// deletions — the exact probe set `applyDiff` needs from `sync_records`.
     private func diffSyncKeys(_ diff: JournalDataDiff) -> [(type: String, id: String)] {
         var keys: [(type: String, id: String)] = []
-        if diff.metadataChanged {
+        if diff.syncedMetadataChanged {
             keys.append(("journal_metadata", SQLiteSyncedJournalMetadata.recordID.uuidString))
         }
         func add(_ type: String, changedIDs: [UUID], deletedIDs: [UUID]) {
@@ -3031,7 +3148,7 @@ final class SQLiteJournalStore: @unchecked Sendable {
         add("transaction", changedIDs: diff.transactionsChanged.map(\.id), deletedIDs: diff.transactionIDsDeleted)
         add("transaction_template", changedIDs: diff.templatesChanged.map(\.id), deletedIDs: diff.templateIDsDeleted)
         var assetIDs = diff.attachmentAssetIDsDeleted
-        for transaction in diff.transactionsChanged {
+        for transaction in diff.transactionsChanged where !diff.transactionAttachmentsUnchanged.contains(transaction.id) {
             assetIDs.append(contentsOf: (transaction.attachment?.assets ?? []).map(\.id))
         }
         add("attachment_asset", changedIDs: assetIDs, deletedIDs: [])
