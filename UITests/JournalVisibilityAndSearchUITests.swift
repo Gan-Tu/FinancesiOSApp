@@ -24,7 +24,11 @@ final class JournalVisibilityAndSearchUITests: XCTestCase {
         search.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5)).tap()
         search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 6) + "Weekly groceries")
         XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5))
-        let originalCount = rows.count
+        let resultCount = app.staticTexts["quick-search-result-count"]
+        XCTAssertTrue(resultCount.waitForExistence(timeout: 5))
+        let countText = try XCTUnwrap(resultCount.value as? String)
+        let originalCount = try XCTUnwrap(Int(countText.split(separator: " ").first.map(String.init) ?? ""))
+        XCTAssertGreaterThan(originalCount, 0)
         let rowID = rows.firstMatch.identifier
         let row = app.buttons[rowID]
         row.swipeRight()
@@ -49,21 +53,25 @@ final class JournalVisibilityAndSearchUITests: XCTestCase {
         app.navigationBars["New Transaction"].buttons["Cancel"].tap()
         XCTAssertTrue(app.navigationBars["Quick Search"].waitForExistence(timeout: 5))
         XCTAssertEqual(search.value as? String, "Weekly groceries")
-        XCTAssertEqual(rows.count, originalCount)
+        XCTAssertEqual(resultCount.value as? String, "\(originalCount) results")
         row.swipeLeft(); app.buttons["Duplicate"].tap()
         app.alerts.buttons["Duplicate With Today's Date"].tap()
         XCTAssertTrue(app.navigationBars["New Transaction"].waitForExistence(timeout: 5))
         app.navigationBars["New Transaction"].buttons["Save"].tap()
         XCTAssertTrue(app.navigationBars["Quick Search"].waitForExistence(timeout: 5))
-        let copied = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == %d", originalCount + 1), object: rows)
+        // Lazy Lists do not promise one accessible cell per result: the keyboard
+        // can move the third row outside the materialized viewport in CI.
+        let copied = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "\(originalCount + 1) results"), object: resultCount)
         XCTAssertEqual(XCTWaiter.wait(for: [copied], timeout: 5), .completed)
         XCTAssertEqual(search.value as? String, "Weekly groceries")
+        XCTAssertNotEqual(rows.firstMatch.identifier, rowID, "The saved duplicate should be the newest matching entry")
+        XCTAssertTrue(row.exists, "Duplicating must preserve the original")
         row.swipeLeft(); app.buttons["Delete"].tap()
         let removed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: row)
         XCTAssertEqual(XCTWaiter.wait(for: [removed], timeout: 5), .completed)
         XCTAssertTrue(app.navigationBars["Quick Search"].exists)
         XCTAssertEqual(search.value as? String, "Weekly groceries")
-        XCTAssertEqual(rows.count, originalCount)
+        XCTAssertEqual(resultCount.value as? String, "\(originalCount) results")
     }
 
     func testQuickSearchRecurringDeletionSupportsCancelSingleAndFutureScope() throws {

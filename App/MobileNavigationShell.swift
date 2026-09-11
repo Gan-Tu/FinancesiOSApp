@@ -1290,7 +1290,7 @@ struct QuickSearchSheet: View {
                         }
                     }
 
-                    QuickSearchSection("Transactions") {
+                    QuickSearchSection("Transactions", resultCount: searchResults.transactions.count) {
                         Button {
                             includeAllFutureEntries.toggle()
                         } label: {
@@ -1400,7 +1400,11 @@ struct QuickSearchSheet: View {
         }
         .modifier(TransactionDeletionConfirmation(transaction: $pendingDeletion))
         .modifier(TransactionDuplicateConfirmation(transaction: $pendingDuplication, route: $inlineEditorRoute))
-        .sheet(item: $inlineEditorRoute) { EditorSheet(route: $0) }
+        .sheet(item: $inlineEditorRoute, onDismiss: {
+            // Refresh after the nested editor leaves, including when SwiftUI
+            // suspended/cancelled the search task while its sheet was covered.
+            searchRevision = UUID()
+        }) { EditorSheet(route: $0) }
         .background {
             Color.clear.alert(item: Binding(
                 get: { inlineEditorRoute == nil ? store.validationError : nil },
@@ -1575,9 +1579,10 @@ struct QuickSearchSheet: View {
 
 private struct QuickSearchSection<Content: View>: View {
     let title: String
+    let resultCount: Int?
     let content: Content
-    init(_ title: String, @ViewBuilder content: () -> Content) {
-        self.title = title; self.content = content()
+    init(_ title: String, resultCount: Int? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title; self.resultCount = resultCount; self.content = content()
     }
     var body: some View {
         Section { content } header: {
@@ -1590,6 +1595,8 @@ private struct QuickSearchSection<Content: View>: View {
                 .padding(.vertical, 5)
                 .background(Color(uiColor: .systemGray5))
                 .listRowInsets(EdgeInsets())
+                .accessibilityIdentifier(resultCount == nil ? "" : "quick-search-result-count")
+                .accessibilityValue(resultCount.map { "\($0) results" } ?? "")
         }
         .listSectionSeparator(.hidden)
     }

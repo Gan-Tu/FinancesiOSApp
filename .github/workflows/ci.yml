@@ -12,7 +12,8 @@ concurrency:
 jobs:
   test:
     runs-on: macos-26
-    timeout-minutes: 30
+    # Cold hosted runners compile from scratch and run the complete UI audit.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Select Xcode
