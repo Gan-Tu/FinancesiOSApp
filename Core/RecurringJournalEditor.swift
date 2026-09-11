@@ -11,6 +11,22 @@ enum RecurringJournalEditor {
         rows.filter { $0.recurrenceRule?.id == ruleID }.min(by: precedes)
     }
 
+    /// Partial peer uploads and per-item conflict choices may temporarily carry
+    /// different embedded rule values. Background work must not pick a winner.
+    static func mixedRuleIDs(in transactions: [LedgerTransaction]) -> Set<UUID> {
+        var firstRules: [UUID: RecurrenceRule] = [:]
+        var mixed: Set<UUID> = []
+        for row in transactions {
+            guard let rule = row.recurrenceRule, !mixed.contains(rule.id) else { continue }
+            guard let first = firstRules[rule.id] else { firstRules[rule.id] = rule; continue }
+            if first == rule { continue }
+            let firstPayload = try? JSONEncoder.appEncoder.encode(first)
+            let payload = try? JSONEncoder.appEncoder.encode(rule)
+            if firstPayload == nil || firstPayload != payload { mixed.insert(rule.id) }
+        }
+        return mixed
+    }
+
     struct DeletionResult {
         var journal: JournalData
         var deletedIDs: Set<UUID>
@@ -26,6 +42,43 @@ enum RecurringJournalEditor {
         var scheduleChanged = false
         if var rule = row.recurrenceRule, rule.frequency != .never {
             let series = journal.transactions.filter { $0.ledgerID == row.ledgerID && $0.recurrenceRule?.id == rule.id }
+            if scope == .occurrence, mixedRuleIDs(in: series).contains(rule.id) {
+                // Removing one row does not select that row's shared rule for
+                // every peer occurrence. Preserve each variant independently.
+                let first = anchor(ruleID: rule.id, in: series)!
+                let deletesAnchor = first.id == id
+                var preserved: [RecurrenceRule: RecurrenceRule] = [:]
+                for index in result.transactions.indices where result.transactions[index].id != id &&
+                    result.transactions[index].ledgerID == row.ledgerID && result.transactions[index].recurrenceRule?.id == rule.id {
+                    let prior = result.transactions[index].recurrenceRule!
+                    let ownRule: RecurrenceRule
+                    if let cached = preserved[prior] { ownRule = cached }
+                    else {
+                        var value = prior
+                        if deletesAnchor, value.templateHistory?.scheduleAnchorDate == nil {
+                            let sameVersion = series.first { $0.recurrenceRule == prior } ?? first
+                            var history = value.templateHistory ?? RecurrenceTemplateHistory(baseTemplate: RecurrenceTransactionTemplate(transaction: sameVersion))
+                            history.scheduleAnchorDate = first.date
+                            value.templateHistory = history
+                        }
+                        if value.continuation == nil {
+                            // Infer before removal even for a non-anchor/last
+                            // occurrence, retaining that consumed slot in backup.
+                            value.continuation = inferredContinuation(rule: value, rows: series, calendar: calendar, deletedIDs: deletedIDs,
+                                allowsAutomaticExtension: !journal.preservesRecurringMaterializations(for: result.transactions[index]))
+                        }
+                        preserved[prior] = value
+                        ownRule = value
+                    }
+                    if ownRule != prior {
+                        result.transactions[index].recurrenceRule = ownRule
+                        scheduleChanged = true
+                    }
+                }
+                if deletesAnchor { scheduleChanged = true }
+                result.transactions.removeAll { ids.contains($0.id) }
+                return DeletionResult(journal: result, deletedIDs: ids, scheduleChanged: scheduleChanged)
+            }
             if scope == .future { ids = Set(series.filter { calendar.startOfDay(for: $0.date) >= calendar.startOfDay(for: row.date) }.map(\.id)) }
             let remaining = series.filter { !ids.contains($0.id) }
             if !remaining.isEmpty {
@@ -72,7 +125,10 @@ enum RecurringJournalEditor {
         if edited.recurrenceRule?.frequency == .never { edited.recurrenceRule = nil }
         let oldRule = previous?.recurrenceRule.flatMap { $0.frequency == .never ? nil : $0 }
         let originalAnchor = oldRule.flatMap { anchor(ruleID: $0.id, in: journal.transactions) }
-        let canonicalRule = originalAnchor?.recurrenceRule ?? oldRule
+        let hasMixedRules = oldRule.map { mixedRuleIDs(in: journal.transactions).contains($0.id) } ?? false
+        // An explicit future edit uses the selected occurrence's version when
+        // the group is mixed; choosing the earliest row would invent recency.
+        let canonicalRule = hasMixedRules ? oldRule : originalAnchor?.recurrenceRule ?? oldRule
         let isAnchor = previous == nil || oldRule == nil || originalAnchor?.id == previousID
         let scheduleChanged = previous.map { old in
             old.date != edited.date || !scheduleMatches(canonicalRule, edited.recurrenceRule)
@@ -106,6 +162,14 @@ enum RecurringJournalEditor {
         } else if let rule = edited.recurrenceRule,
                   journal.transactions.contains(where: { $0.id != edited.id && $0.recurrenceRule?.id == rule.id }) {
             throw ValidationError(message: "A new repeating transaction must start its own series.")
+        }
+        if hasMixedRules, scope == .occurrence, let previousID, let oldRule,
+           let index = result.transactions.firstIndex(where: { $0.id == previousID }) {
+            // Validation above still checks identity, dates and Repeat scope.
+            // Notes, amounts and receipts belong to this occurrence only.
+            edited.recurrenceRule = oldRule
+            result.transactions[index] = edited
+            return result
         }
         if var rule = edited.recurrenceRule {
             rule.preservesImportedMaterializations = oldRule == nil || (isAnchor && scheduleChanged)
@@ -195,7 +259,8 @@ enum RecurringJournalEditor {
 
     static func materialized(_ journal: JournalData, referenceDate: Date = Date(), calendar: Calendar = .current, deletedIDs: Set<UUID> = []) -> JournalData {
         var result = journal
-        let ruleIDs = Set(journal.transactions.filter { journal.shouldExtendRecurrences(for: $0) }.compactMap { $0.recurrenceRule?.id })
+        let mixed = mixedRuleIDs(in: journal.transactions)
+        let ruleIDs = Set(journal.transactions.filter { journal.shouldExtendRecurrences(for: $0) }.compactMap { $0.recurrenceRule?.id }).subtracting(mixed)
         for id in ruleIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
             materialize(ruleID: id, in: &result, referenceDate: referenceDate, calendar: calendar, deletedIDs: deletedIDs)
         }

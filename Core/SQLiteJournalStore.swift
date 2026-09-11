@@ -1272,7 +1272,7 @@ final class SQLiteJournalStore: @unchecked Sendable {
         }
     }
 
-    func persistCloudKitPull(_ records: [CloudKitSyncRecord], data: JournalData, previous: JournalData?, contextKey: String, changeToken: Data?) throws {
+    func persistCloudKitPull(_ records: [CloudKitSyncRecord], data: JournalData, previous: JournalData?, contextKey: String, changeToken: Data?, receiptInstallationID: UUID? = nil) throws {
         try withCloudKitDatabase(contextKey: contextKey) { database in
             let placeholders = records.contains(where: { $0.recordType == "journal_metadata" && $0.operation == "upsert" })
                 ? try initialDefaultCloudKitMetadataIDs(contextKey: contextKey, database: database) : []
@@ -1317,6 +1317,7 @@ final class SQLiteJournalStore: @unchecked Sendable {
             try persistCloudKitDomain(data, previous: previous, records: records, database: database)
             for record in records { try markCloudKitReceiptStored(record, database: database) }
             try bindCloudKitToken(changeToken, contextKey: contextKey, database: database)
+            if let receiptInstallationID { try markReceiptInstallationCommitted(receiptInstallationID, database: database) }
         }
     }
 
@@ -1410,7 +1411,7 @@ final class SQLiteJournalStore: @unchecked Sendable {
         try withCloudKitDatabase(contextKey: contextKey) { try readCloudKitConflicts(contextKey: contextKey, database: $0) }
     }
 
-    func resolveCloudKitConflict(id: String, keepLocal: Bool, contextKey: String, data: JournalData, previous: JournalData?) throws {
+    func resolveCloudKitConflict(id: String, keepLocal: Bool, contextKey: String, data: JournalData, previous: JournalData?, receiptInstallationID: UUID? = nil) throws {
         try withCloudKitDatabase(contextKey: contextKey) { database in
             guard let conflict = try readCloudKitConflicts(contextKey: contextKey, database: database).first(where: { $0.id == id }) else { throw cloudKitError("This CloudKit conflict is no longer available.") }
             let originalKnown = try rows("SELECT known_system_fields FROM cloudkit_conflicts WHERE id = ? AND context_key = ?", database: database, bindValues: {
@@ -1444,6 +1445,31 @@ final class SQLiteJournalStore: @unchecked Sendable {
             }
             try executePrepared("UPDATE cloudkit_conflicts SET resolved_at = ? WHERE id = ? AND context_key = ?", database) {
                 try bind(isoString(Date()), to: $0, at: 1, database); try bind(id, to: $0, at: 2, database); try bind(contextKey, to: $0, at: 3, database)
+            }
+            if let receiptInstallationID { try markReceiptInstallationCommitted(receiptInstallationID, database: database) }
+        }
+    }
+
+    /// This marker commits with the journal/checkpoint, never in a separate
+    /// transaction. A receipt-file manifest can therefore recover after a kill
+    /// on either side of SQLite COMMIT without guessing from receipt metadata.
+    private func markReceiptInstallationCommitted(_ id: UUID, database: OpaquePointer) throws {
+        try upsertMetadata("cloudkit_receipt_install:" + id.uuidString, value: "committed", database: database)
+    }
+
+    func isReceiptInstallationCommitted(_ id: UUID) throws -> Bool {
+        Self.accessLock.lock(); defer { Self.accessLock.unlock() }
+        let database = try open(readOnly: true, createIfMissing: false)
+        defer { sqlite3_close(database) }
+        return try rows("SELECT value FROM app_metadata WHERE key = ?", database: database,
+                        bindValues: { try bind("cloudkit_receipt_install:" + id.uuidString, to: $0, at: 1, database) },
+                        map: { columnText($0, 0) }).first == "committed"
+    }
+
+    func removeReceiptInstallationCommit(_ id: UUID) throws {
+        try withCloudKitDatabase { database in
+            try executePrepared("DELETE FROM app_metadata WHERE key = ?", database) {
+                try bind("cloudkit_receipt_install:" + id.uuidString, to: $0, at: 1, database)
             }
         }
     }
@@ -2726,8 +2752,33 @@ final class SQLiteJournalStore: @unchecked Sendable {
         // Remember the last successfully written value, not merely the ID: an
         // existing A/B/A input must keep its original ordered last-value behavior.
         guard writtenRules[rule.id] != rule else { return }
+        try preserveLegacyEmbeddedRules(beforeReplacing: rule, database: database)
         try upsertRecurrenceRule(rule, database: database)
         writtenRules[rule.id] = rule
+    }
+
+    private func preserveLegacyEmbeddedRules(beforeReplacing rule: RecurrenceRule, database: OpaquePointer) throws {
+        // Pin the old fallback before changing a shared row. Otherwise untouched
+        // legacy occurrences could inherit a different rule on their next load.
+        // The check is scoped by indexed rule ID and only runs for rule writes.
+        let needsBackfill = try rows("""
+            SELECT EXISTS(SELECT 1 FROM recurrence_rules WHERE id = ?)
+               AND EXISTS(SELECT 1 FROM transactions WHERE recurrence_rule_id = ?
+                          AND json_type(payload_json, '$.recurrenceRule') IS NULL)
+            """, database: database, bindValues: { statement in
+                try bind(rule.id.uuidString, to: statement, at: 1, database)
+                try bind(rule.id.uuidString, to: statement, at: 2, database)
+            }, map: { sqlite3_column_int64($0, 0) != 0 }).first ?? false
+        guard needsBackfill,
+              let old = try readRecurrenceRulesByID(database: database, matching: rule.id)[rule.id], old != rule else { return }
+        let payload = try encodedString(old)
+        try executePrepared("""
+            UPDATE transactions SET payload_json = json_set(payload_json, '$.recurrenceRule', json(?))
+            WHERE recurrence_rule_id = ? AND json_type(payload_json, '$.recurrenceRule') IS NULL
+            """, database) { statement in
+                try bind(payload, to: statement, at: 1, database)
+                try bind(rule.id.uuidString, to: statement, at: 2, database)
+            }
     }
 
     private func upsertRecurrenceRule(_ rule: RecurrenceRule, database: OpaquePointer) throws {
@@ -3300,6 +3351,7 @@ final class SQLiteJournalStore: @unchecked Sendable {
         let number: String
         let cleared: Bool
         let recurrenceRuleID: UUID?
+        let embeddedRecurrenceRule: RecurrenceRule?
         let attachmentContainerID: UUID?
         let externalTransactionID: String?
     }
@@ -3328,8 +3380,52 @@ final class SQLiteJournalStore: @unchecked Sendable {
         let number: String
         let cleared: Bool
         let recurrenceRuleID: String?
+        let recurrencePayload: Data?
         let attachmentContainerID: String?
         let externalTransactionID: String?
+    }
+
+    /// Current writers serialize the exact rule inside each transaction. The
+    /// shared rule table is retained for old rows lacking that field, but must
+    /// not overwrite per-record truth during a partial or conflicting sync.
+    /// Extract only recurring JSON; ordinary rows keep their typed fast path.
+    private static let transactionSnapshotSQL = """
+        SELECT id, ledger_id, source_id, date, payee, note, number, cleared,
+               recurrence_rule_id, attachment_container_id, external_transaction_id,
+               CASE WHEN recurrence_rule_id IS NULL THEN NULL
+                    WHEN json_type(payload_json, '$.recurrenceRule') IS NULL THEN NULL
+                    WHEN json_type(payload_json, '$.recurrenceRule') = 'null' THEN 'null'
+                    ELSE json_extract(payload_json, '$.recurrenceRule') END
+        FROM transactions
+        """
+
+    private struct RecurrencePayloadDecoder {
+        private let decoder = JSONDecoder.makeAppDecoder()
+        private var cached: [Data: RecurrenceRule] = [:]
+        private var cachedBytes = 0
+        private static let maximumBytes = 4 * 1024 * 1024
+        private static let maximumEntries = 256
+
+        mutating func decode(_ payload: Data?, matching id: UUID?) throws -> RecurrenceRule? {
+            guard let payload else { return nil }
+            let rule: RecurrenceRule
+            if let existing = cached[payload] { rule = existing }
+            else {
+                rule = try decoder.decode(RecurrenceRule.self, from: payload)
+                if payload.count <= Self.maximumBytes {
+                    if cached.count >= Self.maximumEntries || cachedBytes + payload.count > Self.maximumBytes {
+                        cached.removeAll(keepingCapacity: true)
+                        cachedBytes = 0
+                    }
+                    cached[payload] = rule
+                    cachedBytes += payload.count
+                }
+            }
+            guard rule.id == id else {
+                throw SQLiteJournalStoreError.missingPayload("transactions.recurrenceRule identity")
+            }
+            return rule
+        }
     }
 
     private enum SnapshotBufferLimit: Error { case exceeded }
@@ -3413,11 +3509,7 @@ final class SQLiteJournalStore: @unchecked Sendable {
         }
         StartupTiming.log("load-store.transactions.raw-attachments", from: &mark)
         let transactionRows = try rows(
-            """
-            SELECT id, ledger_id, source_id, date, payee, note, number, cleared,
-                   recurrence_rule_id, attachment_container_id, external_transaction_id
-            FROM transactions
-            """,
+            Self.transactionSnapshotSQL,
             database: database
         ) { statement in
             let row = RawTransactionRow(
@@ -3425,10 +3517,11 @@ final class SQLiteJournalStore: @unchecked Sendable {
                 sourceID: columnText(statement, 2), date: columnText(statement, 3),
                 payee: columnText(statement, 4) ?? "", note: columnText(statement, 5) ?? "",
                 number: columnText(statement, 6) ?? "", cleared: sqlite3_column_int64(statement, 7) != 0,
-                recurrenceRuleID: columnText(statement, 8), attachmentContainerID: columnText(statement, 9),
+                recurrenceRuleID: columnText(statement, 8), recurrencePayload: columnData(statement, 11),
+                attachmentContainerID: columnText(statement, 9),
                 externalTransactionID: columnText(statement, 10)
             )
-            try budget.consume(rowType: RawTransactionRow.self, strings: [row.id, row.ledgerID, row.sourceID, row.date, row.payee, row.note, row.number, row.recurrenceRuleID, row.attachmentContainerID, row.externalTransactionID])
+            try budget.consume(rowType: RawTransactionRow.self, strings: [row.id, row.ledgerID, row.sourceID, row.date, row.payee, row.note, row.number, row.recurrenceRuleID, row.attachmentContainerID, row.externalTransactionID], payloadBytes: row.recurrencePayload?.count ?? 0)
             return row
         }
         StartupTiming.log("load-store.transactions.raw-rows", from: &mark)
@@ -3481,14 +3574,17 @@ final class SQLiteJournalStore: @unchecked Sendable {
     }
 
     private func decodeTransactionRows(_ input: [RawTransactionRow]) throws -> [TransactionRowRecord] {
-        try input.map { row in
-            TransactionRowRecord(
+        var recurrenceDecoder = RecurrencePayloadDecoder()
+        return try input.map { row in
+            let ruleID = try optionalUUID(row.recurrenceRuleID, table: "transactions", column: "recurrence_rule_id")
+            return TransactionRowRecord(
                 id: try requiredUUID(row.id, table: "transactions", column: "id"),
                 ledgerID: try requiredUUID(row.ledgerID, table: "transactions", column: "ledger_id"),
                 sourceID: try optionalUUID(row.sourceID, table: "transactions", column: "source_id"),
                 date: try requiredDate(row.date, table: "transactions", column: "date"),
                 payee: row.payee, note: row.note, number: row.number, cleared: row.cleared,
-                recurrenceRuleID: try optionalUUID(row.recurrenceRuleID, table: "transactions", column: "recurrence_rule_id"),
+                recurrenceRuleID: ruleID,
+                embeddedRecurrenceRule: try recurrenceDecoder.decode(row.recurrencePayload, matching: ruleID),
                 attachmentContainerID: try optionalUUID(row.attachmentContainerID, table: "transactions", column: "attachment_container_id"),
                 externalTransactionID: row.externalTransactionID
             )
@@ -3501,13 +3597,17 @@ final class SQLiteJournalStore: @unchecked Sendable {
         let (postingsByTransaction, attachmentsByID, rows) = try readTransactionComponents(
             database: database, maximumBufferBytes: maximumBufferBytes
         )
-        let recurrenceRulesByID = try readRecurrenceRulesByID(database: database)
+        let needsLegacyRules = rows.contains { $0.recurrenceRuleID != nil && $0.embeddedRecurrenceRule == nil }
+        let recurrenceRulesByID: [UUID: RecurrenceRule] = needsLegacyRules
+            ? try readRecurrenceRulesByID(database: database) : [:]
         StartupTiming.log("load-store.transactions.snapshot-scans", from: &mark)
         defer { StartupTiming.log("load-store.transactions.assemble", from: &mark) }
 
         return try rows.map { row in
             let recurrenceRule: RecurrenceRule?
-            if let recurrenceRuleID = row.recurrenceRuleID {
+            if let embeddedRule = row.embeddedRecurrenceRule {
+                recurrenceRule = embeddedRule
+            } else if let recurrenceRuleID = row.recurrenceRuleID {
                 guard let rule = recurrenceRulesByID[recurrenceRuleID] else {
                     throw SQLiteJournalStoreError.missingPayload("recurrence_rules:\(recurrenceRuleID)")
                 }
@@ -3542,15 +3642,13 @@ final class SQLiteJournalStore: @unchecked Sendable {
     }
 
     private func readTransactionRows(database: OpaquePointer) throws -> [TransactionRowRecord] {
-        try rows(
-            """
-            SELECT id, ledger_id, source_id, date, payee, note, number, cleared,
-                   recurrence_rule_id, attachment_container_id, external_transaction_id
-            FROM transactions
-            """,
+        var recurrenceDecoder = RecurrencePayloadDecoder()
+        return try rows(
+            Self.transactionSnapshotSQL,
             database: database
         ) { statement in
-            TransactionRowRecord(
+            let ruleID = try optionalUUID(columnText(statement, 8), table: "transactions", column: "recurrence_rule_id")
+            return TransactionRowRecord(
                 id: try requiredUUID(columnText(statement, 0), table: "transactions", column: "id"),
                 ledgerID: try requiredUUID(columnText(statement, 1), table: "transactions", column: "ledger_id"),
                 sourceID: try optionalUUID(columnText(statement, 2), table: "transactions", column: "source_id"),
@@ -3559,7 +3657,8 @@ final class SQLiteJournalStore: @unchecked Sendable {
                 note: columnText(statement, 5) ?? "",
                 number: columnText(statement, 6) ?? "",
                 cleared: sqlite3_column_int64(statement, 7) != 0,
-                recurrenceRuleID: try optionalUUID(columnText(statement, 8), table: "transactions", column: "recurrence_rule_id"),
+                recurrenceRuleID: ruleID,
+                embeddedRecurrenceRule: try recurrenceDecoder.decode(columnData(statement, 11), matching: ruleID),
                 attachmentContainerID: try optionalUUID(columnText(statement, 9), table: "transactions", column: "attachment_container_id"),
                 externalTransactionID: columnText(statement, 10)
             )
@@ -3588,7 +3687,7 @@ final class SQLiteJournalStore: @unchecked Sendable {
         return Dictionary(grouping: rows, by: \.0).mapValues { entries in entries.map(\.1) }
     }
 
-    private func readRecurrenceRulesByID(database: OpaquePointer) throws -> [UUID: RecurrenceRule] {
+    private func readRecurrenceRulesByID(database: OpaquePointer, matching requestedRuleID: UUID? = nil) throws -> [UUID: RecurrenceRule] {
         // Schedule columns remain authoritative. Template history has no typed
         // column, so recover it once per rule from the persisted JSON payload.
         // Missing history is valid for older journals; malformed history must
@@ -3599,12 +3698,16 @@ final class SQLiteJournalStore: @unchecked Sendable {
             var continuation: RecurrenceContinuation?
         }
         let decoder = JSONDecoder.makeAppDecoder()
+        let filter = requestedRuleID == nil ? "" : " WHERE id = ?"
         let rows: [(UUID, RecurrenceRule)] = try rows(
             """
             SELECT id, frequency, interval_value, occurrence_count, end_date, on_workdays, payload_json
-            FROM recurrence_rules
+            FROM recurrence_rules\(filter)
             """,
-            database: database
+            database: database,
+            bindValues: { statement in
+                if let requestedRuleID { try bind(requestedRuleID.uuidString, to: statement, at: 1, database) }
+            }
         ) { statement in
             let id = try requiredUUID(columnText(statement, 0), table: "recurrence_rules", column: "id")
             guard let frequencyText = columnText(statement, 1),

@@ -797,6 +797,7 @@ private struct TransactionDetailContent: View {
     @State private var isDeleting = false
     @State private var isActive = false
     @ObservedObject var attachmentSave: ReceiptAttachmentSaveState
+    @StateObject private var receiptImports = ReceiptImportSession()
     @State private var receiptOwnerID = UUID()
 
     private var transaction: LedgerTransaction? { store.transaction(transactionID) }
@@ -855,7 +856,7 @@ private struct TransactionDetailContent: View {
                         let draft = store.receiptAttachmentSaves.draftIncludingPendingAttachments(store.draft(for: transaction))
                         route = .transaction(draft, "Edit Transaction")
                     }
-                }.disabled(isDeleting || attachmentSave.isSaving)
+                }.disabled(isDeleting || attachmentSave.isSaving || receiptImports.isImporting)
             }
         }
         .safeAreaInset(edge: .bottom) {
@@ -869,11 +870,11 @@ private struct TransactionDetailContent: View {
                         ReceiptPicker(assets: attachments)
                     } label: {
                         Image(systemName: "plus.square").font(.title3).frame(width: 44, height: 44)
-                    }.accessibilityLabel("Transaction Actions").disabled(isDeleting || attachmentSave.isSaving)
+                    }.accessibilityLabel("Transaction Actions").disabled(isDeleting || attachmentSave.isSaving || receiptImports.isImporting)
                     Spacer()
                 }
                 Button("Delete Transaction") { requestDeletion() }
-                    .disabled(isDeleting || attachmentSave.isSaving)
+                    .disabled(isDeleting || attachmentSave.isSaving || receiptImports.isImporting)
                     .frame(minHeight: 44).foregroundStyle(.blue)
             }
             .padding(.horizontal, 14).padding(.top, 8).padding(.bottom, 4)
@@ -890,6 +891,7 @@ private struct TransactionDetailContent: View {
         }
         .modifier(TransactionDeletionConfirmation(transaction: $pendingDeletion, onDeleted: { if isActive { dismiss() } }))
         .modifier(TransactionDuplicateConfirmation(transaction: $pendingDuplication, route: $route))
+        .environment(\.receiptImportSession, receiptImports)
     }
 
     private func saveAttachments(_ assets: [AttachmentAsset]) async -> Bool {
@@ -900,7 +902,7 @@ private struct TransactionDetailContent: View {
     }
 
     private func requestDeletion() {
-        guard !isDeleting, !attachmentSave.isSaving, let transaction else { return }
+        guard !isDeleting, !attachmentSave.isSaving, !receiptImports.isImporting, let transaction else { return }
         if let rule = transaction.recurrenceRule, rule.frequency != .never { pendingDeletion = transaction }
         else {
             isDeleting = true

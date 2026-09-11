@@ -95,6 +95,7 @@ struct TemplateTransactionEntryView: View {
 
 struct TransactionEditorView: View {
     @EnvironmentObject private var store: MobileLedgerStore
+    @EnvironmentObject private var receiptImports: ReceiptImportSession
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dismiss) private var dismiss
     var title: String
@@ -261,6 +262,7 @@ struct TransactionEditorView: View {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") {
                     if initialDraft.id != nil { FinancePerformanceTrace.begin("transaction-editor-cancel") }
+                    receiptImports.cancel()
                     dismiss()
                 }.disabled(isSaving)
             }
@@ -272,7 +274,7 @@ struct TransactionEditorView: View {
                         save(scope: .occurrence)
                     }
                 } label: { EditorSaveLabel(isSaving: isSaving) }
-                .disabled(isSaving || draft.postings.count < 2 || draft.postings.contains { $0.accountID == nil || decimalFromInput($0.amount) == nil } || !draft.postings.contains { (decimalFromInput($0.amount) ?? 0) != 0 })
+                .disabled(isSaving || !receiptImports.canSave || draft.postings.count < 2 || draft.postings.contains { $0.accountID == nil || decimalFromInput($0.amount) == nil } || !draft.postings.contains { (decimalFromInput($0.amount) ?? 0) != 0 })
             }
             ToolbarItem(placement: .keyboard) {
                 AmountKeyboardToolbar(showOperators: focusedAmountID != nil,
@@ -337,13 +339,16 @@ struct TransactionEditorView: View {
     }
 
     private func save(scope: RecurringJournalEditor.Scope) {
-        guard !isSaving else { return }
+        guard !isSaving, receiptImports.canSave else { return }
         let snapshot = draft
         isSaving = true
         focusedField = nil
         Task {
             defer { isSaving = false }
-            if await store.saveTransactionAndFlushAsync(snapshot, scope: scope, supersedesPendingAttachments: true), isActive { dismiss() }
+            if await store.saveTransactionAndFlushAsync(snapshot, scope: scope, supersedesPendingAttachments: true) {
+                receiptImports.didCommit()
+                if isActive { dismiss() }
+            }
         }
     }
 

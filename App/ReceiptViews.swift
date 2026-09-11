@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 import PhotosUI
 import QuickLook
 import QuickLookThumbnailing
@@ -130,7 +131,7 @@ enum ReceiptImportGenerationGuard {
     static func run(expected: UUID, current: () -> UUID,
                     importFile: () async throws -> AttachmentAsset,
                     discard: (AttachmentAsset) async -> Void,
-                    receive: (AttachmentAsset) -> Void) async throws -> AttachmentAsset {
+                    receive: (AttachmentAsset) throws -> Void) async throws -> AttachmentAsset {
         try Task.checkCancellation()
         guard expected == current() else { throw invalidatedError }
         let asset = try await importFile()
@@ -139,13 +140,112 @@ enum ReceiptImportGenerationGuard {
             if Task.isCancelled { throw CancellationError() }
             throw invalidatedError
         }
-        receive(asset)
+        do { try receive(asset) }
+        catch { await discard(asset); throw error }
         return asset
     }
 
     private static var invalidatedError: ValidationError {
         ValidationError(message: "The journal was restored while adding attachments. Please choose the files again.")
     }
+}
+
+/// One editor owns every accepted import until Save transfers ownership or
+/// Cancel/teardown discards only its newly imported, still-unreferenced files.
+@MainActor
+final class ReceiptImportSession: ObservableObject {
+    @Published private(set) var pendingCount = 0
+    @Published private var lifecycleRevision: UInt64 = 0
+    @Published private(set) var errorMessage: String?
+    private(set) var isAccepting = true
+    private var tasks: [UUID: Task<Void, Never>] = [:]
+    private var ownedAssets: [UUID: AttachmentAsset] = [:]
+    private var discard: (@MainActor ([AttachmentAsset]) -> Void)?
+    var isImporting: Bool { pendingCount > 0 }
+    var canSave: Bool { isAccepting && !isImporting }
+
+    func configureDiscard(_ discard: @escaping @MainActor ([AttachmentAsset]) -> Void) { self.discard = discard }
+
+    @discardableResult
+    func start(_ operation: @escaping @MainActor (UUID) async throws -> Void) -> UUID? {
+        guard isAccepting else { return nil }
+        let id = UUID()
+        pendingCount += 1 // Publish synchronously, before a Save tap can snapshot the draft.
+        tasks[id] = Task {
+            defer {
+                if tasks.removeValue(forKey: id) != nil { pendingCount -= 1 }
+            }
+            do { try await operation(id) }
+            catch is CancellationError { /* Cancel and teardown are deliberate. */ }
+            catch { if isAccepting { errorMessage = error.localizedDescription } }
+        }
+        return id
+    }
+
+    func accept(_ asset: AttachmentAsset, for operationID: UUID) throws {
+        guard isAccepting, tasks[operationID] != nil, !Task.isCancelled else { throw CancellationError() }
+        if discard != nil { ownedAssets[asset.id] = asset }
+    }
+
+    func clearError() { errorMessage = nil }
+
+    func cancel() {
+        cancel(publishingChange: true)
+    }
+
+    /// SwiftUI is already destroying the observing graph. Close synchronously
+    /// so late providers cannot deliver, without reentering that graph's update.
+    func cancelForTeardown() {
+        cancel(publishingChange: false)
+    }
+
+    private func cancel(publishingChange: Bool) {
+        guard isAccepting else { return }
+        if publishingChange { lifecycleRevision &+= 1 }
+        isAccepting = false
+        for task in Array(tasks.values) { task.cancel() }
+        let assets = Array(ownedAssets.values)
+        ownedAssets.removeAll()
+        if !assets.isEmpty { discard?(assets) }
+        discard = nil
+    }
+
+    func didCommit() {
+        guard !isImporting else { return }
+        // Reference-protected cleanup keeps files accepted by normal saves,
+        // while removing a fresh source that a duplicate saved under a new copy.
+        let assets = Array(ownedAssets.values)
+        ownedAssets.removeAll()
+        if !assets.isEmpty { discard?(assets) }
+        discard = nil
+        lifecycleRevision &+= 1
+        isAccepting = false
+    }
+
+    func waitForPendingImports() async {
+        for task in Array(tasks.values) { await task.value }
+    }
+}
+
+private struct ReceiptImportSessionKey: EnvironmentKey {
+    static let defaultValue: ReceiptImportSession? = nil
+}
+
+extension EnvironmentValues {
+    var receiptImportSession: ReceiptImportSession? {
+        get { self[ReceiptImportSessionKey.self] }
+        set { self[ReceiptImportSessionKey.self] = newValue }
+    }
+}
+
+/// Kept at the EditorSheet root so opening a child account/date/photo picker
+/// does not end the import session. Removing the editor graph does.
+struct ReceiptImportLifetimeAnchor: UIViewRepresentable {
+    let session: ReceiptImportSession
+    func makeCoordinator() -> ReceiptImportSession { session }
+    func makeUIView(context: Context) -> UIView { UIView(frame: .zero) }
+    func updateUIView(_ view: UIView, context: Context) {}
+    static func dismantleUIView(_ view: UIView, coordinator: ReceiptImportSession) { coordinator.cancelForTeardown() }
 }
 
 struct ReceiptTemporaryFile: Sendable {
@@ -226,17 +326,40 @@ final class ReceiptScanSession {
 }
 
 struct ReceiptPicker: View {
-    @EnvironmentObject private var store: MobileLedgerStore
+    @Environment(\.receiptImportSession) private var editorSession
+    @StateObject private var localSession = ReceiptImportSession()
     @Binding var assets: [AttachmentAsset]
     var textOnly = false
     var startWithScan = false
+
+    var body: some View {
+        ReceiptPickerContent(assets: $assets, textOnly: textOnly, startWithScan: startWithScan,
+                             session: editorSession ?? localSession)
+    }
+}
+
+#if DEBUG
+@MainActor private enum ReceiptImportDemoDriver {
+    private static var started = false
+    static func shouldStart() -> Bool {
+        guard !started, CommandLine.arguments.contains("--demo-delayed-receipt-import") else { return false }
+        started = true
+        return true
+    }
+}
+#endif
+
+private struct ReceiptPickerContent: View {
+    @EnvironmentObject private var store: MobileLedgerStore
+    @Binding var assets: [AttachmentAsset]
+    let textOnly: Bool
+    let startWithScan: Bool
+    @ObservedObject var session: ReceiptImportSession
     @State private var didStartInitialScan = false
     @State private var files = false
     @State private var photos = false
     @State private var scan = false
     @State private var selections: [PhotosPickerItem] = []
-    @State private var importing = false
-    @State private var errorMessage: String?
     @State private var importGeneration: UUID?
 
     var body: some View {
@@ -247,80 +370,144 @@ struct ReceiptPicker: View {
                 Button("Scan Receipt", systemImage: "doc.viewfinder") { importGeneration = store.attachmentImportGeneration; scan = true }
             }
         } label: {
-            if importing { ProgressView("Adding Receipt…") }
+            if session.isImporting { ProgressView("Adding Receipt…") }
             else if textOnly { Text("Add Attachment") }
             else { Label("Add Attachment", systemImage: "paperclip") }
         }
-        .disabled(importing)
+        .disabled(session.isImporting || !session.isAccepting)
+        .accessibilityIdentifier("receipt-import-picker")
+        .accessibilityValue(session.isImporting ? "Importing" : "Ready")
         .task {
+            #if DEBUG
+            if ReceiptImportDemoDriver.shouldStart() {
+                let generation = store.attachmentImportGeneration
+                session.start { operationID in
+                    try await Task.sleep(for: .seconds(6))
+                    try await importBytes(Data("Delayed synthetic receipt".utf8), filename: "Delayed Receipt.txt", generation: generation, operationID: operationID)
+                }
+            }
+            #endif
             guard startWithScan, !didStartInitialScan else { return }
             didStartInitialScan = true
             importGeneration = store.attachmentImportGeneration
             if VNDocumentCameraViewController.isSupported { scan = true }
-            else { errorMessage = "Receipt scanning is unavailable on this device. Choose a file or photo instead." }
+            else {
+                session.start { _ in throw ValidationError(message: "Receipt scanning is unavailable on this device. Choose a file or photo instead.") }
+            }
         }
         .fileImporter(isPresented: $files, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
-            switch result {
-            case .success(let urls):
-                let generation = importGeneration ?? store.attachmentImportGeneration
-                Task { await importURLs(urls, generation: generation) }
-            case .failure(let error): errorMessage = error.localizedDescription
+            let generation = importGeneration ?? store.attachmentImportGeneration
+            session.start { operationID in
+                for url in try result.get() {
+                    try Task.checkCancellation()
+                    _ = try await store.importAttachmentAsync(from: url, expectedGeneration: generation) { asset in
+                        try session.accept(asset, for: operationID)
+                        assets.append(asset)
+                    }
+                }
             }
         }
         .photosPicker(isPresented: $photos, selection: $selections, maxSelectionCount: 10, matching: .images)
         .onChange(of: selections) { _, items in
             guard !items.isEmpty else { return }
             let generation = importGeneration ?? store.attachmentImportGeneration
-            Task {
-                importing = true
-                defer { importing = false; selections = [] }
-                do {
-                    for item in items {
-                        guard let bytes = try await item.loadTransferable(type: Data.self) else { continue }
-                        let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "jpg"
-                        try await importBytes(bytes, filename: "Photo-\(UUID().uuidString.prefix(8)).\(ext)", generation: generation)
-                    }
-                } catch { errorMessage = error.localizedDescription }
+            session.start { operationID in
+                defer { selections = [] }
+                for item in items {
+                    try Task.checkCancellation()
+                    guard let bytes = try await item.loadTransferable(type: Data.self) else { continue }
+                    let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "jpg"
+                    try await importBytes(bytes, filename: "Photo-\(UUID().uuidString.prefix(8)).\(ext)", generation: generation, operationID: operationID)
+                }
             }
         }
         .sheet(isPresented: $scan) {
             let generation = importGeneration ?? store.attachmentImportGeneration
             ReceiptScanner { result in
                 scan = false
-                Task {
-                    importing = true
-                    defer { importing = false }
-                    do {
-                        for (index, bytes) in try result.get().enumerated() {
-                            try await importBytes(bytes, filename: "Receipt-\(UUID().uuidString.prefix(8))-\(index + 1).jpg", generation: generation)
-                        }
-                    } catch { errorMessage = error.localizedDescription }
+                session.start { operationID in
+                    for (index, bytes) in try result.get().enumerated() {
+                        try await importBytes(bytes, filename: "Receipt-\(UUID().uuidString.prefix(8))-\(index + 1).jpg", generation: generation, operationID: operationID)
+                    }
                 }
             }
         }
-        .alert("Couldn’t Add Receipt", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
-            Button("OK") { errorMessage = nil }
-        } message: { Text(errorMessage ?? "") }
+        .alert("Couldn’t Add Receipt", isPresented: Binding(get: { session.errorMessage != nil }, set: { if !$0 { session.clearError() } })) {
+            Button("OK") { session.clearError() }
+        } message: { Text(session.errorMessage ?? "") }
     }
 
-    private func importURLs(_ urls: [URL], generation: UUID) async {
-        importing = true
-        defer { importing = false }
-        do {
-            for url in urls {
-                _ = try await store.importAttachmentAsync(from: url, expectedGeneration: generation) { assets.append($0) }
-            }
-        }
-        catch { errorMessage = error.localizedDescription }
-    }
-    private func importBytes(_ bytes: Data, filename: String, generation: UUID) async throws {
+    private func importBytes(_ bytes: Data, filename: String, generation: UUID, operationID: UUID) async throws {
+        try Task.checkCancellation()
         let temporary = try await ReceiptImportIO.shared.stage(bytes, filename: filename)
         do {
-            _ = try await store.importAttachmentAsync(from: temporary.url, expectedGeneration: generation) { assets.append($0) }
+            _ = try await store.importAttachmentAsync(from: temporary.url, expectedGeneration: generation) { asset in
+                try session.accept(asset, for: operationID)
+                assets.append(asset)
+            }
             await ReceiptImportIO.shared.remove(temporary)
         } catch {
             await ReceiptImportIO.shared.remove(temporary)
             throw error
+        }
+    }
+}
+
+struct ReceiptContentVersion: Hashable {
+    let epoch: UUID
+    let revision: UInt64
+}
+
+/// File replacements are independent of attachment metadata. Publish only to
+/// receipt observers, and change only the IDs whose verified bytes were replaced.
+@MainActor
+final class ReceiptContentRevisions: ObservableObject {
+    @Published private var notificationRevision: UInt64 = 0
+    private var epoch = UUID()
+    private var revisions: [UUID: UInt64] = [:]
+
+    func version(for assetID: UUID) -> ReceiptContentVersion {
+        ReceiptContentVersion(epoch: epoch, revision: revisions[assetID] ?? 0)
+    }
+
+    func didReplaceContents(of assetIDs: Set<UUID>) {
+        guard !assetIDs.isEmpty else { return }
+        notificationRevision &+= 1
+        for id in assetIDs { revisions[id, default: 0] &+= 1 }
+    }
+
+    func invalidateAll() {
+        notificationRevision &+= 1
+        epoch = UUID()
+        revisions.removeAll()
+    }
+}
+
+struct ReceiptThumbnailKey: Hashable {
+    let asset: AttachmentAsset
+    let fileURL: URL
+    let contentVersion: ReceiptContentVersion
+}
+
+@MainActor
+final class ReceiptThumbnailModel: ObservableObject {
+    @Published private(set) var image: UIImage?
+    private var requestID = UUID()
+
+    func load(_ key: ReceiptThumbnailKey,
+              isCurrent: @MainActor (ReceiptThumbnailKey) -> Bool = { _ in true },
+              generate: @MainActor (ReceiptThumbnailKey) async throws -> UIImage?) async {
+        let id = UUID()
+        requestID = id
+        if image != nil { image = nil }
+        do {
+            let rendered = try await generate(key)
+            guard requestID == id, isCurrent(key), !Task.isCancelled else { return }
+            image = rendered
+        } catch {
+            // A late/cancelled request may not overwrite a newer thumbnail.
+            guard requestID == id, isCurrent(key), !Task.isCancelled else { return }
+            image = nil
         }
     }
 }
@@ -330,22 +517,37 @@ struct ReceiptPreview: View {
     let asset: AttachmentAsset
     var showsFilename = true
     var thumbnailHeight: CGFloat = 260
-    @State private var thumbnail: UIImage?
+
+    var body: some View {
+        ReceiptPreviewContent(asset: asset, fileURL: store.attachmentURL(for: asset),
+            showsFilename: showsFilename, thumbnailHeight: thumbnailHeight,
+            contentRevisions: store.receiptContentRevisions)
+    }
+}
+
+private struct ReceiptPreviewContent: View {
+    let asset: AttachmentAsset
+    let fileURL: URL
+    let showsFilename: Bool
+    let thumbnailHeight: CGFloat
+    @ObservedObject var contentRevisions: ReceiptContentRevisions
+    @StateObject private var thumbnail = ReceiptThumbnailModel()
     @State private var previewURL: URL?
     @State private var unavailable = false
+
     var body: some View {
+        let key = ReceiptThumbnailKey(asset: asset, fileURL: fileURL, contentVersion: contentRevisions.version(for: asset.id))
         Button {
-            let url = store.attachmentURL(for: asset)
-            if FileManager.default.fileExists(atPath: url.path) { previewURL = url }
+            if FileManager.default.fileExists(atPath: fileURL.path) { previewURL = fileURL }
             else { unavailable = true }
         } label: {
             VStack(alignment: .leading, spacing: 8) {
-                if let thumbnail {
+                if let image = thumbnail.image {
                     if showsFilename {
-                        Image(uiImage: thumbnail).resizable().scaledToFit().frame(maxHeight: thumbnailHeight)
+                        Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: thumbnailHeight)
                     } else {
                         GeometryReader { geometry in
-                            Image(uiImage: thumbnail).resizable().scaledToFill()
+                            Image(uiImage: image).resizable().scaledToFill()
                                 .frame(width: geometry.size.width, height: thumbnailHeight, alignment: .top).clipped()
                         }
                         .frame(height: thumbnailHeight)
@@ -353,7 +555,7 @@ struct ReceiptPreview: View {
                         .overlay { RoundedRectangle(cornerRadius: 4).stroke(Color(uiColor: .separator), lineWidth: 0.5) }
                     }
                 }
-                if showsFilename || thumbnail == nil { Label(asset.originalFilename, systemImage: "paperclip").font(.subheadline).lineLimit(2) }
+                if showsFilename || thumbnail.image == nil { Label(asset.originalFilename, systemImage: "paperclip").font(.subheadline).lineLimit(2) }
             }.frame(maxWidth: .infinity, minHeight: showsFilename ? 0 : thumbnailHeight, alignment: .topLeading)
         }
         .buttonStyle(.plain)
@@ -364,9 +566,11 @@ struct ReceiptPreview: View {
         .accessibilityIdentifier("receipt-preview")
         .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
         .quickLookPreview($previewURL)
-        .task(id: asset.id) {
-            let request = QLThumbnailGenerator.Request(fileAt: store.attachmentURL(for: asset), size: CGSize(width: 600, height: 400), scale: 1, representationTypes: .thumbnail)
-            if let result = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { thumbnail = result.uiImage }
+        .task(id: key) {
+            await thumbnail.load(key, isCurrent: { contentRevisions.version(for: $0.asset.id) == $0.contentVersion }) { key in
+                let request = QLThumbnailGenerator.Request(fileAt: key.fileURL, size: CGSize(width: 600, height: 400), scale: 1, representationTypes: .thumbnail)
+                return try await QLThumbnailGenerator.shared.generateBestRepresentation(for: request).uiImage
+            }
         }
         .alert("Receipt Unavailable", isPresented: $unavailable) { Button("OK", role: .cancel) {} } message: { Text("This file hasn’t downloaded yet. Sync again to retrieve it from iCloud.") }
     }

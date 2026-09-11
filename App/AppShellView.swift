@@ -313,7 +313,9 @@ private struct LockedAppView: View {
 struct EditorSheet: View {
     @EnvironmentObject private var store: MobileLedgerStore
     let route: EditorRoute
+    @StateObject private var receiptImports = ReceiptImportSession()
     var body: some View {
+        Group {
         switch route {
         case .transaction(let draft, let title, let scanInvoice):
             NavigationStack { TransactionEditorView(title: title, initialDraft: draft, scanInvoice: scanInvoice) }
@@ -326,6 +328,13 @@ struct EditorSheet: View {
         case .journalNew: JournalEditorView(mode: .create)
         case .journalRename(let ledger): JournalEditorView(mode: .rename(ledger))
         case .template(let draft): TemplateEditorView(initialDraft: draft)
+        }
+        }
+        .environmentObject(receiptImports)
+        .environment(\.receiptImportSession, receiptImports)
+        .background { ReceiptImportLifetimeAnchor(session: receiptImports).frame(width: 0, height: 0) }
+        .onAppear {
+            receiptImports.configureDiscard { [weak store] assets in store?.discardUnreferencedImportedAttachments(assets) }
         }
     }
 }

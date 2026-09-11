@@ -1083,12 +1083,12 @@ private final class CKJournalHost: CloudKitJournalSyncHost {
                   transaction.postings.reduce(Decimal.zero, { $0 + $1.amount }) == .zero else { throw CloudKitSyncError.invalidData("Incomplete transaction graph") }
         }
     }
-    func cloudKitCommitRemote(_ records: [CloudKitSyncRecord], data candidate: JournalData, contextKey: String, changeToken: Data?) throws {
+    func cloudKitCommitRemote(_ records: [CloudKitSyncRecord], data candidate: JournalData, contextKey: String, changeToken: Data?, receiptInstallationID: UUID?) throws {
         if failNextRemoteCommit { failNextRemoteCommit = false; throw CloudKitSyncError.service("Injected SQLite commit failure") }
-        try sqlite.persistCloudKitPull(records, data: candidate, previous: baseline, contextKey: contextKey, changeToken: changeToken)
+        try sqlite.persistCloudKitPull(records, data: candidate, previous: baseline, contextKey: contextKey, changeToken: changeToken, receiptInstallationID: receiptInstallationID)
         data = candidate; baseline = candidate
     }
-    func cloudKitCommitConflictResolution(id: String, keepLocal: Bool, data: JournalData, contextKey: String) throws {
+    func cloudKitCommitConflictResolution(id: String, keepLocal: Bool, data: JournalData, contextKey: String, receiptInstallationID: UUID?) throws {
         throw CloudKitSyncError.service("Conflict choice is outside this host fixture's scope")
     }
     func cloudKitAttachmentURL(for asset: AttachmentAsset) throws -> URL {

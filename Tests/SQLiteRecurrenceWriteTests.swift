@@ -57,8 +57,10 @@ final class SQLiteRecurrenceWriteTests: XCTestCase {
             for index in changed.transactions.indices { changed.transactions[index].recurrenceRule?.intervalValue = intervals[index] }
             try store.persist(changed, previous: original)
             XCTAssertEqual(try SQLiteWriteAudit.counts(at: store.databaseURL)["recurrence_rules"], intervals == [2, 3, 2] ? 3 : 2)
+            XCTAssertEqual(try store.loadData()?.transactions, changed.transactions, "Embedded rule values remain exact even when shared IDs temporarily differ")
             let expectedLast = changed.transactions.last?.recurrenceRule
-            XCTAssertTrue(try XCTUnwrap(store.loadData()).transactions.allSatisfy { $0.recurrenceRule == expectedLast })
+            try SQLiteWriteAudit.execute("UPDATE transactions SET payload_json = json_remove(payload_json, '$.recurrenceRule')", at: store.databaseURL)
+            XCTAssertTrue(try XCTUnwrap(store.loadData()).transactions.allSatisfy { $0.recurrenceRule == expectedLast }, "Legacy rows without an embedded rule retain the ordered shared-table fallback")
         }
     }
 

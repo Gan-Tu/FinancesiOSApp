@@ -373,6 +373,7 @@ final class MobileLedgerStore: ObservableObject {
     @Published private(set) var searchContentRevision: UInt64 = 0
     let registerPresentations = RegisterPresentationCache()
     let receiptAttachmentSaves = ReceiptAttachmentSaveRegistry()
+    let receiptContentRevisions = ReceiptContentRevisions()
     private var registerPrewarmTask: Task<Void, Never>?
     private var dailyBalanceTask: Task<Void, Never>?
     private var dailyBalanceRequest: (referenceDate: Date, calendar: Calendar, cutoff: Date)?
@@ -439,10 +440,14 @@ final class MobileLedgerStore: ObservableObject {
         self.foregroundTriggerDependencies = foregroundTriggerDependencies
         let resolvedSupportDirectory = supportDirectory
         self.supportDirectory = resolvedSupportDirectory
-        self.sqliteStore = SQLiteJournalStore(databaseURL: resolvedSupportDirectory.appending(path: "journal.sqlite"))
+        let database = SQLiteJournalStore(databaseURL: resolvedSupportDirectory.appending(path: "journal.sqlite"))
+        self.sqliteStore = database
         try? FileManager.default.createDirectory(at: resolvedSupportDirectory, withIntermediateDirectories: true)
 
         do {
+            try CloudKitReceiptFileTransaction.recoverPending(in: resolvedSupportDirectory,
+                isCommitted: { try database.isReceiptInstallationCommitted($0) },
+                removeCommit: { try database.removeReceiptInstallationCommit($0) })
             if let saved = try sqliteStore.loadData() {
                 data = saved
                 try Self.validateCandidateData(saved, operation: "Saved journal")
@@ -1036,6 +1041,30 @@ final class MobileLedgerStore: ObservableObject {
 
     private func cacheSymbol(for commodityID: UUID?) -> String {
         commodityID.flatMap { derivedCache.commoditiesByID[$0]?.symbol } ?? "USD"
+    }
+
+    /// A subtree's cached balance already includes its descendants and the
+    /// current date cutoff. Move that total only between ancestors whose
+    /// membership changed; common ancestors retain the same total.
+    private func transferAncestorBalances(_ balances: [MobileBalanceRow], from oldParentID: UUID?, to newParentID: UUID?) {
+        func ancestors(startingAt parentID: UUID?) -> Set<UUID> {
+            var result = Set<UUID>()
+            var current = parentID
+            while let id = current, result.insert(id).inserted {
+                current = derivedCache.accountsByID[id]?.parentID
+            }
+            return result
+        }
+        let oldAncestors = ancestors(startingAt: oldParentID)
+        let newAncestors = ancestors(startingAt: newParentID)
+        for (ids, multiplier) in [(oldAncestors.subtracting(newAncestors), Decimal(-1)),
+                                  (newAncestors.subtracting(oldAncestors), Decimal(1))] {
+            for id in ids {
+                var values = Dictionary(uniqueKeysWithValues: (derivedCache.balanceRowsByAccount[id] ?? []).map { ($0.commodityID, $0.amount) })
+                for row in balances { values[row.commodityID, default: .zero] += row.amount * multiplier }
+                derivedCache.balanceRowsByAccount[id] = balanceRows(from: values)
+            }
+        }
     }
 
     private func refreshLedgerTotalsByKind(ledgerID: UUID) {
@@ -1777,11 +1806,17 @@ final class MobileLedgerStore: ObservableObject {
             validationError = ValidationError(message: "Move accounts within the same journal and type, outside their own descendants.")
             return
         }
+        let previousParentID = data.accounts[sourceIndex].parentID
+        let movedBalances = derivedCache.balanceRowsByAccount[accountID] ?? []
         data.accounts[sourceIndex].parentID = plan.parentID
         for (order, id) in plan.orderedSiblingIDs.enumerated() {
             if let index = data.accounts.firstIndex(where: { $0.id == id }) { data.accounts[index].listIndex = order }
         }
         refreshDerivedCacheForAccountListChange(ledgerID: plan.ledgerID)
+        if previousParentID != plan.parentID {
+            transferAncestorBalances(movedBalances, from: previousParentID, to: plan.parentID)
+            refreshLedgerTotalsByKind(ledgerID: plan.ledgerID)
+        }
         save(syncCloud: true, refreshCache: false)
     }
 
@@ -2119,6 +2154,38 @@ final class MobileLedgerStore: ObservableObject {
         }
     }
 
+    /// An abandoned editor may own newly imported files, but a failed Save can
+    /// already have accepted those assets into the live journal. Protect both
+    /// that snapshot and the serial writer's committed baseline during cleanup.
+    func discardUnreferencedImportedAttachments(_ assets: [AttachmentAsset]) {
+        let directory = supportDirectory
+        let snapshot = data
+        let baseline = persistenceBaseline
+        Self.deferredPersistenceQueue.async {
+            let database = SQLiteJournalStore(databaseURL: directory.appendingPathComponent("journal.sqlite"))
+            // After a write failure the committed baseline is unknown. Keep
+            // files until a successful save reestablishes what disk references.
+            guard let committed = baseline.snapshot,
+                  let retention = try? database.attachmentFileRetention() else { return }
+            func paths(in data: JournalData?) -> Set<String> {
+                Set(data?.transactions.flatMap { $0.attachment?.assets.map(\.storedPath) ?? [] } ?? [])
+            }
+            func canonical(_ path: String) -> String? {
+                guard let relative = Self.validatedAttachmentRelativePathIfPresent(path, supportDirectory: directory) else { return nil }
+                return Self.canonicalAttachmentPath(Self.attachmentFileURL(forRelativePath: relative, supportDirectory: directory))
+            }
+            let retained = paths(in: snapshot).union(paths(in: committed)).union(retention.pending)
+            let retainedFiles = Set(retained.compactMap(canonical))
+            for asset in assets {
+                guard let relative = Self.validatedAttachmentRelativePathIfPresent(asset.storedPath, supportDirectory: directory),
+                      let path = canonical(relative), !retainedFiles.contains(path) else { continue }
+                let url = Self.attachmentFileURL(forRelativePath: relative, supportDirectory: directory)
+                guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+    }
+
     func saveTransaction(_ draft: TransactionDraft, scope: RecurringJournalEditor.Scope = .occurrence) {
         applyTransactionDraft(draft, scope: scope)
     }
@@ -2172,7 +2239,9 @@ final class MobileLedgerStore: ObservableObject {
         }
 
         do {
-            try validate(postings: postings, ledgerID: ledgerID, permitsZeroPostings: draft.isDuplicate)
+            let existingZeroPostingIDs = Set(previous?.postings.filter { $0.amount.isZero }.map(\.id) ?? [])
+            try validate(postings: postings, ledgerID: ledgerID, permitsZeroPostings: draft.isDuplicate,
+                         preservingZeroPostingIDs: existingZeroPostingIDs)
         } catch let error as ValidationError {
             validationError = error
             return
@@ -2479,7 +2548,7 @@ final class MobileLedgerStore: ObservableObject {
     var attachmentImportGeneration: UUID { journalReplacementGeneration }
 
     func importAttachmentAsync(from sourceURL: URL, expectedGeneration: UUID? = nil,
-                               receive: @MainActor (AttachmentAsset) -> Void = { _ in }) async throws -> AttachmentAsset {
+                               receive: @MainActor (AttachmentAsset) throws -> Void = { _ in }) async throws -> AttachmentAsset {
         try requireWritableJournal()
         let generation = expectedGeneration ?? journalReplacementGeneration
         let directory = supportDirectory
@@ -2541,8 +2610,18 @@ final class MobileLedgerStore: ObservableObject {
 
     private func beginBackupFileOperation() throws {
         try requireWritableJournal()
-        try flushLocalChanges()
         cancelCloudSync()
+        // Export must read bytes from the committed journal, including after
+        // an earlier sync rollback was interrupted or could not finish cleanup.
+        sealPendingDeferredWrite()
+        let database = sqliteStore
+        let directory = supportDirectory
+        try Self.deferredPersistenceQueue.sync {
+            try CloudKitReceiptFileTransaction.recoverPending(in: directory,
+                isCommitted: { try database.isReceiptInstallationCommitted($0) },
+                removeCommit: { try database.removeReceiptInstallationCommit($0) })
+        }
+        try flushLocalChanges()
         backupFileOperationInProgress = true
     }
 
@@ -3286,6 +3365,7 @@ final class MobileLedgerStore: ObservableObject {
         // A confirmed restore supersedes pending attachment selections. Their
         // accepted writes were drained above; do not replay later queued edits.
         receiptAttachmentSaves.invalidatePendingSaves()
+        receiptContentRevisions.invalidateAll()
         pendingNewTransactionOperations.removeAll()
         duplicateReceiptCopiesByOperation.removeAll()
         completedTransactionSaveOperations.removeAll()
@@ -3305,12 +3385,13 @@ final class MobileLedgerStore: ObservableObject {
         deletedTransactionTombstoneIDs = (try? sqliteStore.deletedTransactionIDs()) ?? []
     }
 
-    private func validate(postings: [Posting], ledgerID: UUID, permitsZeroPostings: Bool = false) throws {
+    private func validate(postings: [Posting], ledgerID: UUID, permitsZeroPostings: Bool = false,
+                          preservingZeroPostingIDs: Set<UUID> = []) throws {
         guard postings.count >= 2 else {
             throw ValidationError(message: "A transaction needs at least two postings.")
         }
         guard postings.contains(where: { !$0.amount.isZero }),
-              permitsZeroPostings || postings.allSatisfy({ !$0.amount.isZero }) else {
+              permitsZeroPostings || postings.allSatisfy({ !$0.amount.isZero || preservingZeroPostingIDs.contains($0.id) }) else {
             throw ValidationError(message: "Posting amounts cannot be zero.")
         }
         for posting in postings {
@@ -3718,7 +3799,8 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
         _ records: [CloudKitSyncRecord],
         data candidate: JournalData,
         contextKey: String,
-        changeToken: Data?
+        changeToken: Data?,
+        receiptInstallationID: UUID? = nil
     ) throws {
         try cloudKitFlushLocalChanges()
         try cloudKitValidate(candidate)
@@ -3734,7 +3816,8 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
                     data: candidate,
                     previous: baseline.snapshot,
                     contextKey: contextKey,
-                    changeToken: changeToken
+                    changeToken: changeToken,
+                    receiptInstallationID: receiptInstallationID
                 )
                 baseline.snapshot = candidate
                 Self.removeObsoleteAttachmentFiles(supportDirectory: supportDirectory, previous: previous, data: candidate)
@@ -3746,6 +3829,7 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
         let previousSecurity = data.security
         data = candidate
         refreshDerivedCache()
+        receiptContentRevisions.didReplaceContents(of: Set(records.filter { $0.recordType == "attachment_asset" }.compactMap { UUID(uuidString: $0.recordID) }))
         refreshUnlockStateForLoadedData(previousSecurity: previousSecurity)
         reloadDeletedTransactionTombstones()
         cloudSyncDataAvailable = true
@@ -3756,7 +3840,8 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
         id: String,
         keepLocal: Bool,
         data candidate: JournalData,
-        contextKey: String
+        contextKey: String,
+        receiptInstallationID: UUID? = nil
     ) throws {
         try cloudKitFlushLocalChanges()
         try cloudKitValidate(candidate)
@@ -3772,7 +3857,8 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
                     keepLocal: keepLocal,
                     contextKey: contextKey,
                     data: candidate,
-                    previous: baseline.snapshot
+                    previous: baseline.snapshot,
+                    receiptInstallationID: receiptInstallationID
                 )
                 baseline.snapshot = candidate
                 Self.removeObsoleteAttachmentFiles(supportDirectory: supportDirectory, previous: previous, data: candidate)
@@ -3784,6 +3870,7 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
         let previousSecurity = data.security
         data = candidate
         refreshDerivedCache()
+        receiptContentRevisions.invalidateAll()
         refreshUnlockStateForLoadedData(previousSecurity: previousSecurity)
         reloadDeletedTransactionTombstones()
         refreshCloudSyncDataAvailability()

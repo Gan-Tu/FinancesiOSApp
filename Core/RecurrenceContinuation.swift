@@ -114,9 +114,11 @@ extension RecurringJournalEditor {
     static func preparingRecurrencesForBackup(_ journal: JournalData, referenceDate: Date = Date(),
                                               calendar: Calendar = .current, deletedIDs: Set<UUID> = []) -> JournalData {
         var result = journal
+        let mixed = mixedRuleIDs(in: journal.transactions)
         let groups = Dictionary(grouping: journal.transactions.filter { $0.recurrenceRule != nil }, by: { $0.recurrenceRule!.id })
         var rules: [UUID: RecurrenceRule] = [:]
         for (id, rows) in groups {
+            guard !mixed.contains(id) else { continue }
             guard let first = anchor(ruleID: id, in: rows), var rule = first.recurrenceRule else { continue }
             if rule.templateHistory == nil { rule.templateHistory = RecurrenceTemplateHistory(baseTemplate: RecurrenceTransactionTemplate(transaction: first)) }
             let anchorDate = rule.templateHistory?.scheduleAnchorDate ?? first.date
@@ -127,7 +129,7 @@ extension RecurringJournalEditor {
             rules[id] = rule
         }
         for index in result.transactions.indices {
-            if let id = result.transactions[index].recurrenceRule?.id { result.transactions[index].recurrenceRule = rules[id] }
+            if let id = result.transactions[index].recurrenceRule?.id, let rule = rules[id] { result.transactions[index].recurrenceRule = rule }
         }
         return result
     }
