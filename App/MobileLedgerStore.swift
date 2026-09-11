@@ -231,31 +231,20 @@ private struct MobileLedgerDerivedCache {
             (ledger.id, Self.normalizedSearchText([ledger.name]))
         })
         accountSearchTextByID = Dictionary(uniqueKeysWithValues: data.accounts.map { account in
-            (account.id, Self.normalizedSearchText([
-                account.name,
-                account.note,
-                account.kind.title,
-                ledgersByID[account.ledgerID]?.name ?? "",
-                account.commodityID.flatMap { commoditiesByID[$0]?.symbol } ?? ""
-            ]))
+            (account.id, account.name.lowercased())
         })
         commoditySearchTextByID = Dictionary(uniqueKeysWithValues: data.commodities.map { commodity in
             (commodity.id, Self.normalizedSearchText([
                 commodity.symbol,
-                commodity.name,
-                ledgersByID[commodity.ledgerID]?.name ?? ""
+                commodity.name
             ]))
         })
         transactionTemplateSearchTextByID = Dictionary(uniqueKeysWithValues: data.transactionTemplates.map { template in
-            let postingAccounts = template.postings.compactMap { posting in
-                posting.accountID.flatMap { accountsByID[$0]?.name }
-            }
-            return (template.id, Self.normalizedSearchText([
+            (template.id, Self.normalizedSearchText([
                 template.name,
                 template.note,
-                template.payee,
-                ledgersByID[template.ledgerID]?.name ?? ""
-            ] + postingAccounts))
+                template.payee
+            ]))
         })
     }
 
@@ -691,9 +680,8 @@ final class MobileLedgerStore: ObservableObject {
 
     /// Updates cached ledger labels and search text after a journal rename.
     ///
-    /// Renaming a journal changes labels embedded in account, currency,
-    /// template, and transaction search haystacks, but it does not affect row
-    /// membership, balances, or register ordering.
+    /// Renaming a journal refreshes result/navigation labels and its own search
+    /// text, without changing transaction membership or balances.
     private func refreshDerivedCacheForLedgerMetadataChange(_ ledger: Ledger) {
         invalidateTransactionSearchWarmup()
         derivedCache.ledgersByID[ledger.id] = ledger
@@ -1060,50 +1048,18 @@ final class MobileLedgerStore: ObservableObject {
     }
 
     private func transactionSearchText(for transaction: LedgerTransaction) -> String {
-        ([
-            transaction.payee,
-            transaction.note,
-            transaction.number,
-            derivedCache.ledgersByID[transaction.ledgerID]?.name ?? ""
-        ] + transaction.postings.compactMap { derivedCache.accountsByID[$0.accountID]?.name })
-            .joined(separator: " ")
-            .lowercased()
+        TransactionSearchField.anywhere.normalizedText(for: transaction)
     }
 
     private nonisolated static func transactionSearchWarmupResult(
-        transactions: [LedgerTransaction],
-        accountsByID: [UUID: Account],
-        ledgersByID: [UUID: Ledger]
+        transactions: [LedgerTransaction]
     ) -> MobileTransactionSearchWarmupResult {
         var textByID: [UUID: String] = [:]
         textByID.reserveCapacity(transactions.count)
         for transaction in transactions {
-            let postingAccounts = transaction.postings.compactMap { posting in
-                accountsByID[posting.accountID]?.name
-            }
-            let text = ([
-                transaction.payee,
-                transaction.note,
-                transaction.number,
-                ledgersByID[transaction.ledgerID]?.name ?? ""
-            ] + postingAccounts)
-                .joined(separator: " ")
-                .lowercased()
-            textByID[transaction.id] = text
+            textByID[transaction.id] = TransactionSearchField.anywhere.normalizedText(for: transaction)
         }
         return MobileTransactionSearchWarmupResult(textByID: textByID)
-    }
-
-    private nonisolated static func transactionSearchTextByID(
-        transactions: [LedgerTransaction],
-        accountsByID: [UUID: Account],
-        ledgersByID: [UUID: Ledger]
-    ) -> [UUID: String] {
-        transactionSearchWarmupResult(
-            transactions: transactions,
-            accountsByID: accountsByID,
-            ledgersByID: ledgersByID
-        ).textByID
     }
 
     private func ensureTransactionSearchText(for transaction: LedgerTransaction) -> String {
@@ -1124,14 +1080,8 @@ final class MobileLedgerStore: ObservableObject {
 
         transactionSearchWarmupTask?.cancel()
         let generation = transactionSearchCacheGeneration
-        let accountsByID = derivedCache.accountsByID
-        let ledgersByID = derivedCache.ledgersByID
-        transactionSearchWarmupTask = Task.detached(priority: .utility) { [weak self, transactions, accountsByID, ledgersByID, generation] in
-            let warmupResult = Self.transactionSearchWarmupResult(
-                transactions: transactions,
-                accountsByID: accountsByID,
-                ledgersByID: ledgersByID
-            )
+        transactionSearchWarmupTask = Task.detached(priority: .utility) { [weak self, transactions, generation] in
+            let warmupResult = Self.transactionSearchWarmupResult(transactions: transactions)
             guard !Task.isCancelled else { return }
             await MainActor.run { [weak self, warmupResult] in
                 guard let self, self.transactionSearchCacheGeneration == generation else { return }
@@ -1159,9 +1109,7 @@ final class MobileLedgerStore: ObservableObject {
     func warmTransactionSearchCacheForPerformanceProbe() {
         let generation = transactionSearchCacheGeneration
         let warmupResult = Self.transactionSearchWarmupResult(
-            transactions: derivedCache.allTransactionsDateDescending,
-            accountsByID: derivedCache.accountsByID,
-            ledgersByID: derivedCache.ledgersByID
+            transactions: derivedCache.allTransactionsDateDescending
         )
         guard transactionSearchCacheGeneration == generation else { return }
         for (id, text) in warmupResult.textByID where derivedCache.transactionsByID[id] != nil {
@@ -1174,37 +1122,20 @@ final class MobileLedgerStore: ObservableObject {
     }
 
     private func accountSearchText(for account: Account) -> String {
-        [
-            account.name,
-            account.note,
-            account.kind.title,
-            derivedCache.ledgersByID[account.ledgerID]?.name ?? "",
-            account.commodityID.flatMap { derivedCache.commoditiesByID[$0]?.symbol } ?? ""
-        ]
-            .joined(separator: " ")
-            .lowercased()
+        account.name.lowercased()
     }
 
     private func commoditySearchText(for commodity: Commodity) -> String {
         [
             commodity.symbol,
-            commodity.name,
-            derivedCache.ledgersByID[commodity.ledgerID]?.name ?? ""
+            commodity.name
         ]
             .joined(separator: " ")
             .lowercased()
     }
 
     private func transactionTemplateSearchText(for template: TransactionTemplate) -> String {
-        let postingAccounts = template.postings.compactMap { posting in
-            posting.accountID.flatMap { derivedCache.accountsByID[$0]?.name }
-        }
-        return ([
-            template.name,
-            template.note,
-            template.payee,
-            derivedCache.ledgersByID[template.ledgerID]?.name ?? ""
-        ] + postingAccounts)
+        [template.name, template.note, template.payee]
             .joined(separator: " ")
             .lowercased()
     }
@@ -1522,13 +1453,12 @@ final class MobileLedgerStore: ObservableObject {
         if let cached = accountSearchResultCache[cacheKey] {
             return cached
         }
-        let accounts = ledgerID.map { derivedCache.accountsByLedger[$0] ?? [] }
-            ?? derivedCache.orderedLedgers.flatMap { derivedCache.accountsByLedger[$0.id] ?? [] }
+        let accounts = ledgerID.map { accountNodes(ledgerID: $0).map(\.account) }
+            ?? derivedCache.orderedLedgers.flatMap { accountNodes(ledgerID: $0.id).map(\.account) }
         let rows = accounts.filter {
-            (derivedCache.accountSearchTextByID[$0.id]?.contains(normalizedSearch) ?? false)
-                || AccountSearchPath.fullName(for: $0, in: derivedCache.accountsByID).lowercased().contains(normalizedSearch)
+            derivedCache.accountSearchTextByID[$0.id]?.contains(normalizedSearch) ?? false
         }
-            .prefix(limit)
+            .prefix(max(0, limit))
             .map { $0 }
         accountSearchResultCache[cacheKey] = rows
         return rows

@@ -150,9 +150,9 @@ final class CompanionParityTests: XCTestCase {
 }
 
 final class RegisterBalanceCurrencyTests: XCTestCase {
-    @MainActor func testBackgroundRenderFiltersAmountsAndPreservesPriorBalances() async throws {
+    @MainActor func testBackgroundRenderFiltersNotesAndPreservesPriorBalances() async throws {
         let fixture = makeFixture()
-        let request = RegisterRenderRequest(data: fixture.data, rows: fixture.data.transactions, scope: .account(fixture.cash.id), search: "-25", dateInterval: nil, transactionIDs: nil)
+        let request = RegisterRenderRequest(data: fixture.data, rows: fixture.data.transactions, scope: .account(fixture.cash.id), search: "Entry 4", dateInterval: nil, transactionIDs: nil)
         let result = try await RegisterRenderWorker.shared.render(request).presentation
         XCTAssertEqual(result.months.flatMap(\.days).flatMap(\.transactions).map(\.id), [fixture.data.transactions[4].id])
         XCTAssertEqual(result.balances[fixture.data.transactions[4].id], [RegisterMoney(commodityID: fixture.usd.id, symbol: "USD", amount: 975)])

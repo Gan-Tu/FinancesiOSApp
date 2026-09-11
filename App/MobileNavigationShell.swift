@@ -1222,6 +1222,7 @@ struct FinanceBottomBar: View {
 struct QuickSearchSheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var store: MobileLedgerStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var navigationPath: [MobileRoute]
     @Binding var presentedSheet: ShellSheet?
     @Binding var route: EditorRoute?
@@ -1229,6 +1230,7 @@ struct QuickSearchSheet: View {
     @State private var searchResults = MobileQuickSearchResults.empty
     @State private var isSearchPresented = false
     @State private var isSearching = false
+    @State private var showsAllAccounts = false
     @State private var searchRevision = UUID()
     @AppStorage(TransactionSearchDatePolicy.preferenceKey, store: MobileDisplayPreferences.defaults) private var includeAllFutureEntries = false
 
@@ -1263,12 +1265,22 @@ struct QuickSearchSheet: View {
                 } else {
                     if !searchResults.accounts.isEmpty {
                         QuickSearchSection("Accounts") {
-                            ForEach(searchResults.accounts) { account in
+                            ForEach(searchResults.accounts.prefix(showsAllAccounts ? searchResults.accounts.count : 3)) { account in
                                 Button { openAccount(account) } label: {
                                     accountResultRow(account)
                                 }
                                 .buttonStyle(TransactionRowButtonStyle())
                                 .accessibilityIdentifier("search-account-\(account.id.uuidString)")
+                            }
+                            if searchResults.accounts.count > 3 {
+                                Button(showsAllAccounts ? "Show Fewer Accounts" : "Show All \(searchResults.accounts.count) Accounts") {
+                                    withAnimation(FinanceMotion.disclosure(reduceMotion: reduceMotion)) {
+                                        showsAllAccounts.toggle()
+                                    }
+                                }
+                                .foregroundStyle(.blue)
+                                .accessibilityIdentifier("search-accounts-toggle")
+                                .accessibilityValue(showsAllAccounts ? "Expanded" : "Collapsed")
                             }
                         }
                     }
@@ -1398,7 +1410,10 @@ struct QuickSearchSheet: View {
             if let initialQuery { searchText = initialQuery.text }
             isSearchPresented = true
         }
-        .onChange(of: searchText) { searchRevision = UUID() }
+        .onChange(of: searchText) {
+            showsAllAccounts = false
+            searchRevision = UUID()
+        }
         .onChange(of: includeAllFutureEntries) { searchRevision = UUID() }
         .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in searchRevision = UUID() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in searchRevision = UUID() }
@@ -1428,7 +1443,7 @@ struct QuickSearchSheet: View {
         searchResults = MobileQuickSearchResults(
             transactions: matchingRows,
             ledgers: ledgers,
-            accounts: store.searchAccounts(trimmedSearch, ledgerID: contextLedgerID ?? store.selectedLedgerID),
+            accounts: store.searchAccounts(trimmedSearch, ledgerID: contextLedgerID ?? store.selectedLedgerID, limit: .max),
             currencies: contextScope == nil ? store.searchCommodities(trimmedSearch) : [],
             templates: contextScope == nil ? store.searchTransactionTemplates(trimmedSearch) : [],
             ledgerTransactionCounts: Dictionary(uniqueKeysWithValues: ledgers.map { ledger in

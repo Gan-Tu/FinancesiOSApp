@@ -10,6 +10,23 @@ enum DemoData {
             MobileDisplayPreferences.defaults.removePersistentDomain(forName: MobileDisplayPreferences.demoSuiteName)
         }
         var data = fixture(includeFutureEntries: CommandLine.arguments.contains("--demo-future"), includeRecurringEntries: CommandLine.arguments.contains("--demo-recurring"), includeTemplates: true)
+        if CommandLine.arguments.contains("--demo-search-matches"), let ledgerID = data.selectedLedgerID {
+            let root = data.accounts.first { $0.ledgerID == ledgerID && $0.kind == .asset && $0.parentID == nil }!
+            for (index, name) in ["Personal Savings", "Personal Cash", "Son Account"].enumerated() {
+                data.accounts.append(Account(ledgerID: ledgerID, parentID: root.id, commodityID: root.commodityID,
+                    name: name, kind: .asset, listIndex: 100 + index))
+            }
+            if let index = data.accounts.firstIndex(where: { $0.name == "Checking" }) { data.accounts[index].name = "BoA Personal" }
+            if let index = data.accounts.firstIndex(where: { $0.name == "Expenses" }) { data.accounts[index].name = "Personal & Lifestyle" }
+            for index in data.transactions.indices {
+                data.transactions[index].note = "Unrelated entry \(index)"
+                data.transactions[index].payee = "Other"
+                data.transactions[index].number = ""
+            }
+            data.transactions[0].note = "Lesson fee"
+            data.transactions[1].note = "Reference entry"; data.transactions[1].number = "SON-7"
+            data.transactions[2].note = "Speaker purchase"; data.transactions[2].payee = "Sonos"
+        }
         if CommandLine.arguments.contains("--demo-backfilled-recurring") {
             // A past cleared anchor, today's sole uncleared occurrence, and one
             // future month reproduce section removal with an imported cursor.

@@ -54,6 +54,7 @@ final class JournalVisibilityAndSearchUITests: XCTestCase {
         XCTAssertEqual(search.value as? String, "Checking")
         let account = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "search-account-", "Assets:Checking")).firstMatch
         XCTAssertTrue(account.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "search-transaction-")).firstMatch.exists)
         let note = app.buttons["search-filter-note"]
         XCTAssertLessThan(account.frame.minY, note.frame.minY)
         let image = XCTAttachment(screenshot: app.screenshot()); image.name = "Quick Search accounts and keyboard dismissed"; image.lifetime = .keepAlways; add(image)
@@ -89,4 +90,47 @@ final class JournalVisibilityAndSearchUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [recentRows], timeout: 5), .completed)
         XCTAssertEqual(toggle.value as? String, "Recent entries")
     }
+    func testAccountMatchesCollapseAndTransactionsMatchTheirOwnFields() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        defer { app.terminate() }
+        app.launchArguments = ["--demo", "--reset-demo", "--demo-search-matches"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Journals"].waitForExistence(timeout: 10))
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Personal,")).firstMatch.tap()
+        app.buttons["Quick Search"].tap()
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 5)); search.tap(); search.typeText("son\n")
+        let accounts = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "search-account-"))
+        let previews = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "search-transaction-"))
+        let toggle = app.buttons["search-accounts-toggle"]
+        XCTAssertTrue(app.buttons["Show All 5 Accounts"].waitForExistence(timeout: 5))
+        XCTAssertEqual(accounts.count, 3)
+        XCTAssertEqual(previews.count, 3)
+        XCTAssertTrue(previews.firstMatch.isHittable, "Collapsed accounts should leave room for transactions")
+        XCTAssertFalse(previews.matching(NSPredicate(format: "label CONTAINS %@", "Unrelated entry")).firstMatch.exists)
+        let image = XCTAttachment(screenshot: app.screenshot()); image.name = "Three account matches and relevant transactions"; image.lifetime = .keepAlways; add(image)
+        toggle.tap()
+        let expanded = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 5"), object: accounts)
+        XCTAssertEqual(XCTWaiter.wait(for: [expanded], timeout: 5), .completed)
+        XCTAssertEqual(toggle.value as? String, "Expanded")
+        XCTAssertFalse(accounts.matching(NSPredicate(format: "label CONTAINS %@", "Groceries")).firstMatch.exists)
+        toggle.tap()
+        let collapsed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 3"), object: accounts)
+        XCTAssertEqual(XCTWaiter.wait(for: [collapsed], timeout: 5), .completed)
+        toggle.tap()
+        search.tap(); search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 3) + "Personal\n")
+        XCTAssertTrue(app.buttons["Show All 4 Accounts"].waitForExistence(timeout: 5))
+        XCTAssertEqual(accounts.count, 3)
+        XCTAssertEqual(toggle.value as? String, "Collapsed")
+        search.tap(); search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 8) + "son\n")
+        XCTAssertTrue(app.buttons["Show All 5 Accounts"].waitForExistence(timeout: 5))
+        app.buttons["search-filter-anywhere"].tap()
+        XCTAssertTrue(app.navigationBars["Search: son"].waitForExistence(timeout: 5))
+        let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "register-row-"))
+        let matched = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 3"), object: rows)
+        XCTAssertEqual(XCTWaiter.wait(for: [matched], timeout: 5), .completed)
+        XCTAssertFalse(rows.matching(NSPredicate(format: "label CONTAINS %@", "Unrelated entry")).firstMatch.exists)
+    }
+
 }

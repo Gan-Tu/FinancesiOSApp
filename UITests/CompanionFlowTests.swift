@@ -71,7 +71,7 @@ final class CompanionFlowTests: XCTestCase {
         app.buttons["Quick Search"].tap()
         XCTAssertTrue(app.navigationBars["Quick Search"].waitForExistence(timeout: 5))
         let field = app.searchFields.firstMatch
-        field.tap(); field.typeText("67.31")
+        field.tap(); field.typeText("Weekly groceries")
         let result = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "search-transaction-", "Weekly groceries")).firstMatch
         XCTAssertTrue(result.waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "search-transaction-", "Dinner with friends")).firstMatch.exists)

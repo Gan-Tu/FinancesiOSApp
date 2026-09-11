@@ -237,6 +237,17 @@ enum TransactionSearchField: String, CaseIterable, Identifiable, Sendable {
         }
     }
     var suggestionPrefix: String { self == .anywhere ? "Search for" : "\(title) contains" }
+
+    /// Shared by immediate queries, cached indexes, and background register search.
+    /// Account paths and receipt metadata are display context, not transaction text.
+    func normalizedText(for transaction: LedgerTransaction) -> String {
+        switch self {
+        case .note: transaction.note.lowercased()
+        case .number: transaction.number.lowercased()
+        case .payee: transaction.payee.lowercased()
+        case .anywhere: [transaction.note, transaction.number, transaction.payee].joined(separator: "\n").lowercased()
+        }
+    }
 }
 
 /// Search hides future recurring materializations by default; the normal
@@ -271,9 +282,6 @@ enum AccountSearchPath {
             parent = row.parentID
         }
         return names.reversed()
-    }
-    static func fullName(for account: Account, in accounts: [UUID: Account]) -> String {
-        (parentNames(for: account, in: accounts) + [account.name]).joined(separator: ":")
     }
 }
 
@@ -358,8 +366,6 @@ actor RegisterRenderWorker {
         let query = request.search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let accountsByID = Dictionary(uniqueKeysWithValues: request.data.accounts.map { ($0.id, $0) })
         let defaults = Dictionary(grouping: request.data.commodities, by: \.ledgerID).compactMapValues { $0.first?.id }
-        let accounts = query.isEmpty ? [:] : accountsByID.mapValues { AccountSearchPath.fullName(for: $0, in: accountsByID) }
-        let ledgers = query.isEmpty ? [:] : Dictionary(uniqueKeysWithValues: request.data.ledgers.map { ($0.id, $0.name) })
         var scopedAccounts = Set<UUID>()
         if request.filtersScope, case .account(let id) = request.scope {
             let children = Dictionary(grouping: request.data.accounts.compactMap { account in account.parentID.map { ($0, account.id) } }, by: { $0.0 })
@@ -393,18 +399,7 @@ actor RegisterRenderWorker {
             if let ids = request.transactionIDs, !ids.contains(transaction.id) { continue }
             // Ordinary registers skip search-string allocation entirely.
             if !query.isEmpty {
-                let text: String
-                switch request.searchField {
-                case .note: text = transaction.note
-                case .number: text = transaction.number
-                case .payee: text = transaction.payee
-                case .anywhere:
-                    let fields = [transaction.note, transaction.payee, transaction.number, ledgers[transaction.ledgerID] ?? ""]
-                        + transaction.postings.compactMap { accounts[$0.accountID] }
-                        + transaction.postings.map { String(describing: $0.amount) }
-                    text = fields.joined(separator: " ")
-                }
-                if !text.lowercased().contains(query) { continue }
+                if !request.searchField.normalizedText(for: transaction).contains(query) { continue }
             }
             if let policy = request.searchDatePolicy, transaction.date >= policy.todayEnd {
                 // Source rows are newest first. A bounded ring retains the

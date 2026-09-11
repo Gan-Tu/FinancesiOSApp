@@ -108,7 +108,7 @@ final class JournalVisibilityAndSearchTests: XCTestCase {
         XCTAssertFalse(today.matches(otherZone))
     }
 
-    func testAccountPathSearchWorksInJournalScopeAndAfterAncestorRename() async throws {
+    func testAccountNameSearchRetainsDisplayPathWithoutMatchingAncestors() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         var data = DemoData.fixture()
@@ -125,10 +125,90 @@ final class JournalVisibilityAndSearchTests: XCTestCase {
         var parent = store.draft(for: try XCTUnwrap(store.account(parentID)))
         parent.name = "Brokerage"
         store.saveAccount(parent)
-        XCTAssertTrue(store.searchAccounts("brokerage:robinhood", ledgerID: ledgerID).contains { $0.id == matches[0].id })
+        XCTAssertTrue(store.searchAccounts("brokerage:robinhood", ledgerID: ledgerID).isEmpty)
+        XCTAssertEqual(store.searchAccounts("brokerage", ledgerID: ledgerID).map(\.id), [parentID])
+        XCTAssertEqual(store.accountParentPath(for: matches[0]), "Brokerage")
         let request = RegisterRenderRequest(data: store.data, rows: store.registerSourceRows(ledgerID: ledgerID), scope: .all, search: "Robinhood", dateInterval: nil, transactionIDs: nil)
         let result = try await RegisterRenderWorker.shared.search(request)
-        XCTAssertFalse(result.rows.isEmpty, "Anywhere search matches posting account names")
+        XCTAssertTrue(result.rows.isEmpty, "Transaction matches must come from their own fields")
+        XCTAssertTrue(store.transactions(scope: .all, ledgerID: ledgerID, search: "Robinhood").isEmpty)
         try store.flushLocalChanges()
     }
+    func testSearchUsesOwnFieldsInColdWarmAndBackgroundPaths() async throws {
+        var data = DemoData.fixture(includeTemplates: true)
+        let ledgerID = data.ledgers[0].id
+        let checking = try XCTUnwrap(data.accounts.firstIndex { $0.name == "Checking" })
+        let expense = try XCTUnwrap(data.accounts.firstIndex { $0.name == "Expenses" })
+        let salary = try XCTUnwrap(data.accounts.firstIndex { $0.name == "Salary" })
+        data.accounts[checking].name = "Needle Account"
+        data.accounts[expense].name = "Needle Category"
+        data.accounts[salary].note = "account-description-only"
+        data.ledgers[0].name = "Needle Journal"
+        data.commodities[0].name = "Needle Currency"
+        data.transactions = Array(data.transactions.prefix(5))
+        for index in data.transactions.indices {
+            data.transactions[index].note = "Unrelated"
+            data.transactions[index].payee = "Other"
+            data.transactions[index].number = ""
+        }
+        data.transactions[0].note = "Needle note"
+        data.transactions[1].number = "REF-NEEDLE-42"
+        data.transactions[2].payee = "Needle merchant"
+        data.transactions[3].postings[0].amount = -123456
+        data.transactions[3].postings[1].amount = 123456
+        data.transactions[4].attachment = AttachmentContainer(assets: [
+            AttachmentAsset(originalFilename: "needle.txt", storedPath: "Attachments/needle.txt", mimeType: "text/plain", sizeBytes: 20)
+        ])
+        let expected = Set(data.transactions.prefix(3).map(\.id))
+        for warm in [false, true] {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            try FileManager.default.createDirectory(at: directory.appendingPathComponent("Attachments"), withIntermediateDirectories: true)
+            try Data("receipt-content-only".utf8).write(to: directory.appendingPathComponent("Attachments/needle.txt"))
+            let store = MobileLedgerStore(supportDirectory: directory, initialData: data)
+            if warm { store.warmTransactionSearchCacheForPerformanceProbe() }
+            XCTAssertEqual(Set(store.searchAccounts("needle", ledgerID: ledgerID).map(\.id)), [data.accounts[checking].id, data.accounts[expense].id])
+            XCTAssertTrue(store.searchAccounts("account-description-only", ledgerID: ledgerID).isEmpty)
+            XCTAssertTrue(store.searchCommodities("needle journal").isEmpty)
+            XCTAssertTrue(store.searchTransactionTemplates("needle").isEmpty)
+            XCTAssertEqual(Set(store.transactions(scope: .all, ledgerID: ledgerID, search: " NeEdLe ").map(\.id)), expected)
+            let request = RegisterRenderRequest(data: store.data, rows: store.registerSourceRows(ledgerID: ledgerID), scope: .all, search: " NeEdLe ", dateInterval: nil, transactionIDs: nil)
+            let quick = try await RegisterRenderWorker.shared.search(request, limit: 40)
+            let full = try await RegisterRenderWorker.shared.render(request)
+            XCTAssertEqual(Set(quick.rows.map(\.id)), expected)
+            XCTAssertEqual(Set(full.presentation.months.flatMap(\.days).flatMap(\.transactions).map(\.id)), expected)
+            for text in ["needle account", "needle category", "needle journal", "needle currency", "needle.txt", "receipt-content-only", "123456"] {
+                XCTAssertTrue(store.transactions(scope: .all, ledgerID: ledgerID, search: text).isEmpty, text)
+                let excluded = RegisterRenderRequest(data: store.data, rows: store.registerSourceRows(ledgerID: ledgerID), scope: .all, search: text, dateInterval: nil, transactionIDs: nil)
+                let result = try await RegisterRenderWorker.shared.search(excluded)
+                XCTAssertTrue(result.rows.isEmpty, text)
+            }
+            var edit = store.draft(for: data.transactions[3])
+            edit.number = "NEW-NEEDLE"
+            store.saveTransactionAndFlush(edit)
+            XCTAssertNil(store.validationError)
+            XCTAssertEqual(Set(store.transactions(scope: .all, ledgerID: ledgerID, search: "needle").map(\.id)), expected.union([data.transactions[3].id]))
+            var accountEdit = store.draft(for: try XCTUnwrap(store.account(data.accounts[checking].id)))
+            accountEdit.name = "Renamed bank"
+            store.saveAccount(accountEdit)
+            XCTAssertEqual(store.searchAccounts("needle", ledgerID: ledgerID).map(\.id), [data.accounts[expense].id])
+            XCTAssertTrue(store.transactions(scope: .all, ledgerID: ledgerID, search: "renamed bank").isEmpty)
+            try store.flushLocalChanges()
+        }
+    }
+
+    func testAccountSearchCanReturnAllMatchesForExpandedResults() throws {
+        var data = DemoData.fixture()
+        let root = try XCTUnwrap(data.accounts.first { $0.kind == .asset && $0.parentID == nil })
+        for index in 0..<40 {
+            data.accounts.append(Account(ledgerID: root.ledgerID, parentID: root.id, commodityID: root.commodityID,
+                name: "Matched account \(index)", kind: .asset, listIndex: 100 + index))
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = MobileLedgerStore(supportDirectory: directory, initialData: data)
+        XCTAssertEqual(store.searchAccounts("matched", ledgerID: root.ledgerID, limit: .max).count, 40)
+        XCTAssertEqual(store.searchAccounts("matched", ledgerID: root.ledgerID, limit: 3).map(\.name), ["Matched account 0", "Matched account 1", "Matched account 2"])
+    }
+
 }
