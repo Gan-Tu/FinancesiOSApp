@@ -12,28 +12,45 @@ struct RegisterMonth: Identifiable {
     let days: [MobileTransactionDaySection]
     let income: [RegisterMoney]
     let expenses: [RegisterMoney]
+    let rows: [RegisterMonthRow]
     var id: Date { date }
+
+    init(date: Date, days: [MobileTransactionDaySection], income: [RegisterMoney], expenses: [RegisterMoney]) {
+        self.date = date
+        self.days = days
+        self.income = income
+        self.expenses = expenses
+        var rows: [RegisterMonthRow] = []
+        rows.reserveCapacity(days.reduce(days.count) { $0 + $1.transactions.count })
+        for day in days {
+            rows.append(.day(day.date))
+            rows.append(contentsOf: day.transactions.map(RegisterMonthRow.transaction))
+        }
+        self.rows = rows
+    }
 }
 
-/// A flat, stable identity collection lets List discover rows without walking
-/// every month's nested day/transaction builders on the main thread.
-enum RegisterListItem: Identifiable {
+/// Each month retains a native List section. This precomputed collection gives
+/// its ForEach one stable ID per independently rendered header/transaction row.
+enum RegisterMonthRow: Identifiable {
     enum ID: Hashable {
-        case month(Date)
         case day(Date)
         case transaction(UUID)
     }
 
-    case month(RegisterMonth)
     case day(Date)
     case transaction(LedgerTransaction)
 
     var id: ID {
         switch self {
-        case .month(let month): .month(month.date)
         case .day(let date): .day(date)
         case .transaction(let transaction): .transaction(transaction.id)
         }
+    }
+
+    var transaction: LedgerTransaction? {
+        if case .transaction(let transaction) = self { return transaction }
+        return nil
     }
 }
 
@@ -119,24 +136,6 @@ struct RegisterPresentation {
     let months: [RegisterMonth]
     let amounts: [UUID: [RegisterMoney]]
     let balances: [UUID: [RegisterMoney]]
-    let listItems: [RegisterListItem]
-
-    init(months: [RegisterMonth], amounts: [UUID: [RegisterMoney]], balances: [UUID: [RegisterMoney]]) {
-        self.months = months
-        self.amounts = amounts
-        self.balances = balances
-        var items: [RegisterListItem] = []
-        items.reserveCapacity(amounts.count + months.count * 4)
-        for month in months {
-            items.append(.month(month))
-            for day in month.days {
-                items.append(.day(day.date))
-                items.append(contentsOf: day.transactions.map(RegisterListItem.transaction))
-            }
-        }
-        listItems = items
-    }
-
     /// Sync timestamps, connection preferences, and security state do not change
     /// register calculations. Array equality is cheap for unchanged COW buffers.
     static func hasSameContent(_ lhs: JournalData, _ rhs: JournalData) -> Bool {

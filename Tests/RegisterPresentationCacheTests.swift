@@ -212,25 +212,43 @@ final class RegisterPresentationCacheTests: XCTestCase {
         XCTAssertTrue((actual.income + actual.expenses).allSatisfy { $0.transactionIDs == [row.id] })
     }
 
-    func testFlatRegisterRowsKeepAllHeadersOrderAndStableTransactionIdentities() throws {
+    func testMonthRowsKeepHeadersAndStableIdentitiesAcrossUpdatesAndRemoval() throws {
         var data = DemoData.fixture(referenceDate: Date(timeIntervalSince1970: 1_788_858_000))
         let rows = data.transactions.sorted { $0.date > $1.date }
         let presentation = RegisterPresentation.build(data: data, rows: rows, scope: .all)
-        var expected: [RegisterListItem.ID] = []
+        func identities(_ presentation: RegisterPresentation) -> [[RegisterMonthRow.ID]] { presentation.months.map { $0.rows.map(\.id) } }
         for month in presentation.months {
-            expected.append(.month(month.date))
+            var expected: [RegisterMonthRow.ID] = []
             for day in month.days {
                 expected.append(.day(day.date))
                 expected.append(contentsOf: day.transactions.map { .transaction($0.id) })
             }
+            XCTAssertEqual(month.rows.map(\.id), expected)
+            XCTAssertEqual(Set(expected).count, expected.count)
         }
-        XCTAssertEqual(presentation.listItems.map(\.id), expected)
-        XCTAssertEqual(Set(expected).count, expected.count)
+        let allIDs = identities(presentation).flatMap { $0 }
+        XCTAssertEqual(Set(allIDs).count, allIDs.count, "Scroll targets must also be unique across month sections")
         let firstID = try XCTUnwrap(rows.first?.id)
         let index = try XCTUnwrap(data.transactions.firstIndex { $0.id == firstID })
         data.transactions[index].cleared.toggle()
         let updated = RegisterPresentation.build(data: data, rows: data.transactions.sorted { $0.date > $1.date }, scope: .all)
-        XCTAssertEqual(updated.listItems.map(\.id), expected, "A clear swipe must update a stable row, not recreate the register")
+        XCTAssertEqual(identities(updated), identities(presentation), "A clear swipe keeps the same independently identifiable row")
+        let day = try XCTUnwrap(presentation.months.first?.days.first)
+        let removedIDs = Set(day.transactions.map(\.id))
+        data.transactions.removeAll { removedIDs.contains($0.id) }
+        let afterDayRemoval = RegisterPresentation.build(data: data, rows: data.transactions.sorted { $0.date > $1.date }, scope: .all)
+        XCTAssertEqual(identities(afterDayRemoval).flatMap { $0 }, allIDs.filter {
+            switch $0 {
+            case .day(let date): date != day.date
+            case .transaction(let id): !removedIDs.contains(id)
+            }
+        })
+        let month = try XCTUnwrap(afterDayRemoval.months.first)
+        let monthIDs = Set(month.days.flatMap(\.transactions).map(\.id))
+        data.transactions.removeAll { monthIDs.contains($0.id) }
+        let afterMonthRemoval = RegisterPresentation.build(data: data, rows: data.transactions.sorted { $0.date > $1.date }, scope: .all)
+        XCTAssertEqual(afterMonthRemoval.months.map(\.id), Array(afterDayRemoval.months.dropFirst().map(\.id)))
+        XCTAssertEqual(identities(afterMonthRemoval), Array(identities(afterDayRemoval).dropFirst()))
     }
 
     func testTenThousandEntryRegisterCacheBenchmark() async throws {

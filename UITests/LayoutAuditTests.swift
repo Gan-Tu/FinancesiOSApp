@@ -31,6 +31,25 @@ final class LayoutAuditTests: XCTestCase {
         capture("07 Cash Flow Chart")
         app.buttons["Monthly Summary"].firstMatch.tap()
         capture("08 Monthly Summary")
+        let groceries = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Groceries")).firstMatch
+        XCTAssertTrue(groceries.waitForExistence(timeout: 5), "The asynchronous monthly projection should publish its categories")
+        groceries.tap()
+        XCTAssertTrue(app.navigationBars["Groceries"].waitForExistence(timeout: 5))
+        let rowPredicate = NSPredicate(format: "identifier BEGINSWITH %@", "register-row-")
+        // The presenting register remains in the accessibility tree behind the
+        // summary sheet. Count all rows in the active collection, including any
+        // offscreen results, rather than rows from both navigation surfaces.
+        let registers = app.collectionViews.containing(rowPredicate)
+        let registerVisible = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            registers.allElementsBoundByIndex.contains { $0.isHittable }
+        }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [registerVisible], timeout: 5), .completed)
+        let visibleRegister = try XCTUnwrap(registers.allElementsBoundByIndex.first { $0.isHittable })
+        let monthlyRows = visibleRegister.buttons.matching(rowPredicate)
+        XCTAssertTrue(monthlyRows.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertEqual(monthlyRows.count, 1, "The selected category should show only this month's matching transaction")
+        XCTAssertTrue(monthlyRows.firstMatch.label.contains("Weekly groceries"))
+        app.navigationBars["Groceries"].buttons.element(boundBy: 0).tap()
         app.navigationBars.buttons["Done"].tap()
         tap("Hide Chart")
         tapPrefix("Weekly groceries")

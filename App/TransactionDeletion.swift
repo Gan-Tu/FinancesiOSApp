@@ -62,36 +62,40 @@ struct TransactionRowSwipeActions: ViewModifier {
     // Rows receive immutable display values; they do not each subscribe to the
     // entire store. Clear actions apply the boolean advertised by this row.
     let store: MobileLedgerStore
-    let transaction: LedgerTransaction
+    let transaction: LedgerTransaction?
     @Binding var pendingDeletion: LedgerTransaction?
     @Binding var pendingDuplication: LedgerTransaction?
     @State private var isDeleting = false
 
     func body(content: Content) -> some View {
-        let targetCleared = !transaction.cleared
         content
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                // A destructive role removes the cell optimistically, before
-                // confirmation or asynchronous query refresh has updated the list.
-                Button("Delete") {
-                    if let rule = transaction.recurrenceRule, rule.frequency != .never {
-                        pendingDeletion = transaction
-                    } else {
-                        guard !isDeleting else { return }
-                        isDeleting = true
-                        Task {
-                            defer { isDeleting = false }
-                            _ = await store.deleteTransactionAsync(transaction.id, scope: .occurrence, expected: transaction)
+                if let transaction {
+                    // A destructive role removes the cell optimistically, before
+                    // confirmation or asynchronous query refresh updates the list.
+                    Button("Delete") {
+                        if let rule = transaction.recurrenceRule, rule.frequency != .never {
+                            pendingDeletion = transaction
+                        } else {
+                            guard !isDeleting else { return }
+                            isDeleting = true
+                            Task {
+                                defer { isDeleting = false }
+                                _ = await store.deleteTransactionAsync(transaction.id, scope: .occurrence, expected: transaction)
+                            }
                         }
-                    }
-                }.tint(.red).disabled(isDeleting)
-                Button("Duplicate") { pendingDuplication = transaction }.tint(.gray)
+                    }.tint(.red).disabled(isDeleting)
+                    Button("Duplicate") { pendingDuplication = transaction }.tint(.gray)
+                }
             }
             .swipeActions(edge: .leading) {
-                Button(targetCleared ? "Cleared" : "Uncleared") {
-                    FinancePerformanceTrace.begin("swipe-clear-\(transaction.id.uuidString)-\(targetCleared)")
-                    store.setTransactionCleared(transaction.id, cleared: targetCleared)
-                }.tint(.blue)
+                if let transaction {
+                    let targetCleared = !transaction.cleared
+                    Button(targetCleared ? "Cleared" : "Uncleared") {
+                        FinancePerformanceTrace.begin("swipe-clear-\(transaction.id.uuidString)-\(targetCleared)")
+                        store.setTransactionCleared(transaction.id, cleared: targetCleared)
+                    }.tint(.blue)
+                }
             }
     }
 }

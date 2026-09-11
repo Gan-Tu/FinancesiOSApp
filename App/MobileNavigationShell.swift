@@ -408,14 +408,12 @@ struct TransactionListScreen: View {
     @State private var loadingVisible = false
     @State private var loadError: String?
 
-    private typealias ScrollTarget = RegisterListItem.ID
+    private typealias ScrollTarget = RegisterMonthRow.ID
 
     var body: some View {
         ScrollViewReader { proxy in
             List {
-                ForEach(presentation.listItems) { item in
-                    registerListRow(item)
-                }
+                ForEach(presentation.months) { month in monthSection(month) }
             }
             .listStyle(.plain)
             .performanceDestination("register-navigation", ready: contentReady)
@@ -513,46 +511,49 @@ struct TransactionListScreen: View {
         }
     }
 
-    @ViewBuilder
-    private func registerListRow(_ item: RegisterListItem) -> some View {
-        switch item {
-        case .month(let month):
+    private func monthSection(_ month: RegisterMonth) -> some View {
+        Section {
             monthHeading(month)
-                .id(item.id)
                 .listRowInsets(EdgeInsets(top: 12, leading: 20, bottom: 10, trailing: 20))
                 .listRowSeparator(.hidden)
                 .accessibilityIdentifier("month-heading")
-        case .day(let date):
-            Text(registerDayTitle(date))
-                .id(item.id)
-                .font(.subheadline.weight(.bold)).foregroundColor(Color(uiColor: .label))
-                .padding(.top, 14).padding(.bottom, 10)
-                .background {
-                    if initialDay == date && !contentReady {
-                        RegisterInitialPositionProbe(armed: initialScrollRequested) {
-                            guard initialDay == date, !contentReady else { return }
-                            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.12)) { contentReady = true }
+            ForEach(month.rows) { item in
+                // The explicit stack guarantees one List row per item. List can
+                // collect IDs without constructing every date/transaction view.
+                VStack(alignment: .leading, spacing: 0) {
+                    switch item {
+                    case .day(let date):
+                        Text(registerDayTitle(date))
+                            .font(.subheadline.weight(.bold)).foregroundColor(Color(uiColor: .label))
+                            .padding(.top, 14).padding(.bottom, 10)
+                            .background {
+                                if initialDay == date && !contentReady {
+                                    RegisterInitialPositionProbe(armed: initialScrollRequested) {
+                                        guard initialDay == date, !contentReady else { return }
+                                        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.12)) { contentReady = true }
+                                    }
+                                }
+                            }
+                    case .transaction(let transaction):
+                        Button {
+                            FinancePerformanceTrace.begin("transaction-detail-navigation"); openTransaction(transaction.id)
+                        } label: {
+                            RegisterRow(transaction: transaction, amounts: presentation.amounts[transaction.id] ?? [], balances: presentation.balances[transaction.id] ?? [], flow: store.accountFlowDisplay(for: transaction), isFuture: RegisterPresentation.isFuture(transaction.date))
+                                .equatable()
+                                .padding(EdgeInsets(top: 8, leading: 28, bottom: 8, trailing: 20))
                         }
+                        .buttonStyle(TransactionRowButtonStyle())
+                        .accessibilityIdentifier("register-row-\(transaction.id.uuidString)")
                     }
                 }
-                .listRowInsets(EdgeInsets(top: 0, leading: 28, bottom: 0, trailing: 20))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .listRowInsets(item.transaction == nil
+                    ? EdgeInsets(top: 0, leading: 28, bottom: 0, trailing: 20) : EdgeInsets())
                 .listRowSeparator(.hidden)
-        case .transaction(let transaction):
-            Button {
-                FinancePerformanceTrace.begin("transaction-detail-navigation"); openTransaction(transaction.id)
-            } label: {
-                RegisterRow(transaction: transaction, amounts: presentation.amounts[transaction.id] ?? [], balances: presentation.balances[transaction.id] ?? [], flow: store.accountFlowDisplay(for: transaction), isFuture: RegisterPresentation.isFuture(transaction.date))
-                    .equatable()
-                    .padding(EdgeInsets(top: 8, leading: 28, bottom: 8, trailing: 20))
+                .modifier(TransactionRowSwipeActions(store: store, transaction: item.transaction,
+                    pendingDeletion: $pendingDeletion, pendingDuplication: $pendingDuplication))
             }
-            .buttonStyle(TransactionRowButtonStyle())
-            .id(item.id)
-            .accessibilityIdentifier("register-row-\(transaction.id.uuidString)")
-            .listRowInsets(EdgeInsets())
-            .listRowSeparator(.hidden)
-            .modifier(TransactionRowSwipeActions(store: store, transaction: transaction,
-                pendingDeletion: $pendingDeletion, pendingDuplication: $pendingDuplication))
-        }
+        }.listSectionSeparator(.hidden)
     }
 
     private func monthHeading(_ month: RegisterMonth) -> some View {
