@@ -2218,6 +2218,17 @@ final class MobileLedgerStore: ObservableObject {
                 deletedIDs: deletedTransactionTombstoneIDs
             )
             try Self.validateCandidateData(candidate, operation: "Transaction")
+            if let previousIndex, let previous, copiedReceipts == nil, preparedDuplicateReceipts == nil,
+               candidate.transactions.indices.contains(previousIndex), candidate.transactions[previousIndex] == previous,
+               candidate.transactions == data.transactions {
+                // Recurrence application can normalize history or replace later
+                // overrides even when the selected entry appears unchanged. Only
+                // an equal complete validated result may keep the UI caches.
+                // Persistence still retries any accepted but not-yet-durable data.
+                committed = true
+                if schedulePersistence { save(syncCloud: true, refreshCache: false) }
+                return
+            }
             data = candidate
             committed = true
             if previous?.recurrenceRule == nil && transaction.recurrenceRule == nil,
