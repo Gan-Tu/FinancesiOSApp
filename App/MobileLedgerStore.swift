@@ -401,6 +401,8 @@ final class MobileLedgerStore: ObservableObject {
     private var deletedTransactionTombstoneIDs: Set<UUID> = []
     private lazy var cloudSyncCoordinator = CloudKitJournalSyncCoordinator(host: self, dependencies: cloudKitSyncDependencies)
     private var deferredCloudSaveToken: UUID?
+    private var cloudStatusRefreshQueued = false
+    private var cloudStatusRefreshGeneration: UInt64 = 0
     private var backupFileOperationInProgress = false
     private var backupSelectionChanged = false
     private var derivedCache = MobileLedgerDerivedCache()
@@ -2671,15 +2673,7 @@ final class MobileLedgerStore: ObservableObject {
         UIApplication.shared.registerForRemoteNotifications()
     }
 
-    func refreshCloudSyncConflicts() {
-        guard !requiresJournalRecovery else {
-            cloudSyncConflicts = []
-            return
-        }
-        if let conflicts = try? cloudSyncCoordinator.conflicts() {
-            cloudSyncConflicts = conflicts
-        }
-    }
+    func refreshCloudSyncConflicts() { refreshCloudSyncDataAvailability() }
 
     func resolveCloudKitSyncConflict(id: String, keepLocal: Bool) {
         do {
@@ -2694,19 +2688,45 @@ final class MobileLedgerStore: ObservableObject {
     }
 
     private func refreshCloudSyncDataAvailability() {
+        cloudStatusRefreshGeneration &+= 1
+        enqueueCloudStatusRefreshIfNeeded()
+    }
+
+    private func enqueueCloudStatusRefreshIfNeeded() {
         guard !requiresJournalRecovery else {
-            cloudSyncDataAvailable = false
-            cloudSyncConflicts = []
+            if cloudSyncDataAvailable { cloudSyncDataAvailable = false }
+            if !cloudSyncConflicts.isEmpty { cloudSyncConflicts = [] }
             return
         }
+        guard !cloudStatusRefreshQueued else { return }
+        cloudStatusRefreshQueued = true
+        let generation = cloudStatusRefreshGeneration
         let databaseURL = sqliteStore.databaseURL
-        let hasMetadata = (try? Self.deferredPersistenceQueue.sync {
+        // Status is read-only. Never make a view update synchronously wait for
+        // the serial writer, and coalesce refreshes while a read is in flight.
+        Self.deferredPersistenceQueue.async { [weak self] in
+            let status: (available: Bool, conflicts: [CloudKitSyncConflict])?
             let store = SQLiteJournalStore(databaseURL: databaseURL)
-            guard let key = try store.cloudKitBoundContextKey() else { return false }
-            return try store.hasCloudKitSyncState(contextKey: key)
-        }) ?? false
-        cloudSyncDataAvailable = data.lastSyncedAt != nil || hasMetadata
-        refreshCloudSyncConflicts()
+            do {
+                if let key = try store.cloudKitBoundContextKey() {
+                    status = (try store.hasCloudKitSyncState(contextKey: key),
+                              try store.unresolvedCloudKitConflicts(contextKey: key))
+                } else { status = (false, []) }
+            } catch { status = nil }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.cloudStatusRefreshQueued = false
+                guard generation == self.cloudStatusRefreshGeneration, !self.requiresJournalRecovery else {
+                    self.enqueueCloudStatusRefreshIfNeeded()
+                    return
+                }
+                // A failed status read must not hide an existing conflict.
+                guard let status else { return }
+                let available = self.data.lastSyncedAt != nil || status.available
+                if self.cloudSyncDataAvailable != available { self.cloudSyncDataAvailable = available }
+                if self.cloudSyncConflicts != status.conflicts { self.cloudSyncConflicts = status.conflicts }
+            }
+        }
     }
 
     func resetCloudSync() {

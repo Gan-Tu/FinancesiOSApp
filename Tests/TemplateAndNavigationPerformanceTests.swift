@@ -1,5 +1,6 @@
 import XCTest
 import Combine
+import SQLite3
 @testable import FinancesClone
 
 @MainActor
@@ -123,6 +124,49 @@ final class TemplateAndNavigationPerformanceTests: XCTestCase {
         XCTAssertEqual(store.templateAccountSelectionPostingIDs(in: empty), empty.postings.map(\.id))
     }
 
+    func testStatusRefreshDoesNotWaitForBusySQLiteOrRepublishUnchangedData() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let snapshot = DemoData.fixture()
+        let store = MobileLedgerStore(supportDirectory: directory, initialData: snapshot)
+        let database = store.cloudKitSQLiteStore
+        _ = try database.bindCloudKitAccount(contextKey: "status-performance", accountID: "fixture")
+        let ready = expectation(description: "Asynchronous status arrives")
+        let available = store.$cloudSyncDataAvailable.filter { $0 }.prefix(1).sink { _ in ready.fulfill() }
+        store.refreshCloudSyncConflicts()
+        await fulfillment(of: [ready], timeout: 5)
+
+        // Hold a real SQLite writer busy. Its access lock must never hold up
+        // the main actor just because a view wants to refresh sync status.
+        let lock = try StatusTestSQLiteWriteLock(url: database.databaseURL)
+        defer { lock.release() }
+        let writerStarted = expectation(description: "Writer started")
+        let writerFinished = expectation(description: "Writer finished")
+        DispatchQueue.global(qos: .userInitiated).async {
+            writerStarted.fulfill()
+            do { try database.persist(snapshot, previous: nil, trackSyncChanges: false) }
+            catch { XCTFail("Fixture writer failed: \(error)") }
+            writerFinished.fulfill()
+        }
+        await fulfillment(of: [writerStarted], timeout: 5)
+        try await Task.sleep(for: .milliseconds(80))
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.6) { lock.release() }
+        var journalChanges = 0
+        let observer = store.objectWillChange.sink { journalChanges += 1 }
+        let start = ContinuousClock.now
+        for _ in 0..<200 { store.refreshCloudSyncConflicts() }
+        let elapsed = start.duration(to: .now)
+        print("200 coalesced sync status requests with a busy writer: \(elapsed)")
+        XCTAssertLessThan(elapsed, .milliseconds(200))
+        XCTAssertEqual(journalChanges, 0)
+        await fulfillment(of: [writerFinished], timeout: 5)
+        await store.waitForCloudKitSyncIdle()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(store.cloudSyncDataAvailable)
+        XCTAssertEqual(journalChanges, 0, "Unchanged status must not invalidate account and transaction views")
+        withExtendedLifetime((available, observer)) {}
+    }
+
     func testSyncProgressDoesNotInvalidateJournalObservers() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -195,5 +239,27 @@ final class TemplateAndNavigationPerformanceTests: XCTestCase {
         let cached = cachedStart.duration(to: .now)
         XCTAssertEqual(actual, expected)
         print("UNCLEARED_LOOKUP_BENCHMARK rows=10000 iterations=25 baseline=\(baseline) optimized=\(cached)")
+    }
+}
+
+/// Independent test connection; all access after creation is protected because
+/// release may run on the delayed-unlock queue or during teardown.
+private final class StatusTestSQLiteWriteLock: @unchecked Sendable {
+    private let mutex = NSLock()
+    private var database: OpaquePointer?
+    init(url: URL) throws {
+        guard sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK,
+              sqlite3_exec(database, "BEGIN IMMEDIATE", nil, nil, nil) == SQLITE_OK else {
+            if let database { sqlite3_close(database) }
+            database = nil
+            throw NSError(domain: "StatusTestSQLiteWriteLock", code: 1)
+        }
+    }
+    func release() {
+        mutex.lock(); defer { mutex.unlock() }
+        guard let database else { return }
+        sqlite3_exec(database, "ROLLBACK", nil, nil, nil)
+        sqlite3_close(database)
+        self.database = nil
     }
 }
