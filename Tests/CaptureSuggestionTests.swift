@@ -162,6 +162,7 @@ final class CaptureSuggestionTests: XCTestCase {
         let router = SystemEntryRouter(suggestionRepository: repository)
         var draft = store.draft(for: store.data.transactions[0])
         draft.id = nil; draft.saveOperationID = capture.id; draft.repeatFrequency = .never; draft.recurrenceRuleID = nil
+        draft.incomingEditorSessionID = UUID()
         draft.postings = draft.postings.map { PostingDraft(accountID: $0.accountID, amount: $0.amount, commodityID: $0.commodityID) }
         draft.attachments = []; draft.attachmentContainer = nil
         try SQLiteWriteAudit.execute("CREATE TRIGGER reject_capture BEFORE INSERT ON transactions BEGIN SELECT RAISE(ABORT, 'Synthetic capture write failure'); END", at: store.cloudKitSQLiteStore.databaseURL)
@@ -195,5 +196,30 @@ final class CaptureSuggestionTests: XCTestCase {
         let cleared = try await repository.load()
         XCTAssertTrue(cleared.journals.isEmpty)
         XCTAssertTrue(cleared.templates.isEmpty)
+    }
+
+    func testCatalogRetriesUnchangedMetadataAfterStorageRecovers() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let blockedParent = directory.appendingPathComponent("blocked")
+        try Data("Synthetic write obstruction".utf8).write(to: blockedParent)
+        let repository = SystemIntegrationCatalogRepository(url: blockedParent.appendingPathComponent("Catalog.json"))
+        var publications = 0
+        let router = SystemEntryRouter(catalogRepository: repository, publishShortcutParameters: { publications += 1 })
+        let data = DemoData.fixture(includeTemplates: true)
+        router.updateCatalog(data: data, hiddenLedgerIDs: [])
+        await router.waitForCatalogUpdates()
+        XCTAssertEqual(publications, 0)
+        try FileManager.default.removeItem(at: blockedParent)
+        router.updateCatalog(data: data, hiddenLedgerIDs: [])
+        await router.waitForCatalogUpdates()
+        let loaded = try await repository.load()
+        XCTAssertEqual(publications, 1)
+        XCTAssertEqual(Set(loaded.journals.map(\.id)), Set(data.ledgers.map(\.id)))
+        XCTAssertEqual(Set(loaded.templates.map(\.id)), Set(data.transactionTemplates.filter(\.enabled).map(\.id)))
+        router.updateCatalog(data: data, hiddenLedgerIDs: [])
+        await router.waitForCatalogUpdates()
+        XCTAssertEqual(publications, 1, "Successful unchanged snapshots should stay cached")
     }
 }

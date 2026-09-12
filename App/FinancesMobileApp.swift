@@ -77,11 +77,13 @@ private struct FinancesMobileNormalContent: View {
                 store.refreshAppIconBadge()
                 store.refreshDailyBalancesIfNeeded()
                 store.refreshHistoricalSuggestionsForClockChange()
+                store.refreshRefundPresentationsForClockChange()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in
                 store.refreshAppIconBadge()
                 store.refreshDailyBalancesIfNeeded()
                 store.refreshHistoricalSuggestionsForClockChange()
+                store.refreshRefundPresentationsForClockChange()
             }
     }
 }

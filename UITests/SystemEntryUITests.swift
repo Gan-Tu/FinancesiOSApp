@@ -164,4 +164,33 @@ final class SystemEntryUITests: XCTestCase {
         try assertAmount(app.textFields["Amount for SYNTHETIC Bank"], "40")
         try assertAmount(app.textFields["Amount for SYNTHETIC Expense"], "-40")
     }
+
+    func testUnreadableRefundRecoveryIsReachableFromPurchaseAndClonedJournalList() {
+        continueAfterFailure = false
+        let app = XCUIApplication(); defer { app.terminate() }
+        for mode in ["--demo-unreadable-refund", "--demo-cloned-refund"] {
+            app.launchArguments = ["--demo", "--demo-system-entry", "--reset-demo", mode]
+            app.launch()
+            XCTAssertTrue(app.navigationBars["Journals"].waitForExistence(timeout: 10))
+            if mode == "--demo-unreadable-refund" { openRefund(app) }
+            else {
+                journal(app, "Alpha").tap()
+                app.buttons["Refunds & Reimbursements"].tap()
+            }
+            let repair = app.buttons["Remove Unreadable Tracking"]
+            XCTAssertTrue(repair.waitForExistence(timeout: 5))
+            XCTAssertTrue(repair.isEnabled)
+            repair.tap()
+            let confirm = app.buttons["Remove Tracking"]
+            XCTAssertTrue(confirm.waitForExistence(timeout: 5)); confirm.tap()
+            let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: repair)
+            XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 5), .completed)
+            app.terminate(); launch(app, reset: false)
+            XCTAssertTrue(journal(app, "Alpha").label.contains("2 Transactions"))
+            openRefund(app)
+            XCTAssertTrue(app.textFields["refund-expected-amount"].waitForExistence(timeout: 5))
+            XCTAssertFalse(repair.exists)
+            app.terminate()
+        }
+    }
 }

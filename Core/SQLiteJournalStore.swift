@@ -2144,6 +2144,19 @@ final class SQLiteJournalStore: @unchecked Sendable {
         return Set(ids)
     }
 
+    /// Capture conversion is create-once, including after reopening or an
+    /// unrelated write failure invalidates the in-memory persistence baseline.
+    func hasRecordedTransaction(_ id: UUID) throws -> Bool {
+        let database = try open(readOnly: true, createIfMissing: false)
+        defer { sqlite3_close(database) }
+        return try rows("""
+            SELECT EXISTS(SELECT 1 FROM transactions WHERE id = ?1)
+                OR EXISTS(SELECT 1 FROM sync_tombstones WHERE record_type = 'transaction' AND record_id = ?1)
+            """, database: database, bindValues: {
+                try bind(id.uuidString, to: $0, at: 1, database)
+            }, map: { sqlite3_column_int($0, 0) != 0 }).first ?? false
+    }
+
     /// A raced batch may contain both accepted records and conflicts. Commit
     /// acknowledgements before surfacing conflicts so independent edits do not
     /// remain stuck behind a record that needs user resolution.

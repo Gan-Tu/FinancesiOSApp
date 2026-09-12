@@ -14,6 +14,7 @@ struct RefundPaymentCandidate: Identifiable, @unchecked Sendable {
 
 struct RefundPresentation: @unchecked Sendable {
     let id = UUID()
+    let asOf: Date
     let overview: RefundTrackingOverview
     let recordsByPurchase: [UUID: RefundTrackingRecord]
     let summariesByPurchase: [UUID: RefundTrackingSummary]
@@ -21,6 +22,10 @@ struct RefundPresentation: @unchecked Sendable {
     let candidatesByCurrency: [UUID: [RefundPaymentCandidate]]
     let allocatedByCurrency: [UUID: [UUID: Decimal]]
     let nextFutureDate: Date?
+
+    func isCurrent(at date: Date) -> Bool {
+        date >= asOf && (nextFutureDate.map { date < $0 } ?? true)
+    }
 
     func available(_ candidate: RefundPaymentCandidate, for record: RefundTrackingRecord) -> Decimal {
         let allocated = allocatedByCurrency[record.commodityID]?[candidate.id] ?? .zero
@@ -55,7 +60,7 @@ private actor RefundPresentationWorker {
             // accounts, so it cannot rescan the full journal for every row.
             let bounded = JournalData(ledgers: ledgers, commodities: currencies, accounts: postingAccounts, transactions: [transaction])
             for currencyID in touched {
-                if let amount = try? RefundTracking.incomingAmount(transactionID: transaction.id, commodityID: currencyID, ledgerID: ledgerID, in: bounded) {
+                if let amount = try? RefundTracking.incomingAmount(transactionID: transaction.id, commodityID: currencyID, ledgerID: ledgerID, in: bounded, asOf: snapshot.asOf) {
                     candidates[currencyID, default: []].append(RefundPaymentCandidate(transaction: transaction, incomingAmount: amount))
                 }
             }
@@ -67,6 +72,7 @@ private actor RefundPresentationWorker {
         }
 
         var records: [RefundTrackingRecord] = [], sourcesByID: [UUID: TransactionSource] = [:], issues: [String] = []
+        var unreadableSources: [RefundTrackingMetadataIssue] = []
         var peersByIncoming: [UUID: Set<UUID>] = [:]
         var allocatedByCurrency: [UUID: [UUID: Decimal]] = [:]
         for source in data.sources where source.ledgerID == ledgerID && source.type == RefundTracking.sourceType {
@@ -80,7 +86,10 @@ private actor RefundPresentationWorker {
                         allocatedByCurrency[record.commodityID, default: [:]][link.transactionID, default: .zero] += link.amount
                     }
                 }
-            } catch { issues.append(error.localizedDescription) }
+            } catch {
+                issues.append(error.localizedDescription)
+                unreadableSources.append(RefundTrackingMetadataIssue(source: source, message: error.localizedDescription))
+            }
         }
         var summaries: [RefundTrackingSummary] = []
         for record in records {
@@ -97,12 +106,12 @@ private actor RefundPresentationWorker {
             for link in record.links { peers.formUnion(peersByIncoming[link.transactionID] ?? []) }
             let bounded = JournalData(ledgers: ledgers, commodities: currencies, accounts: postingAccounts,
                 transactions: referenced, sources: peers.compactMap { sourcesByID[$0] })
-            if let summary = RefundTracking.overview(in: bounded, ledgerID: ledgerID).summaries.first(where: { $0.id == record.id }) {
+            if let summary = RefundTracking.overview(in: bounded, ledgerID: ledgerID, asOf: snapshot.asOf).summaries.first(where: { $0.id == record.id }) {
                 summaries.append(summary)
             }
         }
         summaries.sort { $0.id.canonicallyPrecedes($1.id) }
-        return RefundPresentation(overview: RefundTrackingOverview(summaries: summaries, issues: issues),
+        return RefundPresentation(asOf: snapshot.asOf, overview: RefundTrackingOverview(summaries: summaries, issues: issues, unreadableSources: unreadableSources),
             recordsByPurchase: Dictionary(records.map { ($0.purchaseTransactionID, $0) }, uniquingKeysWith: { first, _ in first }),
             summariesByPurchase: Dictionary(summaries.map { ($0.record.purchaseTransactionID, $0) }, uniquingKeysWith: { first, _ in first }),
             currencies: currencies, candidatesByCurrency: candidates, allocatedByCurrency: allocatedByCurrency, nextFutureDate: nextFuture)
@@ -126,36 +135,50 @@ private actor RefundPresentationWorker {
 @MainActor
 final class RefundPresentationCache {
     private struct Key: Hashable { let ledgerID: UUID; let revision: UInt64 }
+    private struct BuildKey: Hashable { let key: Key; let asOf: Date }
     private struct SearchKey: Hashable { let presentationID: UUID; let recordID: UUID; let query: String }
     private var entries: [Key: RefundPresentation] = [:]
-    private var pending: [Key: Task<RefundPresentation, Error>] = [:]
+    private var pending: [BuildKey: Task<RefundPresentation, Error>] = [:]
+    private var builds: [Key: BuildKey] = [:]
     private var latest: [UUID: UInt64] = [:]
     private var searches: [SearchKey: [RefundPaymentCandidate]] = [:]
 
-    func presentation(data: JournalData, ledgerID: UUID, revision: UInt64) async throws -> RefundPresentation {
+    func presentation(data: JournalData, ledgerID: UUID, revision: UInt64, asOf: Date = Date()) async throws -> RefundPresentation {
         try Task.checkCancellation()
-        let key = Key(ledgerID: ledgerID, revision: revision), now = Date()
+        let key = Key(ledgerID: ledgerID, revision: revision)
         if let previous = latest[ledgerID], previous != revision {
             entries = entries.filter { $0.key.ledgerID != ledgerID }
-            for (oldKey, task) in pending where oldKey.ledgerID == ledgerID { task.cancel(); pending[oldKey] = nil }
+            for (oldKey, task) in pending where oldKey.key.ledgerID == ledgerID { task.cancel(); pending[oldKey] = nil }
+            builds = builds.filter { $0.key.ledgerID != ledgerID }
             searches.removeAll()
         }
         latest[ledgerID] = revision
-        if let entry = entries[key], entry.nextFutureDate.map({ now < $0 }) ?? true { return entry }
+        if let entry = entries[key], entry.isCurrent(at: asOf) { return entry }
+        let buildKey: BuildKey
         let work: Task<RefundPresentation, Error>
-        if let existing = pending[key] { work = existing }
+        if let existingKey = builds[key], let existing = pending[existingKey] {
+            buildKey = existingKey; work = existing
+        }
         else {
-            let snapshot = RefundReadSnapshot(data: data, ledgerID: ledgerID, asOf: now)
+            buildKey = BuildKey(key: key, asOf: asOf)
+            let snapshot = RefundReadSnapshot(data: data, ledgerID: ledgerID, asOf: asOf)
             work = Task { try await RefundPresentationWorker.shared.build(snapshot) }
-            pending[key] = work
+            builds[key] = buildKey; pending[buildKey] = work
         }
         let result: RefundPresentation
         do { result = try await work.value }
-        catch { pending[key] = nil; throw error }
+        catch { pending[buildKey] = nil; throw error }
         guard latest[ledgerID] == revision else { throw CancellationError() }
-        pending[key] = nil
-        if entries.count >= 2, entries[key] == nil { entries.removeAll(); searches.removeAll() }
-        entries[key] = result
+        pending[buildKey] = nil
+        // A shared build may have started before the payment deadline or a
+        // backward clock change. Rebuild for this caller's captured instant.
+        guard result.isCurrent(at: asOf) else {
+            return try await presentation(data: data, ledgerID: ledgerID, revision: revision, asOf: asOf)
+        }
+        if builds[key] == buildKey {
+            if entries.count >= 2, entries[key] == nil { entries.removeAll(); searches.removeAll() }
+            entries[key] = result
+        }
         try Task.checkCancellation()
         return result
     }
@@ -171,15 +194,68 @@ final class RefundPresentationCache {
     }
 }
 
+private struct RefundPresentationClock: ViewModifier {
+    @EnvironmentObject private var store: MobileLedgerStore
+    let deadline: Date?
+
+    func body(content: Content) -> some View {
+        content.task(id: deadline) {
+            guard let deadline else { return }
+            do {
+                while deadline > Date() {
+                    // Recheck wall time periodically; app foreground and clock
+                    // notifications also invalidate the store's read revision.
+                    try await Task.sleep(for: .seconds(max(0, min(deadline.timeIntervalSinceNow, 3_600))))
+                }
+                try Task.checkCancellation()
+                store.refreshRefundPresentationsForClockChange()
+            } catch {}
+        }
+    }
+}
+
+private struct RefundMetadataRecoveryView: View {
+    @EnvironmentObject private var store: MobileLedgerStore
+    let issue: RefundTrackingMetadataIssue
+    @State private var confirmRemoval = false
+    @State private var saving = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(issue.message).foregroundStyle(.orange)
+            Button("Remove Unreadable Tracking", role: .destructive) { confirmRemoval = true }
+                .disabled(saving)
+                .accessibilityIdentifier("refund-remove-unreadable-\(issue.id.uuidString)")
+        }
+        .confirmationDialog("Remove unreadable tracking?", isPresented: $confirmRemoval) {
+            Button("Remove Tracking", role: .destructive) {
+                saving = true
+                Task {
+                    _ = await store.removeUnreadableRefundTrackingAsync(issue.source)
+                    saving = false
+                }
+            }
+        } message: {
+            Text("Only this journal's unreadable tracking metadata will be removed. Your transactions and payment amounts will be kept.")
+        }
+    }
+}
+
 struct RefundTrackingListView: View {
     @EnvironmentObject private var store: MobileLedgerStore
     let ledgerID: UUID
     @State private var summaries: [RefundTrackingSummary] = []
     @State private var issues: [String] = []
+    @State private var unreadableSources: [RefundTrackingMetadataIssue] = []
     @State private var loading = true
+    @State private var nextFutureDate: Date?
     var body: some View {
         List {
-            if !issues.isEmpty { Section("Needs Attention") { ForEach(issues, id: \.self) { Text($0).foregroundStyle(.orange) } } }
+            if !unreadableSources.isEmpty {
+                Section("Needs Attention") { ForEach(unreadableSources) { RefundMetadataRecoveryView(issue: $0) } }
+            } else if !issues.isEmpty {
+                Section("Needs Attention") { ForEach(issues, id: \.self) { Text($0).foregroundStyle(.orange) } }
+            }
             ForEach(summaries) { summary in
                 NavigationLink {
                     RefundTrackingDetailView(purchaseID: summary.record.purchaseTransactionID)
@@ -198,13 +274,17 @@ struct RefundTrackingListView: View {
             else if summaries.isEmpty && issues.isEmpty { ContentUnavailableView("No Tracked Refunds", systemImage: "arrow.uturn.backward.circle", description: Text("Open a purchase and choose Refund or Reimbursement to track money you expect back.")) }
         }
         .navigationTitle("Refunds & Reimbursements").navigationBarTitleDisplayMode(.inline)
+        .modifier(RefundPresentationClock(deadline: nextFutureDate))
+        .alert(item: $store.validationError) { error in Alert(title: Text("Refund Tracking"), message: Text(error.message)) }
         .task(id: store.refundPresentationRevision) {
             let revision = store.refundPresentationRevision
             do {
                 let presentation = try await store.refundPresentations.presentation(data: store.data, ledgerID: ledgerID, revision: revision)
                 try Task.checkCancellation()
                 guard revision == store.refundPresentationRevision else { return }
-                summaries = presentation.overview.summaries; issues = presentation.overview.issues; loading = false
+                summaries = presentation.overview.summaries; issues = presentation.overview.issues
+                unreadableSources = presentation.overview.unreadableSources
+                nextFutureDate = presentation.nextFutureDate; loading = false
             } catch is CancellationError {} catch { issues = [error.localizedDescription]; loading = false }
         }
     }
@@ -238,12 +318,14 @@ struct RefundTrackingDetailView: View {
     @State private var dueDate = Date()
     @State private var loaded = false
     @State private var loadingError: String?
+    @State private var recoveryIssue: RefundTrackingMetadataIssue?
     @State private var saving = false
     @State private var confirmRemove = false
     @State private var route: EditorRoute?
     @State private var record: RefundTrackingRecord?
     @State private var summary: RefundTrackingSummary?
     @State private var currencies: [Commodity] = []
+    @State private var nextFutureDate: Date?
     private var purchase: LedgerTransaction? { store.transaction(purchaseID) }
     var body: some View {
         Form {
@@ -301,11 +383,18 @@ struct RefundTrackingDetailView: View {
         .disabled(!loaded || saving)
         .overlay {
             if !loaded {
-                if let loadingError { ContentUnavailableView("Tracking Unavailable", systemImage: "exclamationmark.triangle", description: Text(loadingError)) }
+                if let recoveryIssue {
+                    VStack(spacing: 16) {
+                        ContentUnavailableView("Tracking Unavailable", systemImage: "exclamationmark.triangle")
+                        RefundMetadataRecoveryView(issue: recoveryIssue).padding()
+                    }
+                }
+                else if let loadingError { ContentUnavailableView("Tracking Unavailable", systemImage: "exclamationmark.triangle", description: Text(loadingError)) }
                 else { ProgressView("Loading Tracking…") }
             }
         }
         .navigationTitle("Refund / Reimbursement").navigationBarTitleDisplayMode(.inline)
+        .modifier(RefundPresentationClock(deadline: nextFutureDate))
         .task(id: store.refundPresentationRevision) {
             let revision = store.refundPresentationRevision
             do {
@@ -323,6 +412,8 @@ struct RefundTrackingDetailView: View {
                 record = presentation.recordsByPurchase[purchaseID]
                 summary = presentation.summariesByPurchase[purchaseID]
                 currencies = presentation.currencies
+                nextFutureDate = presentation.nextFutureDate
+                recoveryIssue = nil; loadingError = nil
                 guard !loaded else { return }; loaded = true
                 if let record {
                     kind = record.kind; amount = decimalInputString(record.expectedAmount); currencyID = record.commodityID
@@ -334,7 +425,10 @@ struct RefundTrackingDetailView: View {
                     amount = posting.map { decimalInputString(abs($0.amount)) } ?? ""
                 }
             } catch is CancellationError {} catch {
-                if !loaded { loadingError = error.localizedDescription }
+                recoveryIssue = store.data.sources.first { $0.id == RefundTracking.sourceID(for: purchaseID) }
+                    .flatMap { RefundTracking.metadataIssue(for: $0) }
+                if recoveryIssue != nil { loaded = false; loadingError = error.localizedDescription }
+                else if !loaded { loadingError = error.localizedDescription }
                 else { store.validationError = ValidationError(message: error.localizedDescription) }
             }
         }
@@ -362,6 +456,7 @@ private struct RefundPaymentPicker: View {
     @State private var search = ""
     @State private var candidates: [RefundPaymentCandidate] = []
     @State private var loading = true
+    @State private var nextFutureDate: Date?
     private struct Request: Hashable { let revision: UInt64; let query: String }
     var body: some View {
         List {
@@ -377,6 +472,7 @@ private struct RefundPaymentPicker: View {
                 }
             }
         }.navigationTitle("Link Received Payment").searchable(text: $search)
+            .modifier(RefundPresentationClock(deadline: nextFutureDate))
             .overlay { if loading && candidates.isEmpty { ProgressView() } }
             .task(id: Request(revision: store.refundPresentationRevision, query: search)) {
                 let revision = store.refundPresentationRevision, query = search
@@ -387,7 +483,7 @@ private struct RefundPaymentPicker: View {
                     let results = try await store.refundPresentations.candidates(in: presentation, record: current, matching: query)
                     try Task.checkCancellation()
                     guard revision == store.refundPresentationRevision, query == search else { return }
-                    candidates = results; loading = false
+                    candidates = results; nextFutureDate = presentation.nextFutureDate; loading = false
                 } catch is CancellationError {} catch {
                     loading = false; store.validationError = ValidationError(message: error.localizedDescription)
                 }
@@ -403,6 +499,7 @@ private struct RefundPaymentAllocationView: View {
     @State private var amount = ""
     @State private var saving = false
     @State private var initialized = false
+    @State private var nextFutureDate: Date?
     var body: some View {
         Form {
             Section {
@@ -421,13 +518,15 @@ private struct RefundPaymentAllocationView: View {
                 }
             }.disabled(saving || (decimalFromInput(amount) ?? 0) <= 0)
         }.navigationTitle("Received Amount")
+            .modifier(RefundPresentationClock(deadline: nextFutureDate))
             .task(id: store.refundPresentationRevision) {
-                guard !initialized else { return }
                 let revision = store.refundPresentationRevision
                 do {
                     let presentation = try await store.refundPresentations.presentation(data: store.data, ledgerID: record.ledgerID, revision: revision)
                     try Task.checkCancellation()
                     guard revision == store.refundPresentationRevision else { return }
+                    nextFutureDate = presentation.nextFutureDate
+                    guard !initialized else { return }
                     let current = presentation.recordsByPurchase[record.purchaseTransactionID] ?? record
                     let candidate = presentation.candidatesByCurrency[current.commodityID]?.first { $0.id == transaction.id }
                     let capacity = candidate.map { presentation.available($0, for: current) } ?? .zero

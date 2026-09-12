@@ -553,6 +553,9 @@ struct TransactionDraft: Identifiable, Equatable {
     /// Transient identity retained across Save retries; never serialized into a
     /// journal. A failed durable save cannot create a second copy on retry.
     var saveOperationID = UUID()
+    /// Incoming captures retain a stable transaction ID but each editor has its
+    /// own save session, so two windows cannot coalesce distinct edited drafts.
+    var incomingEditorSessionID: UUID?
     var id: UUID?
     var ledgerID: UUID? = nil
     var date = Date()

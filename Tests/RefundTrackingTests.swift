@@ -131,6 +131,51 @@ final class RefundTrackingTests: XCTestCase {
         XCTAssertTrue(try RefundTracking.removing(purchaseID: f.purchase.id, in: data).sources.isEmpty)
     }
 
+    func testUnreadableRecoveryKeepsEnvelopeIdentityAndPreservesOtherJournals() throws {
+        let f = RefundFixture()
+        var data = try RefundTracking.saving(f.draft, in: f.data)
+        let original = try XCTUnwrap(data.sources.first)
+        var clone = original
+        clone.id = UUID(); clone.ledgerID = UUID()
+        data.sources.append(clone)
+        let overview = RefundTracking.overview(in: data, ledgerID: clone.ledgerID)
+        let issue = try XCTUnwrap(overview.unreadableSources.first)
+        XCTAssertEqual(issue.source, clone, "The recovery action must retain the imported envelope, not its old payload IDs")
+        XCTAssertEqual(overview.unreadableSources.count, 1)
+        let recovered = try RefundTracking.removingUnreadableSource(issue.source, in: data)
+        XCTAssertEqual(recovered.sources, [original])
+        XCTAssertEqual(recovered.transactions, data.transactions)
+        XCTAssertEqual(recovered.accounts, data.accounts)
+        XCTAssertEqual(try JSONEncoder.appEncoder.encode(RefundTracking.removingUnreadableSource(issue.source, in: recovered)),
+                       try JSONEncoder.appEncoder.encode(recovered), "A durable retry is idempotent")
+
+        data.sources[0].externalID = RefundTracking.externalIDPrefix + "{}"
+        let originalIssue = try XCTUnwrap(RefundTracking.metadataIssue(for: data.sources[0]))
+        XCTAssertEqual(originalIssue.id, RefundTracking.sourceID(for: f.purchase.id))
+        let repairedOriginal = try RefundTracking.removingUnreadableSource(originalIssue.source, in: data)
+        XCTAssertEqual(repairedOriginal.sources, [clone])
+        XCTAssertEqual(repairedOriginal.transactions, f.data.transactions)
+    }
+
+    func testUnreadableRecoveryRejectsChangedHealthyWrongTypeAndReferencedSources() throws {
+        let f = RefundFixture()
+        var data = try RefundTracking.saving(f.draft, in: f.data)
+        let healthy = try XCTUnwrap(data.sources.first)
+        XCTAssertThrowsError(try RefundTracking.removingUnreadableSource(healthy, in: data))
+        data.sources[0].externalID = RefundTracking.externalIDPrefix + "{}"
+        let confirmed = data.sources[0]
+        var changed = data; changed.sources[0] = healthy
+        XCTAssertThrowsError(try RefundTracking.removingUnreadableSource(confirmed, in: changed), "Do not remove a record repaired after confirmation")
+        changed = data; changed.sources[0].ledgerID = UUID()
+        XCTAssertThrowsError(try RefundTracking.removingUnreadableSource(confirmed, in: changed))
+        changed = data; changed.sources[0].externalID = "Another unreadable value"
+        XCTAssertThrowsError(try RefundTracking.removingUnreadableSource(confirmed, in: changed))
+        changed = data; changed.sources[0].type = 0
+        XCTAssertThrowsError(try RefundTracking.removingUnreadableSource(changed.sources[0], in: changed))
+        changed = data; changed.transactions[0].sourceID = confirmed.id
+        XCTAssertThrowsError(try RefundTracking.removingUnreadableSource(confirmed, in: changed), "Recovery must not orphan an existing transaction source")
+    }
+
     private func summary(_ data: JournalData, _ f: RefundFixture) throws -> RefundTrackingSummary {
         try XCTUnwrap(RefundTracking.overview(in: data, ledgerID: f.ledger.id).summaries.first { $0.record.purchaseTransactionID == f.purchase.id })
     }
@@ -178,6 +223,59 @@ final class RefundTrackingPersistenceTests: XCTestCase {
         XCTAssertNil(updated.summariesByPurchase[f.purchase.id]?.outstandingAmount)
         let updatedCandidates = try await cache.candidates(in: updated, record: record, matching: "refund")
         XCTAssertEqual(updatedCandidates.map(\.id), [f.refund40.id])
+    }
+
+    func testReadPresentationUsesCapturedClockAndExpiresAtPaymentDateInBothDirections() async throws {
+        let f = RefundFixture()
+        var data = try RefundTracking.saving(f.draft, in: f.data)
+        data = try RefundTracking.linking(purchaseID: f.purchase.id, incomingTransactionID: f.refund60.id, amount: 60, in: data)
+        let start = Date(timeIntervalSince1970: 2_000_000_000)
+        let firstDeadline = start.addingTimeInterval(60), secondDeadline = start.addingTimeInterval(120)
+        data.transactions[data.transactions.firstIndex(where: { $0.id == f.refund60.id })!].date = firstDeadline
+        data.transactions[data.transactions.firstIndex(where: { $0.id == f.refund40.id })!].date = secondDeadline
+        let cache = RefundPresentationCache()
+        let before = try await cache.presentation(data: data, ledgerID: f.ledger.id, revision: 1, asOf: start)
+        XCTAssertEqual(before.asOf, start)
+        XCTAssertEqual(before.nextFutureDate, firstDeadline)
+        XCTAssertNil(before.summariesByPurchase[f.purchase.id]?.outstandingAmount)
+        XCTAssertFalse(before.candidatesByCurrency[f.usd.id, default: []].contains { $0.id == f.refund60.id })
+        let unchanged = try await cache.presentation(data: data, ledgerID: f.ledger.id, revision: 1, asOf: start.addingTimeInterval(30))
+        XCTAssertEqual(before.id, unchanged.id)
+        let received = try await cache.presentation(data: data, ledgerID: f.ledger.id, revision: 1, asOf: firstDeadline)
+        XCTAssertNotEqual(received.id, before.id)
+        XCTAssertEqual(received.nextFutureDate, secondDeadline)
+        XCTAssertEqual(received.summariesByPurchase[f.purchase.id]?.outstandingAmount, 40)
+        XCTAssertTrue(received.candidatesByCurrency[f.usd.id, default: []].contains { $0.id == f.refund60.id })
+        XCTAssertEqual(RefundTracking.overview(in: data, ledgerID: f.ledger.id, asOf: firstDeadline).summaries.first?.outstandingAmount, 40)
+        let later = try await cache.presentation(data: data, ledgerID: f.ledger.id, revision: 1, asOf: secondDeadline)
+        XCTAssertNil(later.nextFutureDate)
+        XCTAssertTrue(later.candidatesByCurrency[f.usd.id, default: []].contains { $0.id == f.refund40.id })
+        let rewound = try await cache.presentation(data: data, ledgerID: f.ledger.id, revision: 1, asOf: start)
+        XCTAssertNotEqual(rewound.id, later.id)
+        XCTAssertNil(rewound.summariesByPurchase[f.purchase.id]?.outstandingAmount)
+        XCTAssertFalse(rewound.candidatesByCurrency[f.usd.id, default: []].contains { $0.id == f.refund60.id || $0.id == f.refund40.id })
+    }
+
+    func testClockRefreshChangesOnlyReadRevisionAndUnreadableRecoveryPersistsMetadataOnly() async throws {
+        let f = RefundFixture(), directory = try directory()
+        var data = try RefundTracking.saving(f.draft, in: f.data)
+        data.sources[0].externalID = RefundTracking.externalIDPrefix + "{}"
+        let store = makeStore(directory, initialData: data)
+        try await store.flushLocalChangesAsync()
+        let beforeClockRefresh = store.data, previousRevision = store.refundPresentationRevision
+        store.refreshRefundPresentationsForClockChange()
+        XCTAssertEqual(try JSONEncoder.appEncoder.encode(store.data), try JSONEncoder.appEncoder.encode(beforeClockRefresh))
+        XCTAssertEqual(store.refundPresentationRevision, previousRevision + 1)
+        let presentation = try await store.refundPresentations.presentation(data: store.data, ledgerID: f.ledger.id, revision: store.refundPresentationRevision)
+        let issue = try XCTUnwrap(presentation.overview.unreadableSources.first)
+        XCTAssertEqual(issue.source, data.sources[0])
+        let removed = await store.removeUnreadableRefundTrackingAsync(issue.source)
+        XCTAssertTrue(removed)
+        let stored = try XCTUnwrap(store.cloudKitSQLiteStore.loadData())
+        XCTAssertTrue(stored.sources.isEmpty)
+        XCTAssertEqual(stored.transactions, f.data.transactions)
+        let trackingRestarted = await store.saveRefundTrackingAsync(f.draft)
+        XCTAssertTrue(trackingRestarted, "Removing unreadable metadata must unblock tracking in the journal")
     }
 
     func testAsyncSaveLinkUnlinkCancelReopenAndDiskFailureRetry() async throws {

@@ -20,6 +20,7 @@ enum IncomingTransactionDraftFactory {
         let amount = request.suggestion?.amount
         var draft = TransactionDraft(ledgerID: journalID)
         draft.saveOperationID = request.suggestion?.id ?? request.id
+        draft.incomingEditorSessionID = UUID()
         draft.date = request.suggestion?.date ?? Date()
         draft.payee = request.suggestion?.merchant ?? ""
         draft.note = request.suggestion?.note ?? ""

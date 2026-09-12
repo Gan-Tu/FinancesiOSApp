@@ -405,6 +405,7 @@ final class MobileLedgerStore: ObservableObject {
     private var persistenceOutcomes = MobilePersistenceOutcomeState()
     @Published private(set) var localPersistenceError: ValidationError?
     private var transactionSaveTasks: [UUID: Task<Bool, Never>] = [:]
+    private var activeIncomingCaptureSaves: Set<UUID> = []
     private var pendingNewTransactionOperations: Set<UUID> = []
     private var duplicateReceiptCopiesByOperation: [UUID: [UUID: AttachmentAsset]] = [:]
     private var completedTransactionSaveOperations: [UUID] = []
@@ -2085,11 +2086,12 @@ final class MobileLedgerStore: ObservableObject {
         scope: RecurringJournalEditor.Scope = .occurrence,
         supersedesPendingAttachments: Bool = false
     ) async -> Bool {
-        if let task = transactionSaveTasks[draft.saveOperationID] { return await task.value }
+        let taskID = draft.incomingEditorSessionID ?? draft.saveOperationID
+        if let task = transactionSaveTasks[taskID] { return await task.value }
         let task = Task { await self.performTransactionSaveAsync(draft, scope: scope, supersedesPendingAttachments: supersedesPendingAttachments) }
-        transactionSaveTasks[draft.saveOperationID] = task
+        transactionSaveTasks[taskID] = task
         let result = await task.value
-        transactionSaveTasks.removeValue(forKey: draft.saveOperationID)
+        transactionSaveTasks.removeValue(forKey: taskID)
         return result
     }
 
@@ -2106,6 +2108,37 @@ final class MobileLedgerStore: ObservableObject {
         var savingDraft = draft
         var copiedReceipts: AttachmentContainer?
         let operationID = draft.saveOperationID
+        let isIncoming = draft.incomingEditorSessionID != nil
+        if isIncoming {
+            guard draft.id == nil else {
+                validationError = ValidationError(message: "Open the saved transaction to edit it.")
+                return false
+            }
+            guard activeIncomingCaptureSaves.insert(operationID).inserted else {
+                validationError = ValidationError(message: "This capture is being saved in another window. Finish that save first.")
+                return false
+            }
+        }
+        defer { if isIncoming { activeIncomingCaptureSaves.remove(operationID) } }
+        if isIncoming {
+            do {
+                let databaseURL = sqliteStore.databaseURL
+                let alreadyRecorded = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Bool, Error>) in
+                    Self.deferredPersistenceQueue.async {
+                        do { continuation.resume(returning: try SQLiteJournalStore(databaseURL: databaseURL).hasRecordedTransaction(operationID)) }
+                        catch { continuation.resume(throwing: error) }
+                    }
+                }
+                guard !alreadyRecorded,
+                      transaction(operationID) == nil || pendingNewTransactionOperations.contains(operationID) else {
+                    validationError = ValidationError(message: "This capture was already saved. Open the saved transaction to make further changes.")
+                    return false
+                }
+            } catch {
+                validationError = ValidationError(message: "Could not verify whether this capture was saved: \(error.localizedDescription)")
+                return false
+            }
+        }
         if draft.id == nil, let existing = transaction(operationID) {
             savingDraft.id = existing.id
             savingDraft.recurrenceRuleID = existing.recurrenceRule?.id
@@ -2913,6 +2946,8 @@ final class MobileLedgerStore: ObservableObject {
         appIconBadge?.setActive(isForegroundActive)
         refreshCloudKitForegroundTriggers()
         if isForegroundActive {
+            refreshSystemIntegrations()
+            refreshRefundPresentationsForClockChange()
             refreshDailyBalancesIfNeeded()
             if let selectedLedgerID { historicalTextSuggestions.prewarm(data: data, ledgerID: selectedLedgerID) }
             synchronizeIfEnabled()
@@ -3998,6 +4033,11 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
 // MARK: - Refund and reimbursement tracking (metadata only)
 
 extension MobileLedgerStore {
+    /// Clock changes affect refund eligibility without changing journal data.
+    func refreshRefundPresentationsForClockChange() {
+        refundPresentationRevision &+= 1
+    }
+
     func refundTracking(for purchaseID: UUID) throws -> RefundTrackingRecord? {
         try RefundTracking.record(for: purchaseID, in: data)
     }
@@ -4032,6 +4072,10 @@ extension MobileLedgerStore {
 
     func removeRefundTrackingAsync(purchaseID: UUID) async -> Bool {
         await performRefundTrackingMutation { try RefundTracking.removing(purchaseID: purchaseID, in: $0) }
+    }
+
+    func removeUnreadableRefundTrackingAsync(_ confirmedSource: TransactionSource) async -> Bool {
+        await performRefundTrackingMutation { try RefundTracking.removingUnreadableSource(confirmedSource, in: $0) }
     }
 
     private func performRefundTrackingMutation(_ mutation: (JournalData) throws -> JournalData) async -> Bool {

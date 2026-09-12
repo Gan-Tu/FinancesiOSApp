@@ -106,6 +106,7 @@ struct TransactionEditorView: View {
     private let initialReceiptURLs: [URL]
     private let onSaved: (() -> Void)?
     @State private var draft: TransactionDraft
+    @State private var incomingCurrency: IncomingCaptureCurrency
     @FocusState private var focusedField: TransactionEditorField?
     @State private var accountPostingID: UUID?
     @State private var showingRecurringSaveScope = false
@@ -126,6 +127,7 @@ struct TransactionEditorView: View {
         self.initialReceiptURLs = initialReceiptURLs
         self.onSaved = onSaved
         _draft = State(initialValue: initialDraft.preparedForAmountEntry)
+        _incomingCurrency = State(initialValue: IncomingCaptureCurrency(code: captureCurrencyCode, draft: initialDraft))
     }
 
     private var focusedAmountID: UUID? {
@@ -162,7 +164,9 @@ struct TransactionEditorView: View {
                 FinanceFormCard {
                     ForEach($draft.postings) { $posting in
                         FinanceFormRow(last: posting.id == draft.postings.last?.id) {
-                            PostingEditorRow(posting: $posting, ledgerID: draft.ledgerID, focusedField: $focusedField, canRemove: draft.postings.count > 2,
+                            PostingEditorRow(posting: $posting, ledgerID: draft.ledgerID,
+                                allowsCurrencySelection: !missingCaptureJournal && !missingCaptureCurrency,
+                                focusedField: $focusedField, canRemove: draft.postings.count > 2,
                                 changeAmount: { text in
                                     if let index = draft.postings.firstIndex(where: { $0.id == posting.id }) { updateAmount(text, at: index) }
                                 }, chooseAccount: { focusedField = nil; accountPostingID = posting.id }) {
@@ -309,6 +313,7 @@ struct TransactionEditorView: View {
 
         }
         .task {
+            reconcileIncomingCurrency()
             if !importedInitialReceipts && !initialReceiptURLs.isEmpty {
                 importedInitialReceipts = true
                 let generation = store.attachmentImportGeneration
@@ -338,12 +343,9 @@ struct TransactionEditorView: View {
         .onChange(of: draft.ledgerID) { old, new in
             guard allowsJournalSelection, old != new else { return }
             focusedField = nil
-            let commodity = captureCurrencyCode.isEmpty ? nil : store.data.commodities.first { $0.ledgerID == new && $0.symbol.caseInsensitiveCompare(captureCurrencyCode) == .orderedSame }
-            for index in draft.postings.indices {
-                draft.postings[index].accountID = nil
-                draft.postings[index].commodityID = commodity?.id
-            }
+            reconcileIncomingCurrency()
         }
+        .onChange(of: store.data.commodities) { reconcileIncomingCurrency() }
         .confirmationDialog(
             recurrencePolicy.requiresScheduleConfirmation ? "Update repeating schedule" : "Save recurring transaction changes",
             isPresented: $showingRecurringSaveScope,
@@ -368,9 +370,12 @@ struct TransactionEditorView: View {
     }
 
     private var missingCaptureCurrency: Bool {
-        allowsJournalSelection && !captureCurrencyCode.isEmpty && !store.data.commodities.contains {
-            $0.ledgerID == draft.ledgerID && $0.symbol.caseInsensitiveCompare(captureCurrencyCode) == .orderedSame
-        }
+        allowsJournalSelection && incomingCurrency.preventsSaving(draft: draft, commodities: store.data.commodities)
+    }
+
+    private func reconcileIncomingCurrency() {
+        guard allowsJournalSelection else { return }
+        incomingCurrency.reconcile(draft: &draft, commodities: store.data.commodities)
     }
 
     private var missingCaptureJournal: Bool {
@@ -424,6 +429,7 @@ struct TransactionEditorView: View {
     }
 
     private func save(scope: RecurringJournalEditor.Scope) {
+        reconcileIncomingCurrency()
         guard !isSaving, receiptImports.canSave, !missingCaptureJournal, !missingCaptureCurrency else { return }
         let snapshot = draft
         isSaving = true
@@ -492,6 +498,7 @@ struct PostingEditorRow: View {
     @EnvironmentObject private var store: MobileLedgerStore
     @Binding var posting: PostingDraft
     let ledgerID: UUID?
+    var allowsCurrencySelection = true
     var focusedField: FocusState<TransactionEditorField?>.Binding
     let canRemove: Bool
     let changeAmount: (String) -> Void
@@ -542,6 +549,7 @@ struct PostingEditorRow: View {
                     .frame(width: currencyWidth, alignment: .trailing)
             }
             .tint(.secondary)
+            .disabled(!allowsCurrencySelection)
             .accessibilityLabel("Currency")
         }
         .contextMenu {

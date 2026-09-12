@@ -68,9 +68,18 @@ struct RefundTrackingSummary: Identifiable, Sendable {
     var isSettled: Bool { record.state == .active && outstandingAmount == Decimal.zero }
 }
 
+struct RefundTrackingMetadataIssue: Identifiable, @unchecked Sendable {
+    /// Keep the source envelope, not guessed IDs from its unreadable payload.
+    /// Removal compares this snapshot again after the user's confirmation.
+    let source: TransactionSource
+    let message: String
+    var id: UUID { source.id }
+}
+
 struct RefundTrackingOverview: Sendable {
     let summaries: [RefundTrackingSummary]
     let issues: [String]
+    let unreadableSources: [RefundTrackingMetadataIssue]
     var outstandingByCurrency: [UUID: Decimal] {
         summaries.reduce(into: [:]) { result, summary in
             guard summary.record.state == .active, let amount = summary.outstandingAmount else { return }
@@ -129,23 +138,33 @@ enum RefundTracking {
         try data.sources.filter { ledgerID == nil || $0.ledgerID == ledgerID }.compactMap(decode)
     }
 
-    static func overview(in data: JournalData, ledgerID: UUID) -> RefundTrackingOverview {
+    static func metadataIssue(for source: TransactionSource) -> RefundTrackingMetadataIssue? {
+        guard source.type == sourceType else { return nil }
+        do { _ = try decode(source); return nil }
+        catch { return RefundTrackingMetadataIssue(source: source, message: error.localizedDescription) }
+    }
+
+    static func overview(in data: JournalData, ledgerID: UUID, asOf: Date = Date()) -> RefundTrackingOverview {
         var records: [RefundTrackingRecord] = [], issues: [String] = []
+        var unreadableSources: [RefundTrackingMetadataIssue] = []
         for source in data.sources where source.ledgerID == ledgerID && source.type == sourceType {
             do { if let record = try decode(source) { records.append(record) } }
-            catch { issues.append(error.localizedDescription) }
+            catch {
+                issues.append(error.localizedDescription)
+                unreadableSources.append(RefundTrackingMetadataIssue(source: source, message: error.localizedDescription))
+            }
         }
         let summaries = records.map { record -> RefundTrackingSummary in
             do {
                 guard issues.isEmpty else { throw invalid("Some tracking metadata is unreadable. Linked amounts cannot be verified.") }
-                let received = try validateReferences(record, among: records, in: data)
+                let received = try validateReferences(record, among: records, in: data, asOf: asOf)
                 return RefundTrackingSummary(record: record, receivedAmount: received,
                     outstandingAmount: record.state == .cancelled ? .zero : max(.zero, record.expectedAmount - received), issues: [])
             } catch {
                 return RefundTrackingSummary(record: record, receivedAmount: nil, outstandingAmount: nil, issues: [error.localizedDescription])
             }
         }.sorted { $0.record.id.uuidString < $1.record.id.uuidString }
-        return RefundTrackingOverview(summaries: summaries, issues: issues)
+        return RefundTrackingOverview(summaries: summaries, issues: issues, unreadableSources: unreadableSources)
     }
 
     static func saving(_ draft: RefundTrackingDraft, in data: JournalData) throws -> JournalData {
@@ -201,11 +220,26 @@ enum RefundTracking {
         return result
     }
 
-    static func incomingAmount(transactionID: UUID, commodityID: UUID, ledgerID: UUID, in data: JournalData) throws -> Decimal {
+    static func removingUnreadableSource(_ confirmedSource: TransactionSource, in data: JournalData) throws -> JournalData {
+        guard confirmedSource.type == sourceType else { throw invalid("This source is not refund tracking metadata.") }
+        guard let current = data.sources.first(where: { $0.id == confirmedSource.id }) else { return data }
+        guard current.ledgerID == confirmedSource.ledgerID, current == confirmedSource,
+              metadataIssue(for: current) != nil else {
+            throw invalid("This tracking record changed. Review it again before removing it.")
+        }
+        guard !data.transactions.contains(where: { $0.sourceID == current.id }) else {
+            throw invalid("This source is used by a transaction and cannot be removed as tracking metadata.")
+        }
+        var result = data
+        result.sources.removeAll { $0.id == current.id && $0.ledgerID == current.ledgerID && $0.type == sourceType }
+        return result
+    }
+
+    static func incomingAmount(transactionID: UUID, commodityID: UUID, ledgerID: UUID, in data: JournalData, asOf: Date = Date()) throws -> Decimal {
         guard let transaction = data.transactions.first(where: { $0.id == transactionID }), transaction.ledgerID == ledgerID else {
             throw invalid("A linked payment was deleted or moved to another journal.")
         }
-        guard transaction.date <= Date() else { throw invalid("A future-dated payment has not been received yet.") }
+        guard transaction.date <= asOf else { throw invalid("A future-dated payment has not been received yet.") }
         let net = try financialAmount(transaction, commodityID: commodityID, in: data)
         guard net > .zero else { throw invalid("The linked transaction has no incoming amount in the tracking currency. Currency conversion is not inferred.") }
         return net
@@ -254,7 +288,7 @@ enum RefundTracking {
         }
     }
 
-    private static func validateReferences(_ record: RefundTrackingRecord, among records: [RefundTrackingRecord], in data: JournalData) throws -> Decimal {
+    private static func validateReferences(_ record: RefundTrackingRecord, among records: [RefundTrackingRecord], in data: JournalData, asOf: Date = Date()) throws -> Decimal {
         try validateStructure(record)
         guard data.ledgers.contains(where: { $0.id == record.ledgerID }),
               data.commodities.contains(where: { $0.id == record.commodityID && $0.ledgerID == record.ledgerID }),
@@ -266,7 +300,7 @@ enum RefundTracking {
         }
         var received = Decimal.zero
         for link in record.links {
-            let available = try incomingAmount(transactionID: link.transactionID, commodityID: record.commodityID, ledgerID: record.ledgerID, in: data)
+            let available = try incomingAmount(transactionID: link.transactionID, commodityID: record.commodityID, ledgerID: record.ledgerID, in: data, asOf: asOf)
             if record.state == .active {
                 let allocated = records.filter { $0.state == .active && $0.commodityID == record.commodityID }
                     .flatMap(\.links).filter { $0.transactionID == link.transactionID }.reduce(Decimal.zero) { $0 + $1.amount }

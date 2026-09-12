@@ -103,9 +103,15 @@ final class SystemEntryRouter: ObservableObject {
             do {
                 try await catalogRepository.save(next)
                 publishShortcutParameters()
-            } catch { /* The editor still resolves against the live store. */ }
+            } catch {
+                // Do not treat an unpublished snapshot as current forever.
+                // A newer queued snapshot still owns its own retry state.
+                if catalog == next { catalog = nil }
+            }
         }
     }
+
+    func waitForCatalogUpdates() async { await catalogWrite?.value }
 
     func reloadSuggestions(store: MobileLedgerStore) async {
         suggestionsRevision &+= 1
