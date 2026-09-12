@@ -1,1 +1,1 @@
-Please test transaction entry and editing, duplicate/cancel behavior, search and swipe actions, recurring entries, backups, and iCloud sync with Mac. Check scrolling and navigation responsiveness, and report any crashes, incorrect balances, or other issues with the build number and steps to reproduce.
+Test transactions, note and payee suggestions, iCloud sync, and backups, and report any bugs with the build number.
