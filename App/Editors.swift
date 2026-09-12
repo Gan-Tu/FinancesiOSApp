@@ -437,6 +437,7 @@ struct PostingEditorRow: View {
                 .focused(focusedField, equals: .amount(posting.id))
                 .frame(width: amountWidth).monospacedDigit()
                 .accessibilityLabel("Amount for \(store.account(posting.accountID)?.name ?? "account")")
+                .syntheticSplitPostingIdentifier(posting)
                 .simultaneousGesture(TapGesture().onEnded {
                     guard posting.amount == "-" else { return }
                     // Let UITextField finish placing its caret before correcting
@@ -462,6 +463,20 @@ struct PostingEditorRow: View {
         }
     }
 
+}
+
+private extension View {
+    @ViewBuilder func syntheticSplitPostingIdentifier(_ posting: PostingDraft) -> some View {
+        #if DEBUG
+        if DemoData.isSplitEditorFixtureRequested {
+            // The test reads the native field's value separately. These literal
+            // IDs distinguish account/currency reassignment from mere formatting.
+            accessibilityIdentifier("synthetic-split-amount|\(posting.id.uuidString)|\(posting.accountID?.uuidString ?? "nil")|\(posting.commodityID?.uuidString ?? "nil")")
+        } else { self }
+        #else
+        self
+        #endif
+    }
 }
 
 struct AccountPickerScreen: View {

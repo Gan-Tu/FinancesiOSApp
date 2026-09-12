@@ -3,13 +3,19 @@ import Foundation
 import UIKit
 
 enum DemoData {
+    static var isSplitEditorFixtureRequested: Bool {
+        CommandLine.arguments.contains("--demo") && CommandLine.arguments.contains("--demo-split-editor")
+    }
+
     @MainActor static func makeStore() -> MobileLedgerStore {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("FinancesiOS-Demo", isDirectory: true)
+        let directoryName = isSplitEditorFixtureRequested ? "FinancesiOS-SyntheticSplitEditor" : "FinancesiOS-Demo"
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(directoryName, isDirectory: true)
         if CommandLine.arguments.contains("--reset-demo") {
             try? FileManager.default.removeItem(at: directory)
             MobileDisplayPreferences.defaults.removePersistentDomain(forName: MobileDisplayPreferences.demoSuiteName)
         }
         var data = fixture(includeFutureEntries: CommandLine.arguments.contains("--demo-future"), includeRecurringEntries: CommandLine.arguments.contains("--demo-recurring"), includeTemplates: true)
+        if isSplitEditorFixtureRequested { data = splitEditorFixture() }
         if CommandLine.arguments.contains("--demo-performance") { data = performanceFixture() }
         if CommandLine.arguments.contains("--demo-search-matches"), let ledgerID = data.selectedLedgerID {
             let root = data.accounts.first { $0.ledgerID == ledgerID && $0.kind == .asset && $0.parentID == nil }!
@@ -54,7 +60,12 @@ enum DemoData {
         if CommandLine.arguments.contains("--demo-scroll"), let index = data.transactions.indices.min(by: { data.transactions[$0].date < data.transactions[$1].date }) {
             data.transactions[index].note = "Oldest test transaction"
         }
-        let store = MobileLedgerStore(supportDirectory: directory, initialData: data)
+        let dependencies: CloudKitSyncDependencies = isSplitEditorFixtureRequested
+            ? CloudKitSyncDependencies(configuration: { nil }, makeClient: { _ in
+                throw ValidationError(message: "Synthetic split editor tests prohibit CloudKit access.")
+            }, automaticTriggersEnabled: false)
+            : .live
+        let store = MobileLedgerStore(supportDirectory: directory, initialData: data, cloudKitSyncDependencies: dependencies)
         let hasSampleReceipt = store.data.transactions.contains { $0.note == "Weekly groceries" && $0.attachment?.assets.isEmpty == false }
         if !hasSampleReceipt, let transaction = store.data.transactions.first(where: { $0.note == "Weekly groceries" }) {
             do {
@@ -91,6 +102,45 @@ enum DemoData {
         }
         if CommandLine.arguments.contains("--demo-performance") { DemoPerformanceFrames.shared.start(in: directory) }
         return store
+    }
+
+    /// Exact, deliberately unequal values for native editor tests. The dedicated
+    /// demo directory and unavailable sync transport never touch real journals.
+    static func splitEditorFixture() -> JournalData {
+        func id(_ value: Int) -> UUID { UUID(uuidString: String(format: "00000000-0000-0000-0000-%012llX", Int64(value)))! }
+        let ledger = Ledger(id: id(1), name: "SYNTHETIC Split Tests")
+        let usd = Commodity(id: id(2), ledgerID: ledger.id, symbol: "USD", name: "US Dollar")
+        let eur = Commodity(id: id(3), ledgerID: ledger.id, symbol: "EUR", name: "Euro")
+        let assets = Account(id: id(10), ledgerID: ledger.id, commodityID: usd.id, name: "Assets", kind: .asset)
+        let expenses = Account(id: id(11), ledgerID: ledger.id, commodityID: usd.id, name: "Expenses", kind: .expense, listIndex: 1)
+        let bank = Account(id: id(20), ledgerID: ledger.id, parentID: assets.id, commodityID: usd.id, name: "SYNTHETIC Bank", kind: .asset)
+        let expense = Account(id: id(21), ledgerID: ledger.id, parentID: expenses.id, commodityID: usd.id, name: "SYNTHETIC Expense", kind: .expense)
+        let fee = Account(id: id(22), ledgerID: ledger.id, parentID: expenses.id, commodityID: usd.id, name: "SYNTHETIC Fee", kind: .expense, listIndex: 1)
+        let euroBank = Account(id: id(23), ledgerID: ledger.id, parentID: assets.id, commodityID: eur.id, name: "SYNTHETIC Euro Bank", kind: .asset, listIndex: 1)
+        let euroExpense = Account(id: id(24), ledgerID: ledger.id, parentID: expenses.id, commodityID: eur.id, name: "SYNTHETIC Euro Expense", kind: .expense, listIndex: 2)
+        let alternate = Account(id: id(25), ledgerID: ledger.id, parentID: expenses.id, commodityID: usd.id, name: "SYNTHETIC Alternate", kind: .expense, listIndex: 3)
+        let today = Calendar.current.startOfDay(for: Date()).addingTimeInterval(12 * 3600)
+        func transaction(_ index: Int, _ note: String, _ values: [(Int, Int?, Int)], date: Date? = nil, rule: RecurrenceRule? = nil) -> LedgerTransaction {
+            LedgerTransaction(id: id(index), ledgerID: ledger.id, date: date ?? today,
+                payee: "SYNTHETIC Merchant", note: note, number: "SYN-\(index)", cleared: true,
+                postings: values.enumerated().map { offset, value in
+                    Posting(id: id(index * 10 + offset), accountID: id(value.0), commodityID: value.1.map(id), amount: Decimal(value.2), listIndex: offset)
+                }, recurrenceRule: rule)
+        }
+        let unequal = [(20, Optional(2), -27215), (21, Optional(2), 27200), (22, nil, 15)]
+        var rows = [
+            transaction(100, "SYNTHETIC Three Leg", unequal),
+            transaction(101, "SYNTHETIC Four Leg", [(20, 2, -100), (21, nil, 100), (23, 3, -80), (24, nil, 80)]),
+            transaction(102, "SYNTHETIC Two Leg", [(20, 2, -100), (21, 2, 100)]),
+            transaction(103, "SYNTHETIC Remove Fee", [(20, 2, -100), (21, 2, 90), (22, 2, 10)])
+        ]
+        let rule = RecurrenceRule(id: id(200), frequency: .daily, occurrenceCount: 3)
+        for offset in 0..<3 {
+            rows.append(transaction(110 + offset, "SYNTHETIC Recurrence", unequal,
+                date: Calendar.current.date(byAdding: .day, value: offset - 2, to: today)!, rule: rule))
+        }
+        return JournalData(ledgers: [ledger], commodities: [usd, eur], accounts: [assets, expenses, bank, expense, fee, euroBank, euroExpense, alternate],
+            transactions: rows, selectedLedgerID: ledger.id, syncEnabled: false)
     }
 
     /// Synthetic, deterministic large journal shared by before/after performance runs.

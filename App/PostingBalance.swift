@@ -7,6 +7,9 @@ enum PostingBalance {
         var updated = draft
         updated.postings[index].amount = text
         guard updated.postings.count == 2, let value = decimalFromInput(text) else { return updated }
+        // Focus/writeback and '=' may normalize the same numeric value. They
+        // must not silently repair an imbalance left by removing a split row.
+        guard decimalFromInput(draft.postings[index].amount) != value else { return updated }
         let byID = Dictionary(uniqueKeysWithValues: accounts.map { ($0.id, $0) })
         let defaults = Dictionary(grouping: commodities, by: \.ledgerID).compactMapValues { $0.first?.id }
         func currency(_ posting: PostingDraft) -> UUID? {
