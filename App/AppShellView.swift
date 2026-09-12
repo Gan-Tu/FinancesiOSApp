@@ -4,6 +4,7 @@ import UIKit
 enum EditorRoute: Identifiable {
     case transaction(TransactionDraft, String, scanInvoice: Bool = false)
     case newFromTemplate(TransactionTemplate, String)
+    case incoming(IncomingTransactionRequest)
     case account(MobileAccountDraft)
     case currency(CurrencyDraft)
     case journalNew
@@ -16,6 +17,7 @@ enum EditorRoute: Identifiable {
             "transaction-\(draft.id?.uuidString ?? "new")-\(title)-\(scanInvoice)"
         case .newFromTemplate(let template, let title):
             "template-transaction-\(template.id)-\(title)"
+        case .incoming(let request): "incoming-\(request.id)"
         case .account(let draft):
             "account-\(draft.id?.uuidString ?? "new")"
         case .currency(let draft):
@@ -38,6 +40,8 @@ struct AppShellView: View {
     @State private var navigationPath: [MobileRoute] = []
     @State private var presentedSheet: ShellSheet?
     @State private var showingNewTransactionDialog = false
+    @ObservedObject private var systemEntries = SystemEntryRouter.shared
+    @State private var activeSharedReceiptID: UUID?
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
@@ -66,6 +70,8 @@ struct AppShellView: View {
                         CurrencyTransactionsScreen(currencyID: currencyID, route: $route, openTransaction: { navigationPath.append(.transaction($0)) })
                     case .settings:
                         SettingsView(route: $route)
+                    case .suggestions:
+                        CaptureSuggestionsView()
                     }
                     }
                     // Keep both ends of a push/pop opaque while a register
@@ -84,10 +90,13 @@ struct AppShellView: View {
             }
         }
         .tint(.blue)
-        .sheet(item: $route) { route in
+        .sheet(item: $route, onDismiss: {
+            if let id = activeSharedReceiptID { systemEntries.finishSharedReceipt(id); activeSharedReceiptID = nil }
+            handleSystemEntry()
+        }) { route in
             EditorSheet(route: route)
         }
-        .sheet(item: $presentedSheet) { sheet in
+        .sheet(item: $presentedSheet, onDismiss: handleSystemEntry) { sheet in
             switch sheet {
             case .settings:
                 SettingsView(route: $route)
@@ -114,10 +123,48 @@ struct AppShellView: View {
         .onChange(of: scenePhase, initial: true) {
             store.setSceneActive(scenePhase == .active, sceneID: sceneID)
             if scenePhase != .active { store.lockApp() }
+            else {
+                handleSystemEntry()
+                Task { await systemEntries.reloadSuggestions(store: store) }
+            }
+        }
+        .onChange(of: systemEntries.requests.map(\.id)) { handleSystemEntry() }
+        .onChange(of: systemEntries.editorRevision) { handleSystemEntry() }
+        .onChange(of: store.validationError?.id) { _, id in if id == nil { handleSystemEntry() } }
+        .onChange(of: systemEntries.error?.id) { _, id in if id == nil { handleSystemEntry() } }
+        .onChange(of: store.isUnlocked) { handleSystemEntry() }
+        .onChange(of: showingNewTransactionDialog) { if !showingNewTransactionDialog { handleSystemEntry() } }
+        .onReceive(NotificationCenter.default.publisher(for: .financesSuggestionsChanged)) { _ in
+            Task { await systemEntries.reloadSuggestions(store: store) }
         }
         .onDisappear { store.setSceneActive(false, sceneID: sceneID) }
         .alert(item: shellValidationError) { error in
             Alert(title: Text("Finances"), message: Text(error.message), dismissButton: .default(Text("OK")))
+        }
+    }
+
+    private func handleSystemEntry() {
+        guard scenePhase == .active, !store.requiresUnlock, !store.requiresJournalRecovery,
+              systemEntries.activeEditorCount == 0,
+              route == nil, store.validationError == nil, systemEntries.error == nil,
+              !systemEntries.requests.isEmpty else { return }
+        // Close browsing/settings sheets for an explicit external entry action;
+        // actual editors keep their global lease and are never replaced.
+        if showingNewTransactionDialog { showingNewTransactionDialog = false; return }
+        if presentedSheet != nil { presentedSheet = nil; return }
+        guard let request = systemEntries.takeNext() else { return }
+        switch request.destination {
+        case .template(let id):
+            let hidden = JournalVisibility(rawValue: MobileDisplayPreferences.defaults.string(forKey: JournalVisibility.preferenceKey) ?? "").hiddenIDs
+            guard let template = store.data.transactionTemplates.first(where: { $0.id == id && $0.enabled && !hidden.contains($0.ledgerID) }) else {
+                store.validationError = ValidationError(message: "This template is no longer available. Choose another template in Settings.")
+                return
+            }
+            route = .newFromTemplate(template, "New Transaction")
+        case .incoming(let incoming):
+            activeSharedReceiptID = incoming.sharedReceiptID
+            route = .incoming(incoming)
+        case .suggestions: navigationPath.append(.suggestions)
         }
     }
 
@@ -136,14 +183,17 @@ struct AppShellView: View {
     private var shellValidationError: Binding<ValidationError?> {
         Binding(get: {
             if case .quickSearch? = presentedSheet { return nil }
-            return route == nil ? store.validationError : nil
-        }, set: { _ in store.validationError = nil })
+            return route == nil ? (store.validationError ?? systemEntries.error) : nil
+        }, set: { _ in
+            store.validationError = nil; systemEntries.error = nil
+            Task { @MainActor in handleSystemEntry() }
+        })
     }
 
     private var showsGlobalBottomBar: Bool {
         guard let lastRoute = navigationPath.last else { return true }
         switch lastRoute {
-        case .transaction, .settings, .templates:
+        case .transaction, .settings, .templates, .suggestions:
             return false
         case .journals, .journal, .transactions, .searchTransactions, .account, .currency:
             return true
@@ -172,7 +222,7 @@ struct AppShellView: View {
         switch navigationPath.last {
         case .journal, .transactions, .searchTransactions, .templates, .account, .currency:
             return true
-        case .journals, .settings, .transaction, .none:
+        case .journals, .settings, .transaction, .suggestions, .none:
             return false
         }
     }
@@ -314,6 +364,7 @@ struct EditorSheet: View {
     @EnvironmentObject private var store: MobileLedgerStore
     let route: EditorRoute
     @StateObject private var receiptImports = ReceiptImportSession()
+    @State private var editorPresentationID = UUID()
     var body: some View {
         Group {
         switch route {
@@ -323,6 +374,7 @@ struct EditorSheet: View {
             let draft = store.draft(for: template)
             TemplateTransactionEntryView(title: title, initialDraft: draft,
                 accountPostingIDs: store.templateAccountSelectionPostingIDs(in: draft), scanInvoice: template.scanInvoice)
+        case .incoming(let request): IncomingTransactionView(request: request)
         case .account(let draft): AccountEditorView(initialDraft: draft)
         case .currency(let draft): CurrencyEditorView(initialDraft: draft)
         case .journalNew: JournalEditorView(mode: .create)
@@ -333,6 +385,7 @@ struct EditorSheet: View {
         .environmentObject(receiptImports)
         .environment(\.receiptImportSession, receiptImports)
         .background { ReceiptImportLifetimeAnchor(session: receiptImports).frame(width: 0, height: 0) }
+        .background { SystemEntryEditorLifetimeAnchor(id: editorPresentationID).frame(width: 0, height: 0) }
         .onAppear {
             receiptImports.configureDiscard { [weak store] assets in store?.discardUnreferencedImportedAttachments(assets) }
         }

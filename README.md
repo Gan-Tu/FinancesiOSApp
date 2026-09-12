@@ -13,6 +13,10 @@ Open **FinancesiOS.xcodeproj** and select **FinancesiOS**. Choose a simulator an
 - Receipt file/photo import, on-device receipt scanning, inline thumbnails and Quick Look previews.
 - Local SQLite persistence, ZIP backup/restore with receipt files, native sharing, display preferences and password lock.
 - Shared CloudKit private database, receipt assets, offline changes, explicit conflicts, account-change handling and automatic foreground/push sync.
+- Configurable Home Screen template actions, Siri/App Shortcuts, receipt Open In, and a local Apple Pay Suggestions inbox with editable drafts.
+- Refund/reimbursement tracking with partial-payment links, outstanding amounts, and backup/sync preservation without changing monetary postings.
+
+See [Quick entry and refund tracking](docs/QUICK_ENTRY.md) for setup, Wallet automation, and receipt sharing.
 
 The app uses the Mac project’s `iCloud.dev.gan.FinanceApp` container and `FinancesJournal_v1` zone. Use the same Apple Account and CloudKit environment on each device. Simulator builds are intentionally offline; a successful simulator test is not evidence of physical device synchronization.
 

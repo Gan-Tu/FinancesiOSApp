@@ -367,9 +367,15 @@ final class MobileLedgerStore: ObservableObject {
     private static let deferredPersistenceQueue = DispatchQueue(label: "FinancesMobile.MobileLedgerStore.deferredPersistence", qos: .utility)
 
     @Published private(set) var data: JournalData {
-        didSet { appIconBadge?.update(data) }
+        didSet {
+            appIconBadge?.update(data)
+            if systemIntegrationsEnabled { refreshSystemIntegrations() }
+            refundPresentationRevision &+= 1
+        }
     }
     @Published private(set) var registerContentRevision: UInt64 = 0
+    @Published private(set) var refundPresentationRevision: UInt64 = 0
+    let refundPresentations = RefundPresentationCache()
     @Published private(set) var searchContentRevision: UInt64 = 0
     let registerPresentations = RegisterPresentationCache()
     let receiptAttachmentSaves = ReceiptAttachmentSaveRegistry()
@@ -390,6 +396,7 @@ final class MobileLedgerStore: ObservableObject {
     @Published private(set) var requiresJournalRecovery = false
 
     private var appIconBadge: MobileAppIconBadge?
+    private var systemIntegrationsEnabled = false
     private let supportDirectory: URL
     private let sqliteStore: SQLiteJournalStore
     private let persistenceBaseline = MobilePersistenceBaseline()
@@ -2860,6 +2867,32 @@ final class MobileLedgerStore: ObservableObject {
 
     func refreshAppIconBadge() { appIconBadge?.refresh() }
 
+    /// Inbox cleanup may use only the writer's committed snapshot, never an
+    /// optimistic row that has not reached disk yet.
+    func durablyStoredTransactionIDs(_ ids: Set<UUID>) async -> Set<UUID> {
+        guard !ids.isEmpty else { return [] }
+        let baseline = persistenceBaseline
+        return await withCheckedContinuation { continuation in
+            Self.deferredPersistenceQueue.async {
+                let found = Set((baseline.snapshot?.transactions ?? []).lazy.filter { ids.contains($0.id) }.map(\.id))
+                continuation.resume(returning: found)
+            }
+        }
+    }
+
+    func enableSystemIntegrations() {
+        guard !requiresJournalRecovery else { return }
+        systemIntegrationsEnabled = true
+        refreshSystemIntegrations()
+    }
+
+    func refreshSystemIntegrations() {
+        guard systemIntegrationsEnabled else { return }
+        let hiddenIDs = JournalVisibility(rawValue: MobileDisplayPreferences.defaults.string(forKey: JournalVisibility.preferenceKey) ?? "").hiddenIDs
+        HomeScreenQuickActions.shared.update(data: data, hiddenLedgerIDs: hiddenIDs)
+        SystemEntryRouter.shared.updateCatalog(data: data, hiddenLedgerIDs: hiddenIDs)
+    }
+
     func refreshHistoricalSuggestionsForClockChange() {
         if let selectedLedgerID { historicalTextSuggestions.prewarm(data: data, ledgerID: selectedLedgerID) }
     }
@@ -3959,5 +3992,68 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
         data = snapshot
         validationError = nil
         refreshCloudSyncDataAvailability()
+    }
+}
+
+// MARK: - Refund and reimbursement tracking (metadata only)
+
+extension MobileLedgerStore {
+    func refundTracking(for purchaseID: UUID) throws -> RefundTrackingRecord? {
+        try RefundTracking.record(for: purchaseID, in: data)
+    }
+
+    func refundTrackingOverview(in ledgerID: UUID) -> RefundTrackingOverview {
+        RefundTracking.overview(in: data, ledgerID: ledgerID)
+    }
+
+    func refundTrackingSummaries(in ledgerID: UUID) -> [RefundTrackingSummary] {
+        refundTrackingOverview(in: ledgerID).summaries
+    }
+
+    func saveRefundTrackingAsync(_ draft: RefundTrackingDraft) async -> Bool {
+        await performRefundTrackingMutation { try RefundTracking.saving(draft, in: $0) }
+    }
+
+    func linkRefundAsync(purchaseID: UUID, incomingTransactionID: UUID, amount: Decimal) async -> Bool {
+        await performRefundTrackingMutation {
+            try RefundTracking.linking(purchaseID: purchaseID, incomingTransactionID: incomingTransactionID, amount: amount, in: $0)
+        }
+    }
+
+    func unlinkRefundAsync(purchaseID: UUID, incomingTransactionID: UUID) async -> Bool {
+        await performRefundTrackingMutation {
+            try RefundTracking.unlinking(purchaseID: purchaseID, incomingTransactionID: incomingTransactionID, in: $0)
+        }
+    }
+
+    func cancelRefundTrackingAsync(purchaseID: UUID) async -> Bool {
+        await performRefundTrackingMutation { try RefundTracking.cancelling(purchaseID: purchaseID, in: $0) }
+    }
+
+    func removeRefundTrackingAsync(purchaseID: UUID) async -> Bool {
+        await performRefundTrackingMutation { try RefundTracking.removing(purchaseID: purchaseID, in: $0) }
+    }
+
+    private func performRefundTrackingMutation(_ mutation: (JournalData) throws -> JournalData) async -> Bool {
+        do {
+            try requireWritableJournal()
+            let updated = try mutation(data)
+            // The pure operations change only sources. Keep balance/register
+            // caches intact and publish before the durable queue suspends.
+            if updated.sources != data.sources { data.sources = updated.sources }
+            validationError = nil
+        } catch {
+            validationError = ValidationError(message: error.localizedDescription)
+            return false
+        }
+        do {
+            try await flushLocalChangesAsync()
+            return true
+        } catch {
+            // The durable writer owns sequenced error reporting. Accepted
+            // memory stays dirty, and deterministic source/link IDs make retry
+            // safe without duplicate tracking or duplicate payment allocation.
+            return false
+        }
     }
 }

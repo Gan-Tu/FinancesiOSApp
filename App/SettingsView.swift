@@ -15,6 +15,14 @@ struct SettingsView: View {
         NavigationStack {
             List {
                 Section {
+                    NavigationLink { SystemIntegrationsSettingsView() } label: {
+                        SettingsIconLabel(title: "Quick Entry & Shortcuts", systemImage: "bolt.fill", tint: .orange)
+                    }
+                    NavigationLink { CaptureSuggestionsView() } label: {
+                        SettingsIconLabel(title: "Suggestions", systemImage: "tray", tint: .blue)
+                    }
+                }
+                Section {
                     NavigationLink {
                         CloudSyncManagementView()
                     } label: {

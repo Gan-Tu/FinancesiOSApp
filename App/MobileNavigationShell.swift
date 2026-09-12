@@ -11,6 +11,7 @@ enum MobileRoute: Hashable {
     case account(UUID)
     case currency(UUID)
     case settings
+    case suggestions
     @MainActor func resolvedLedgerID(in store: MobileLedgerStore) -> UUID? {
         switch self {
         case .journal(let id), .templates(let id): id
@@ -18,7 +19,7 @@ enum MobileRoute: Hashable {
         case .account(let id): store.account(id)?.ledgerID
         case .currency(let id): store.commodity(id)?.ledgerID
         case .transaction(let id): store.transaction(id)?.ledgerID
-        case .journals, .settings: nil
+        case .journals, .settings, .suggestions: nil
         }
     }
 
@@ -60,6 +61,11 @@ struct JournalsHomeScreen: View {
 
     var body: some View {
         List {
+            Section {
+                NavigationLink(value: MobileRoute.suggestions) {
+                    Label("Suggestions", systemImage: "tray")
+                }
+            }
             Section {
                 ForEach(visibleJournals) { ledger in
                     HStack(spacing: 8) {
@@ -191,6 +197,9 @@ struct JournalOverviewScreen: View {
     var body: some View {
         List {
             TransactionLinksSection(ledgerID: ledgerID) { navigationPath.append(.templates(ledgerID)) }
+            Section {
+                NavigationLink("Refunds & Reimbursements") { RefundTrackingListView(ledgerID: ledgerID) }
+            }
             Section {
                 ForEach(AccountKind.allCases) { kind in
                     Button { withAnimation(FinanceMotion.disclosure(reduceMotion: reduceMotion)) { toggleKind(kind) } } label: {
@@ -822,6 +831,9 @@ private struct TransactionDetailContent: View {
                 if !transaction.note.isEmpty { DetailValueRow(label: "Notes", value: transaction.note) }
                 if !transaction.payee.isEmpty { DetailValueRow(label: "Payee", value: transaction.payee) }
                 if !transaction.number.isEmpty { DetailValueRow(label: "Number", value: transaction.number) }
+                NavigationLink {
+                    RefundTrackingDetailView(purchaseID: transaction.id)
+                } label: { Label("Refund or Reimbursement", systemImage: "arrow.uturn.backward.circle") }
                 let displayedAssets = attachmentSave.pendingAssets ?? transaction.attachment?.assets ?? []
                 if !displayedAssets.isEmpty {
                     ForEach(displayedAssets) { asset in

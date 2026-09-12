@@ -101,6 +101,10 @@ struct TransactionEditorView: View {
     var title: String
     private let initialDraft: TransactionDraft
     private let scanInvoice: Bool
+    private let allowsJournalSelection: Bool
+    private let captureCurrencyCode: String
+    private let initialReceiptURLs: [URL]
+    private let onSaved: (() -> Void)?
     @State private var draft: TransactionDraft
     @FocusState private var focusedField: TransactionEditorField?
     @State private var accountPostingID: UUID?
@@ -109,11 +113,18 @@ struct TransactionEditorView: View {
     @State private var showingDatePicker = false
     @State private var isSaving = false
     @State private var isActive = false
+    @State private var importedInitialReceipts = false
 
-    init(title: String, initialDraft: TransactionDraft, scanInvoice: Bool = false) {
+    init(title: String, initialDraft: TransactionDraft, scanInvoice: Bool = false,
+         allowsJournalSelection: Bool = false, captureCurrencyCode: String = "",
+         initialReceiptURLs: [URL] = [], onSaved: (() -> Void)? = nil) {
         self.title = title
         self.initialDraft = initialDraft
         self.scanInvoice = scanInvoice
+        self.allowsJournalSelection = allowsJournalSelection
+        self.captureCurrencyCode = captureCurrencyCode
+        self.initialReceiptURLs = initialReceiptURLs
+        self.onSaved = onSaved
         _draft = State(initialValue: initialDraft.preparedForAmountEntry)
     }
 
@@ -131,6 +142,22 @@ struct TransactionEditorView: View {
 
     var body: some View {
         FinanceForm(spacing: 0) {
+            if allowsJournalSelection {
+                FinanceFormCard {
+                    FinanceFormRow(last: true) {
+                        Picker("Journal", selection: $draft.ledgerID) {
+                            Text("Choose Journal").tag(UUID?.none)
+                            ForEach(JournalVisibility(rawValue: MobileDisplayPreferences.defaults.string(forKey: JournalVisibility.preferenceKey) ?? "").visible(in: store.orderedLedgers)) { journal in
+                                Text(journal.name).tag(Optional(journal.id))
+                            }
+                        }.accessibilityIdentifier("incoming-journal-picker")
+                    }
+                }.padding(.bottom, 24)
+                if missingCaptureCurrency {
+                    Text("This purchase is in \(captureCurrencyCode). Choose a journal with that currency, or add the currency in Settings first.")
+                        .font(.footnote).foregroundStyle(.orange).padding(.bottom, 16)
+                }
+            }
             VStack(spacing: 7) {
                 FinanceFormCard {
                     ForEach($draft.postings) { $posting in
@@ -274,7 +301,7 @@ struct TransactionEditorView: View {
                         save(scope: .occurrence)
                     }
                 } label: { EditorSaveLabel(isSaving: isSaving) }
-                .disabled(isSaving || !receiptImports.canSave || draft.postings.count < 2 || draft.postings.contains { $0.accountID == nil || decimalFromInput($0.amount) == nil } || !draft.postings.contains { (decimalFromInput($0.amount) ?? 0) != 0 })
+                .disabled(isSaving || missingCaptureJournal || missingCaptureCurrency || !receiptImports.canSave || draft.postings.count < 2 || draft.postings.contains { $0.accountID == nil || decimalFromInput($0.amount) == nil } || !draft.postings.contains { (decimalFromInput($0.amount) ?? 0) != 0 })
             }
             ToolbarItem(placement: .keyboard) {
                 keyboardToolbar
@@ -282,6 +309,19 @@ struct TransactionEditorView: View {
 
         }
         .task {
+            if !importedInitialReceipts && !initialReceiptURLs.isEmpty {
+                importedInitialReceipts = true
+                let generation = store.attachmentImportGeneration
+                receiptImports.start { operationID in
+                    for url in initialReceiptURLs {
+                        try Task.checkCancellation()
+                        _ = try await store.importAttachmentAsync(from: url, expectedGeneration: generation) { asset in
+                            try receiptImports.accept(asset, for: operationID)
+                            draft.attachments.append(asset)
+                        }
+                    }
+                }
+            }
             guard initialDraft.id == nil, !scanInvoice, !hasAppliedInitialFocus else { return }
             hasAppliedInitialFocus = true
             do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
@@ -293,6 +333,15 @@ struct TransactionEditorView: View {
                 withAnimation(FinanceMotion.disclosure(reduceMotion: reduceMotion)) {
                     showingDatePicker = false
                 }
+            }
+        }
+        .onChange(of: draft.ledgerID) { old, new in
+            guard allowsJournalSelection, old != new else { return }
+            focusedField = nil
+            let commodity = captureCurrencyCode.isEmpty ? nil : store.data.commodities.first { $0.ledgerID == new && $0.symbol.caseInsensitiveCompare(captureCurrencyCode) == .orderedSame }
+            for index in draft.postings.indices {
+                draft.postings[index].accountID = nil
+                draft.postings[index].commodityID = commodity?.id
             }
         }
         .confirmationDialog(
@@ -316,6 +365,18 @@ struct TransactionEditorView: View {
             Button("OK") { store.validationError = nil }
         } message: { Text(store.validationError?.message ?? "") }
 
+    }
+
+    private var missingCaptureCurrency: Bool {
+        allowsJournalSelection && !captureCurrencyCode.isEmpty && !store.data.commodities.contains {
+            $0.ledgerID == draft.ledgerID && $0.symbol.caseInsensitiveCompare(captureCurrencyCode) == .orderedSame
+        }
+    }
+
+    private var missingCaptureJournal: Bool {
+        guard allowsJournalSelection else { return false }
+        let hidden = JournalVisibility(rawValue: MobileDisplayPreferences.defaults.string(forKey: JournalVisibility.preferenceKey) ?? "").hiddenIDs
+        return !store.data.ledgers.contains { $0.id == draft.ledgerID && !hidden.contains($0.id) }
     }
 
     private var historicalSuggestionField: HistoricalTextSuggestionField? {
@@ -363,7 +424,7 @@ struct TransactionEditorView: View {
     }
 
     private func save(scope: RecurringJournalEditor.Scope) {
-        guard !isSaving, receiptImports.canSave else { return }
+        guard !isSaving, receiptImports.canSave, !missingCaptureJournal, !missingCaptureCurrency else { return }
         let snapshot = draft
         isSaving = true
         focusedField = nil
@@ -371,6 +432,7 @@ struct TransactionEditorView: View {
             defer { isSaving = false }
             if await store.saveTransactionAndFlushAsync(snapshot, scope: scope, supersedesPendingAttachments: true) {
                 receiptImports.didCommit()
+                onSaved?()
                 if isActive { dismiss() }
             }
         }

@@ -9,9 +9,13 @@ enum DemoData {
     static var isTextSuggestionFixtureRequested: Bool {
         CommandLine.arguments.contains("--demo") && CommandLine.arguments.contains("--demo-text-suggestions")
     }
+    static var isSystemEntryFixtureRequested: Bool {
+        CommandLine.arguments.contains("--demo") && CommandLine.arguments.contains("--demo-system-entry")
+    }
 
     @MainActor static func makeStore() -> MobileLedgerStore {
-        let directoryName = isTextSuggestionFixtureRequested ? "FinancesiOS-SyntheticTextSuggestions"
+        let directoryName = isSystemEntryFixtureRequested ? "FinancesiOS-SyntheticSystemEntry"
+            : isTextSuggestionFixtureRequested ? "FinancesiOS-SyntheticTextSuggestions"
             : (isSplitEditorFixtureRequested ? "FinancesiOS-SyntheticSplitEditor" : "FinancesiOS-Demo")
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(directoryName, isDirectory: true)
         if CommandLine.arguments.contains("--reset-demo") {
@@ -21,6 +25,7 @@ enum DemoData {
         var data = fixture(includeFutureEntries: CommandLine.arguments.contains("--demo-future"), includeRecurringEntries: CommandLine.arguments.contains("--demo-recurring"), includeTemplates: true)
         if isSplitEditorFixtureRequested { data = splitEditorFixture() }
         if isTextSuggestionFixtureRequested { data = textSuggestionFixture() }
+        if isSystemEntryFixtureRequested { data = systemEntryFixture() }
         if CommandLine.arguments.contains("--demo-performance") { data = performanceFixture() }
         if CommandLine.arguments.contains("--demo-search-matches"), let ledgerID = data.selectedLedgerID {
             let root = data.accounts.first { $0.ledgerID == ledgerID && $0.kind == .asset && $0.parentID == nil }!
@@ -65,7 +70,7 @@ enum DemoData {
         if CommandLine.arguments.contains("--demo-scroll"), let index = data.transactions.indices.min(by: { data.transactions[$0].date < data.transactions[$1].date }) {
             data.transactions[index].note = "Oldest test transaction"
         }
-        let dependencies: CloudKitSyncDependencies = (isSplitEditorFixtureRequested || isTextSuggestionFixtureRequested)
+        let dependencies: CloudKitSyncDependencies = (isSplitEditorFixtureRequested || isTextSuggestionFixtureRequested || isSystemEntryFixtureRequested)
             ? CloudKitSyncDependencies(configuration: { nil }, makeClient: { _ in
                 throw ValidationError(message: "Synthetic split editor tests prohibit CloudKit access.")
             }, automaticTriggersEnabled: false)
@@ -107,6 +112,39 @@ enum DemoData {
         }
         if CommandLine.arguments.contains("--demo-performance") { DemoPerformanceFrames.shared.start(in: directory) }
         return store
+    }
+
+    static func systemEntryFixture() -> JournalData {
+        func id(_ value: Int) -> UUID { UUID(uuidString: String(format: "00000000-0000-0000-0000-%012llX", Int64(value)))! }
+        var data = splitEditorFixture()
+        data.ledgers[0].name = "SYNTHETIC Alpha"
+        let beta = Ledger(id: id(400), name: "SYNTHETIC Beta", listIndex: 1)
+        let usd = Commodity(id: id(401), ledgerID: beta.id, symbol: "USD", name: "US Dollar")
+        let assets = Account(id: id(410), ledgerID: beta.id, commodityID: usd.id, name: "Assets", kind: .asset)
+        let expenses = Account(id: id(411), ledgerID: beta.id, commodityID: usd.id, name: "Expenses", kind: .expense, listIndex: 1)
+        let bank = Account(id: id(420), ledgerID: beta.id, parentID: assets.id, commodityID: usd.id, name: "SYNTHETIC Beta Bank", kind: .asset)
+        let expense = Account(id: id(421), ledgerID: beta.id, parentID: expenses.id, commodityID: usd.id, name: "SYNTHETIC Beta Expense", kind: .expense)
+        data.ledgers.append(beta); data.commodities.append(usd); data.accounts += [assets, expenses, bank, expense]
+        data.transactions = [
+            LedgerTransaction(id: id(100), ledgerID: id(1), date: Date().addingTimeInterval(-3600), payee: "SYNTHETIC Store", note: "SYNTHETIC Purchase", number: "SYN-PURCHASE", cleared: true,
+                postings: [Posting(id: id(1000), accountID: id(20), commodityID: id(2), amount: -100), Posting(id: id(1001), accountID: id(21), commodityID: id(2), amount: 100, listIndex: 1)]),
+            LedgerTransaction(id: id(101), ledgerID: id(1), date: Date().addingTimeInterval(-60), payee: "SYNTHETIC Partial Refund", note: "SYNTHETIC Received Payment", number: "SYN-REFUND", cleared: true,
+                postings: [Posting(id: id(1010), accountID: id(20), commodityID: id(2), amount: 40), Posting(id: id(1011), accountID: id(21), commodityID: id(2), amount: -40, listIndex: 1)])
+        ]
+        data.transactionTemplates = ["Coffee", "Lunch", "Transit", "Groceries"].enumerated().map { index, name in
+            TransactionTemplate(id: id(2000 + index), ledgerID: id(1), name: name, note: "", payee: "", cleared: true, enabled: true, scanInvoice: false, listIndex: index,
+                postings: [PostingTemplate(accountID: id(20)), PostingTemplate(accountID: id(21), listIndex: 1)])
+        }
+        data.transactionTemplates.append(TransactionTemplate(id: id(2004), ledgerID: beta.id, name: "Coffee", note: "", payee: "", cleared: true, enabled: true, scanInvoice: false,
+            postings: [PostingTemplate(accountID: bank.id), PostingTemplate(accountID: expense.id, listIndex: 1)]))
+        return data
+    }
+
+    static func systemEntrySuggestion() -> CaptureSuggestion {
+        CaptureSuggestion(id: UUID(uuidString: "00000000-0000-0000-0000-000000002328")!, source: .applePay,
+            date: Date().addingTimeInterval(-30), amount: Decimal(string: "42.50"), currencyCode: "USD",
+            merchant: "SYNTHETIC Wallet Store", card: "SYNTHETIC Bank", note: "SYNTHETIC Wallet capture",
+            journalID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!)
     }
 
     static func textSuggestionFixture(referenceDate: Date = Date()) -> JournalData {

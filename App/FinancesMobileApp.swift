@@ -33,10 +33,22 @@ private final class FinancesMobileLaunchState: ObservableObject {
     init(liveVerification: Bool) {
         self.liveVerification = liveVerification
         #if DEBUG
+        if CommandLine.arguments.contains("--demo"), CommandLine.arguments.contains("--reset-demo") {
+            try? FileManager.default.removeItem(at: SystemIntegrationStorage.directory)
+        }
         if CommandLine.arguments.contains("--demo") { store = DemoData.makeStore() }
         else { store = liveVerification ? nil : MobileLedgerStore() }
         #else
         store = liveVerification ? nil : MobileLedgerStore()
+        #endif
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
+            store?.enableSystemIntegrations()
+        }
+        #if DEBUG
+        if CommandLine.arguments.contains("--demo"), CommandLine.arguments.contains("--demo-system-entry"),
+           CommandLine.arguments.contains("--demo-wallet-draft") {
+            SystemEntryRouter.shared.openNewTransaction(DemoData.systemEntrySuggestion())
+        }
         #endif
         // Register before scene rendering so a cold silent-push launch can
         // refresh the badge too. Permission is requested only in an active scene.
@@ -50,12 +62,17 @@ private final class FinancesMobileLaunchState: ObservableObject {
 @MainActor
 private struct FinancesMobileNormalContent: View {
     @ObservedObject var store: MobileLedgerStore
+    @AppStorage(JournalVisibility.preferenceKey, store: MobileDisplayPreferences.defaults) private var hiddenJournalIDs = ""
     var body: some View {
         AppShellView()
             .environmentObject(store)
             .environmentObject(store.cloudSyncState)
             .preferredColorScheme(store.data.appearance.colorScheme)
-            .task { await store.prepareAfterInitialRender() }
+            .task {
+                await store.prepareAfterInitialRender()
+                await SystemEntryRouter.shared.restoreSharedReceipts(store: store)
+            }
+            .onChange(of: hiddenJournalIDs) { store.refreshSystemIntegrations() }
             .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
                 store.refreshAppIconBadge()
                 store.refreshDailyBalancesIfNeeded()
@@ -72,6 +89,13 @@ private struct FinancesMobileNormalContent: View {
 @MainActor
 final class FinancesMobileAppDelegate: NSObject, UIApplicationDelegate {
     weak var store: MobileLedgerStore?
+
+    func application(_ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession,
+                     options: UIScene.ConnectionOptions) -> UISceneConfiguration {
+        let configuration = UISceneConfiguration(name: nil, sessionRole: connectingSceneSession.role)
+        configuration.delegateClass = HomeScreenQuickActionSceneDelegate.self
+        return configuration
+    }
 
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         // QA records only callback success; device tokens never enter its evidence.

@@ -56,6 +56,14 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSRequiresIPhoneOS: true
+        LSSupportsOpeningDocumentsInPlace: true
+        CFBundleDocumentTypes:
+        - CFBundleTypeName: Receipt Images and PDFs
+          CFBundleTypeRole: Viewer
+          LSHandlerRank: Alternate
+          LSItemContentTypes:
+          - public.image
+          - com.adobe.pdf
         NSCameraUsageDescription: Attach receipt photos to transactions.
         NSPhotoLibraryUsageDescription: Attach receipt images to transactions.
         UIApplicationSceneManifest:
