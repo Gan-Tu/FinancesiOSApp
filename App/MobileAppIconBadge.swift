@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import UserNotifications
 
 @MainActor
@@ -32,10 +33,11 @@ struct MobileAppIconBadgeSnapshot: @unchecked Sendable {
         ledgerIDs = Set(data.ledgers.map(\.id))
     }
 
-    func count(now: Date, calendar: Calendar) -> Int {
+    func count(now: Date, calendar: Calendar, excluding hiddenLedgerIDs: Set<UUID> = []) -> Int {
         guard let tomorrow = calendar.dateInterval(of: .day, for: now)?.end else { return 0 }
         return transactions.reduce(0) { count, row in
-            count + (!row.cleared && row.date < tomorrow && ledgerIDs.contains(row.ledgerID) ? 1 : 0)
+            count + (!row.cleared && row.date < tomorrow && ledgerIDs.contains(row.ledgerID)
+                && !hiddenLedgerIDs.contains(row.ledgerID) ? 1 : 0)
         }
     }
 }
@@ -45,6 +47,9 @@ final class MobileAppIconBadge {
     private let dependencies: MobileAppIconBadgeDependencies
     private let now: () -> Date
     private let calendar: () -> Calendar
+    private let preferences: UserDefaults
+    private var hiddenLedgerIDs: Set<UUID>
+    private var visibilityObservation: AnyCancellable?
     private var snapshot: MobileAppIconBadgeSnapshot?
     private var revision: UInt = 0
     private var isActive = false
@@ -53,10 +58,22 @@ final class MobileAppIconBadge {
 
     init(dependencies: MobileAppIconBadgeDependencies = .live,
          now: @escaping () -> Date = Date.init,
-         calendar: @escaping () -> Calendar = { .current }) {
+         calendar: @escaping () -> Calendar = { .current },
+         preferences: UserDefaults = MobileDisplayPreferences.defaults) {
         self.dependencies = dependencies
         self.now = now
         self.calendar = calendar
+        self.preferences = preferences
+        hiddenLedgerIDs = JournalVisibility(rawValue: preferences.string(forKey: JournalVisibility.preferenceKey) ?? "").hiddenIDs
+        // Visibility is device-local AppStorage, so hiding a journal does not
+        // change the ledger snapshot. Observe it independently of any screen.
+        visibilityObservation = NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            .sink { @Sendable [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self, self.currentHiddenLedgerIDs != self.hiddenLedgerIDs else { return }
+                    self.refresh()
+                }
+            }
     }
 
     func update(_ data: JournalData) {
@@ -75,9 +92,14 @@ final class MobileAppIconBadge {
     }
 
     func refresh() {
+        hiddenLedgerIDs = currentHiddenLedgerIDs
         revision &+= 1
         guard worker == nil, snapshot != nil else { return }
         worker = Task { [weak self] in await self?.writeLatestCount() }
+    }
+
+    private var currentHiddenLedgerIDs: Set<UUID> {
+        JournalVisibility(rawValue: preferences.string(forKey: JournalVisibility.preferenceKey) ?? "").hiddenIDs
     }
 
     func waitUntilIdle() async { await worker?.value }
@@ -122,8 +144,9 @@ final class MobileAppIconBadge {
         while let snapshot {
             let currentRevision = revision
             let date = now(), currentCalendar = calendar()
+            let excludedLedgerIDs = hiddenLedgerIDs
             let count = await Task.detached(priority: .utility) {
-                snapshot.count(now: date, calendar: currentCalendar)
+                snapshot.count(now: date, calendar: currentCalendar, excluding: excludedLedgerIDs)
             }.value
             guard currentRevision == revision else { continue }
             var authorization = await dependencies.authorization()

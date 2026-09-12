@@ -32,6 +32,12 @@ final class MobileAppIconBadgeTests: XCTestCase {
         return data
     }
 
+    private func isolatedPreferences(suite: String = "badge-visibility-tests-" + UUID().uuidString) -> UserDefaults {
+        let preferences = UserDefaults(suiteName: suite)!
+        addTeardownBlock { preferences.removePersistentDomain(forName: suite) }
+        return preferences
+    }
+
     func testCountAcrossJournalsMatchesTodayAndEarlierIncludingDST() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
@@ -51,6 +57,113 @@ final class MobileAppIconBadgeTests: XCTestCase {
         let snapshot = MobileAppIconBadgeSnapshot(data)
         XCTAssertEqual(snapshot.count(now: now, calendar: calendar), 2)
         XCTAssertEqual(snapshot.count(now: tomorrow, calendar: calendar), 3)
+        XCTAssertEqual(snapshot.count(now: now, calendar: calendar, excluding: [data.ledgers[0].id]), 1)
+        XCTAssertEqual(snapshot.count(now: tomorrow, calendar: calendar, excluding: Set(data.ledgers.map(\.id))), 0)
+    }
+
+    func testPersistedHiddenJournalsDoNotCountOrRequestPermission() async {
+        let preferences = isolatedPreferences()
+        let data = fixture()
+        preferences.set(data.ledgers[0].id.uuidString, forKey: JournalVisibility.preferenceKey)
+        let center = Center()
+        center.authorization = .notDetermined
+        let badge = MobileAppIconBadge(dependencies: center.dependencies, preferences: preferences)
+        badge.update(data)
+        badge.setActive(true)
+        await badge.waitUntilIdle()
+        XCTAssertEqual(center.requests, 0)
+        XCTAssertTrue(center.counts.isEmpty)
+        center.authorization = .enabled
+        badge.setActive(true)
+        await badge.waitUntilIdle()
+        XCTAssertEqual(center.counts, [0])
+    }
+
+    func testVisibilityChangesRefreshBadgeWithoutMutatingDataAndSurviveReopening() async throws {
+        let preferences = isolatedPreferences()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let data = fixture()
+        let store = MobileLedgerStore(supportDirectory: directory, initialData: data)
+        let center = Center()
+        let badge = MobileAppIconBadge(dependencies: center.dependencies, preferences: preferences)
+        store.enableAppIconBadges(using: badge)
+        await badge.waitUntilIdle()
+        XCTAssertEqual(center.counts, [2])
+        let original = try JSONEncoder.appEncoder.encode(store.data)
+
+        for (hidden, count) in [(true, 0), (false, 2), (true, 0)] {
+            let written = expectation(description: "Visibility updates badge to \(count)")
+            center.onWrite = { value in if value == count { written.fulfill() } }
+            preferences.set(hidden ? data.ledgers[0].id.uuidString : "", forKey: JournalVisibility.preferenceKey)
+            // Observe the real UserDefaults notification, without a manual
+            // refresh or store edit that could mask missing visibility wiring.
+            await fulfillment(of: [written], timeout: 5)
+            await badge.waitUntilIdle()
+            center.onWrite = nil
+        }
+        XCTAssertEqual(try JSONEncoder.appEncoder.encode(store.data), original)
+        XCTAssertEqual(center.counts, [2, 0, 2, 0])
+        store.setTransactionCleared(data.transactions[0].id, cleared: true)
+        await badge.waitUntilIdle()
+        XCTAssertEqual(center.counts, [2, 0, 2, 0], "New data must retain the visibility exclusion")
+        try store.flushLocalChanges()
+
+        let reopened = MobileLedgerStore(supportDirectory: directory)
+        let reopenedCenter = Center()
+        let reopenedBadge = MobileAppIconBadge(dependencies: reopenedCenter.dependencies, preferences: preferences)
+        reopened.enableAppIconBadges(using: reopenedBadge)
+        await reopenedBadge.waitUntilIdle()
+        XCTAssertEqual(reopenedCenter.counts, [0])
+    }
+
+    func testHidingJournalDuringOSWriteSupersedesOldCount() async {
+        let preferences = isolatedPreferences()
+        let center = Center()
+        let badge = MobileAppIconBadge(dependencies: center.dependencies, preferences: preferences)
+        let data = fixture()
+        let started = expectation(description: "Visible count write started")
+        let hiddenWritten = expectation(description: "Hidden count replaces in-flight visible count")
+        var finishWrite: CheckedContinuation<Void, Never>?
+        center.onWrite = { count in
+            if count == 2 {
+                await withCheckedContinuation { continuation in
+                    finishWrite = continuation
+                    started.fulfill()
+                }
+            } else if count == 0 { hiddenWritten.fulfill() }
+        }
+        badge.update(data)
+        await fulfillment(of: [started], timeout: 5)
+        preferences.set(data.ledgers[0].id.uuidString, forKey: JournalVisibility.preferenceKey)
+        finishWrite?.resume()
+        await fulfillment(of: [hiddenWritten], timeout: 5)
+        await badge.waitUntilIdle()
+        XCTAssertEqual(center.counts, [2, 0])
+    }
+
+    func testBackgroundVisibilityChangeRefreshesBadge() async {
+        let suite = "badge-background-tests-" + UUID().uuidString
+        let preferences = isolatedPreferences(suite: suite)
+        let center = Center()
+        let badge = MobileAppIconBadge(dependencies: center.dependencies, preferences: preferences)
+        let data = fixture()
+        badge.update(data)
+        await badge.waitUntilIdle()
+        let hiddenWritten = expectation(description: "Background preference change updates badge")
+        center.onWrite = { count in if count == 0 { hiddenWritten.fulfill() } }
+        let hiddenJournalID = data.ledgers[0].id.uuidString
+        let preferenceKey = JournalVisibility.preferenceKey
+        await Task.detached {
+            let backgroundPreferences = UserDefaults(suiteName: suite)!
+            backgroundPreferences.set(hiddenJournalID, forKey: preferenceKey)
+            // NotificationCenter delivers on the posting thread; the observer
+            // must hop to MainActor before touching badge state.
+            NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: backgroundPreferences)
+        }.value
+        await fulfillment(of: [hiddenWritten], timeout: 5)
+        await badge.waitUntilIdle()
+        XCTAssertEqual(center.counts, [2, 0])
     }
 
     func testStoreMutationsRefreshBadgeAndClearingLastEntryRemovesIt() async throws {
