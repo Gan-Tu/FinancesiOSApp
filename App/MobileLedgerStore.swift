@@ -374,6 +374,7 @@ final class MobileLedgerStore: ObservableObject {
     let registerPresentations = RegisterPresentationCache()
     let receiptAttachmentSaves = ReceiptAttachmentSaveRegistry()
     let receiptContentRevisions = ReceiptContentRevisions()
+    let historicalTextSuggestions = HistoricalTextSuggestionCache()
     private var registerPrewarmTask: Task<Void, Never>?
     private var dailyBalanceTask: Task<Void, Never>?
     private var dailyBalanceRequest: (referenceDate: Date, calendar: Calendar, cutoff: Date)?
@@ -935,6 +936,36 @@ final class MobileLedgerStore: ObservableObject {
         searchContentRevision &+= 1
     }
 
+    private func hasChangedSuggestionSource(_ previous: LedgerTransaction?, _ updated: LedgerTransaction) -> Bool {
+        guard let previous else { return true }
+        return previous.ledgerID != updated.ledgerID || previous.date != updated.date ||
+            previous.note != updated.note || previous.payee != updated.payee
+    }
+
+    /// Batch/sync paths reuse the existing transaction lookup. Single-row edits
+    /// avoid this scan entirely; typing and cleared-status updates never enter it.
+    private func changedSuggestionJournals(in transactions: [LedgerTransaction]) -> Set<UUID> {
+        var seen = Set<UUID>()
+        var changed = Set<UUID>()
+        for transaction in transactions {
+            seen.insert(transaction.id)
+            let previous = derivedCache.transactionsByID[transaction.id]
+            if hasChangedSuggestionSource(previous, transaction) {
+                changed.insert(transaction.ledgerID)
+                if let previous { changed.insert(previous.ledgerID) }
+            }
+        }
+        for (id, transaction) in derivedCache.transactionsByID where !seen.contains(id) { changed.insert(transaction.ledgerID) }
+        return changed
+    }
+
+    private func refreshHistoricalTextSuggestions(in ledgerIDs: Set<UUID>) {
+        let interested = historicalTextSuggestions.invalidate(ledgerIDs: ledgerIDs)
+        if let selectedLedgerID, interested.contains(selectedLedgerID) {
+            historicalTextSuggestions.prewarm(data: data, ledgerID: selectedLedgerID)
+        }
+    }
+
     private func refreshDerivedCacheForTransactionTemplateListChange(ledgerID: UUID) {
         derivedCache.transactionTemplatesByLedger[ledgerID] = data.transactionTemplates
             .filter { $0.ledgerID == ledgerID }
@@ -1254,6 +1285,7 @@ final class MobileLedgerStore: ObservableObject {
         validationError = nil
         scheduleDeferredLocalSave(validateSnapshot: false, scheduleCloudAfterSuccess: false, refreshCloudStateAfterSuccess: false)
         prewarmRegister(ledgerID: ledgerID)
+        historicalTextSuggestions.prewarm(data: data, ledgerID: ledgerID)
     }
 
     func accounts(for ledgerID: UUID) -> [Account] {
@@ -1685,6 +1717,7 @@ final class MobileLedgerStore: ObservableObject {
             removedTransactionIDs: removedTransactionIDs,
             removedTemplateIDs: removedTemplateIDs
         )
+        refreshHistoricalTextSuggestions(in: [ledgerID])
         save(syncCloud: true, refreshCache: false)
     }
 
@@ -2016,8 +2049,10 @@ final class MobileLedgerStore: ObservableObject {
         guard candidate.transactions != data.transactions else { return }
         do {
             try Self.validateCandidateData(candidate, operation: "Recurring projection")
+            let suggestionJournals = changedSuggestionJournals(in: candidate.transactions)
             data = candidate
             refreshDerivedCache()
+            refreshHistoricalTextSuggestions(in: suggestionJournals)
             save(syncCloud: syncCloud, refreshCache: false)
         } catch { validationError = ValidationError(message: error.localizedDescription) }
     }
@@ -2298,15 +2333,20 @@ final class MobileLedgerStore: ObservableObject {
                 if schedulePersistence { save(syncCloud: true, refreshCache: false) }
                 return
             }
+            let singleRow = previous?.recurrenceRule == nil && transaction.recurrenceRule == nil &&
+                candidate.transactions.count == expectedSingleRowCount
+            let suggestionJournals: Set<UUID> = singleRow
+                ? (hasChangedSuggestionSource(previous, transaction) ? [transaction.ledgerID] : [])
+                : changedSuggestionJournals(in: candidate.transactions)
             data = candidate
             committed = true
-            if previous?.recurrenceRule == nil && transaction.recurrenceRule == nil,
-               candidate.transactions.count == expectedSingleRowCount {
+            if singleRow {
                 refreshDerivedCacheForTransactionReplacement(previous: previous, updated: transaction)
             } else {
                 // A scope edit can affect several accounts, dates and summaries.
                 refreshDerivedCache()
             }
+            refreshHistoricalTextSuggestions(in: suggestionJournals)
             if schedulePersistence { save(syncCloud: true, refreshCache: false) }
         } catch {
             validationError = ValidationError(message: error.localizedDescription)
@@ -2372,6 +2412,7 @@ final class MobileLedgerStore: ObservableObject {
         if removed.count == 1, !deletion.scheduleChanged, let row = removed.first {
             refreshDerivedCacheForTransactionDeletion(row)
         } else { refreshDerivedCache() }
+        refreshHistoricalTextSuggestions(in: Set(removed.map(\.ledgerID)))
         if schedulePersistence { save(syncCloud: true, refreshCache: false) }
     }
 
@@ -2819,6 +2860,10 @@ final class MobileLedgerStore: ObservableObject {
 
     func refreshAppIconBadge() { appIconBadge?.refresh() }
 
+    func refreshHistoricalSuggestionsForClockChange() {
+        if let selectedLedgerID { historicalTextSuggestions.prewarm(data: data, ledgerID: selectedLedgerID) }
+    }
+
     func setSceneActive(_ active: Bool, sceneID: UUID) {
         let wasActive = isForegroundActive
         if active { activeSceneIDs.insert(sceneID) } else { activeSceneIDs.remove(sceneID) }
@@ -2836,6 +2881,7 @@ final class MobileLedgerStore: ObservableObject {
         refreshCloudKitForegroundTriggers()
         if isForegroundActive {
             refreshDailyBalancesIfNeeded()
+            if let selectedLedgerID { historicalTextSuggestions.prewarm(data: data, ledgerID: selectedLedgerID) }
             synchronizeIfEnabled()
         } else {
             deferredCloudSaveToken = nil
@@ -2875,6 +2921,7 @@ final class MobileLedgerStore: ObservableObject {
     func prepareAfterInitialRender() async {
         prewarmRegister(ledgerID: selectedLedgerID)
         warmTransactionSearchCacheInBackground()
+        if let selectedLedgerID { historicalTextSuggestions.prewarm(data: data, ledgerID: selectedLedgerID) }
         // The initial and subsequent scene-phase callbacks own sync activation.
     }
 
@@ -3371,6 +3418,8 @@ final class MobileLedgerStore: ObservableObject {
         completedTransactionSaveOperations.removeAll()
         data = snapshot
         refreshDerivedCache()
+        historicalTextSuggestions.invalidateAll()
+        if let selectedLedgerID { historicalTextSuggestions.prewarm(data: data, ledgerID: selectedLedgerID) }
         deletedTransactionTombstoneIDs = []
         cloudSyncProgress = .idle
         refreshCloudSyncDataAvailability()
@@ -3827,8 +3876,10 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
             }
         }
         let previousSecurity = data.security
+        let suggestionJournals = changedSuggestionJournals(in: candidate.transactions)
         data = candidate
         refreshDerivedCache()
+        refreshHistoricalTextSuggestions(in: suggestionJournals)
         receiptContentRevisions.didReplaceContents(of: Set(records.filter { $0.recordType == "attachment_asset" }.compactMap { UUID(uuidString: $0.recordID) }))
         refreshUnlockStateForLoadedData(previousSecurity: previousSecurity)
         reloadDeletedTransactionTombstones()
@@ -3868,8 +3919,10 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
             }
         }
         let previousSecurity = data.security
+        let suggestionJournals = changedSuggestionJournals(in: candidate.transactions)
         data = candidate
         refreshDerivedCache()
+        refreshHistoricalTextSuggestions(in: suggestionJournals)
         receiptContentRevisions.invalidateAll()
         refreshUnlockStateForLoadedData(previousSecurity: previousSecurity)
         reloadDeletedTransactionTombstones()

@@ -277,9 +277,7 @@ struct TransactionEditorView: View {
                 .disabled(isSaving || !receiptImports.canSave || draft.postings.count < 2 || draft.postings.contains { $0.accountID == nil || decimalFromInput($0.amount) == nil } || !draft.postings.contains { (decimalFromInput($0.amount) ?? 0) != 0 })
             }
             ToolbarItem(placement: .keyboard) {
-                AmountKeyboardToolbar(showOperators: focusedAmountID != nil,
-                    negate: { calculate(negate: true) }, insertOperator: insertOperator,
-                    calculate: { calculate() }, done: { focusedField = nil })
+                keyboardToolbar
             }
 
         }
@@ -318,6 +316,32 @@ struct TransactionEditorView: View {
             Button("OK") { store.validationError = nil }
         } message: { Text(store.validationError?.message ?? "") }
 
+    }
+
+    private var historicalSuggestionField: HistoricalTextSuggestionField? {
+        switch focusedField {
+        case .notes: .note
+        case .payee: .payee
+        default: nil
+        }
+    }
+
+    @ViewBuilder private var keyboardToolbar: some View {
+        if let field = historicalSuggestionField, let ledgerID = draft.ledgerID {
+            let query = field == .note ? draft.note : draft.payee
+            HistoricalTextSuggestionToolbar(cache: store.historicalTextSuggestions, data: store.data,
+                ledgerID: ledgerID, field: field, query: query,
+                select: { text in
+                    guard !isSaving, historicalSuggestionField == field,
+                          (field == .note ? draft.note : draft.payee) == query else { return }
+                    if field == .note { draft.note = text }
+                    else { draft.payee = text }
+                }, done: { focusedField = nil })
+        } else {
+            AmountKeyboardToolbar(showOperators: focusedAmountID != nil,
+                negate: { calculate(negate: true) }, insertOperator: insertOperator,
+                calculate: { calculate() }, done: { focusedField = nil })
+        }
     }
 
     private func updateAmount(_ value: String, at index: Int) {
@@ -791,6 +815,8 @@ struct TemplateEditorView: View {
     @State private var showingDeleteConfirmation = false
     @State private var isSaving = false
     @State private var isActive = false
+    private enum Field: Hashable { case name, note, payee }
+    @FocusState private var focusedField: Field?
 
     init(initialDraft: TransactionTemplateDraft) {
         isNew = initialDraft.id == nil
@@ -803,7 +829,7 @@ struct TemplateEditorView: View {
         NavigationStack {
             FinanceForm {
                 FinanceFormCard {
-                    FinanceFormRow(last: true) { TextField("Name", text: $draft.name) }
+                    FinanceFormRow(last: true) { TextField("Name", text: $draft.name).focused($focusedField, equals: .name) }
                 }
                 VStack(alignment: .leading, spacing: 8) {
                     Text("POSTINGS").font(.footnote).foregroundStyle(.secondary).padding(.leading, 16)
@@ -837,8 +863,8 @@ struct TemplateEditorView: View {
                     .buttonStyle(.plain).accessibilityLabel("Posting").padding(.leading, 8)
                 }
                 FinanceFormCard {
-                    FinanceFormRow { TextField("Payee", text: $draft.payee) }
-                    FinanceFormRow { TextField("Note", text: $draft.note, axis: .vertical) }
+                    FinanceFormRow { TextField("Payee", text: $draft.payee).focused($focusedField, equals: .payee) }
+                    FinanceFormRow { TextField("Note", text: $draft.note, axis: .vertical).focused($focusedField, equals: .note) }
                     FinanceFormRow { Toggle("Cleared", isOn: $draft.cleared) }
                     FinanceFormRow(last: true) { Toggle("Scan Invoice", isOn: $draft.scanInvoice) }
                 }
@@ -892,7 +918,32 @@ struct TemplateEditorView: View {
                         }
                     } label: { EditorSaveLabel(isSaving: isSaving) }.disabled(isSaving || draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
+                ToolbarItem(placement: .keyboard) { keyboardToolbar }
             }
+        }
+    }
+
+    private var historicalSuggestionField: HistoricalTextSuggestionField? {
+        switch focusedField {
+        case .note: .note
+        case .payee: .payee
+        default: nil
+        }
+    }
+
+    @ViewBuilder private var keyboardToolbar: some View {
+        if let field = historicalSuggestionField, let ledgerID = draft.ledgerID {
+            let query = field == .note ? draft.note : draft.payee
+            HistoricalTextSuggestionToolbar(cache: store.historicalTextSuggestions, data: store.data,
+                ledgerID: ledgerID, field: field, query: query,
+                select: { text in
+                    guard !isSaving, historicalSuggestionField == field,
+                          (field == .note ? draft.note : draft.payee) == query else { return }
+                    if field == .note { draft.note = text }
+                    else { draft.payee = text }
+                }, done: { focusedField = nil })
+        } else {
+            AmountKeyboardToolbar(showOperators: false, negate: {}, insertOperator: { _ in }, calculate: {}, done: { focusedField = nil })
         }
     }
 }

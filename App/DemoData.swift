@@ -6,9 +6,13 @@ enum DemoData {
     static var isSplitEditorFixtureRequested: Bool {
         CommandLine.arguments.contains("--demo") && CommandLine.arguments.contains("--demo-split-editor")
     }
+    static var isTextSuggestionFixtureRequested: Bool {
+        CommandLine.arguments.contains("--demo") && CommandLine.arguments.contains("--demo-text-suggestions")
+    }
 
     @MainActor static func makeStore() -> MobileLedgerStore {
-        let directoryName = isSplitEditorFixtureRequested ? "FinancesiOS-SyntheticSplitEditor" : "FinancesiOS-Demo"
+        let directoryName = isTextSuggestionFixtureRequested ? "FinancesiOS-SyntheticTextSuggestions"
+            : (isSplitEditorFixtureRequested ? "FinancesiOS-SyntheticSplitEditor" : "FinancesiOS-Demo")
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(directoryName, isDirectory: true)
         if CommandLine.arguments.contains("--reset-demo") {
             try? FileManager.default.removeItem(at: directory)
@@ -16,6 +20,7 @@ enum DemoData {
         }
         var data = fixture(includeFutureEntries: CommandLine.arguments.contains("--demo-future"), includeRecurringEntries: CommandLine.arguments.contains("--demo-recurring"), includeTemplates: true)
         if isSplitEditorFixtureRequested { data = splitEditorFixture() }
+        if isTextSuggestionFixtureRequested { data = textSuggestionFixture() }
         if CommandLine.arguments.contains("--demo-performance") { data = performanceFixture() }
         if CommandLine.arguments.contains("--demo-search-matches"), let ledgerID = data.selectedLedgerID {
             let root = data.accounts.first { $0.ledgerID == ledgerID && $0.kind == .asset && $0.parentID == nil }!
@@ -60,7 +65,7 @@ enum DemoData {
         if CommandLine.arguments.contains("--demo-scroll"), let index = data.transactions.indices.min(by: { data.transactions[$0].date < data.transactions[$1].date }) {
             data.transactions[index].note = "Oldest test transaction"
         }
-        let dependencies: CloudKitSyncDependencies = isSplitEditorFixtureRequested
+        let dependencies: CloudKitSyncDependencies = (isSplitEditorFixtureRequested || isTextSuggestionFixtureRequested)
             ? CloudKitSyncDependencies(configuration: { nil }, makeClient: { _ in
                 throw ValidationError(message: "Synthetic split editor tests prohibit CloudKit access.")
             }, automaticTriggersEnabled: false)
@@ -102,6 +107,47 @@ enum DemoData {
         }
         if CommandLine.arguments.contains("--demo-performance") { DemoPerformanceFrames.shared.start(in: directory) }
         return store
+    }
+
+    static func textSuggestionFixture(referenceDate: Date = Date()) -> JournalData {
+        func id(_ value: Int) -> UUID { UUID(uuidString: String(format: "00000000-0000-0000-0000-%012llX", Int64(value)))! }
+        let notes = ["Airport parking receipt", "Annual membership renewal", "Apartment utilities payment", "Art supply purchase",
+            "A complete multiword historical note whose full text is deliberately wider than one suggestion chip", "Alpha sixth note"]
+        let payees = ["Aster Coffee Roasters", "Atlas Grocery Market", "Arcadia Community Gym", "Arbor Books and Stationery", "Alpine Outdoor Supply", "Astral Sixth Merchant"]
+        var data = JournalData()
+        for journal in 0..<2 {
+            let base = 500 + journal * 100
+            let ledger = Ledger(id: id(base), name: journal == 0 ? "SYNTHETIC Alpha" : "SYNTHETIC Beta", listIndex: journal)
+            let currency = Commodity(id: id(base + 1), ledgerID: ledger.id, symbol: "USD", name: "US Dollar")
+            let assets = Account(id: id(base + 2), ledgerID: ledger.id, commodityID: currency.id, name: "Assets", kind: .asset)
+            let expenses = Account(id: id(base + 3), ledgerID: ledger.id, commodityID: currency.id, name: "Expenses", kind: .expense, listIndex: 1)
+            let bank = Account(id: id(base + 4), ledgerID: ledger.id, parentID: assets.id, commodityID: currency.id, name: "SYNTHETIC Bank", kind: .asset)
+            let expense = Account(id: id(base + 5), ledgerID: ledger.id, parentID: expenses.id, commodityID: currency.id, name: "SYNTHETIC Expense", kind: .expense)
+            data.ledgers.append(ledger); data.commodities.append(currency); data.accounts += [assets, expenses, bank, expense]
+            var ordinal = 0
+            func add(note: String, payee: String, date: Date) {
+                let transactionID = base * 100 + ordinal
+                data.transactions.append(LedgerTransaction(id: id(transactionID), ledgerID: ledger.id, date: date, payee: payee, note: note,
+                    number: "SYNTHETIC-\(ordinal)", cleared: true,
+                    postings: [Posting(id: id(transactionID * 10), accountID: bank.id, commodityID: currency.id, amount: -25),
+                        Posting(id: id(transactionID * 10 + 1), accountID: expense.id, commodityID: currency.id, amount: 25, listIndex: 1)]))
+                ordinal += 1
+            }
+            for index in notes.indices {
+                for _ in 0..<(6 - index) {
+                    add(note: journal == 0 ? notes[index] : "Beta private historical note",
+                        payee: journal == 0 ? payees[index] : "Beta Private Merchant",
+                        date: referenceDate.addingTimeInterval(-Double(ordinal + 1) * 3600))
+                }
+            }
+            add(note: "FUTURE scheduled note", payee: "FUTURE Scheduled Merchant", date: referenceDate.addingTimeInterval(7 * 86400))
+            data.transactionTemplates.append(TransactionTemplate(id: id(base + 6), ledgerID: ledger.id, name: "Income", note: "", payee: "", cleared: true,
+                enabled: true, scanInvoice: false, listIndex: 0,
+                postings: [PostingTemplate(accountID: bank.id), PostingTemplate(accountID: expense.id, listIndex: 1)]))
+        }
+        data.selectedLedgerID = data.ledgers.first?.id
+        data.syncEnabled = false
+        return data
     }
 
     /// Exact, deliberately unequal values for native editor tests. The dedicated

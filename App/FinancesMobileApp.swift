@@ -59,10 +59,12 @@ private struct FinancesMobileNormalContent: View {
             .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
                 store.refreshAppIconBadge()
                 store.refreshDailyBalancesIfNeeded()
+                store.refreshHistoricalSuggestionsForClockChange()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in
                 store.refreshAppIconBadge()
                 store.refreshDailyBalancesIfNeeded()
+                store.refreshHistoricalSuggestionsForClockChange()
             }
     }
 }
