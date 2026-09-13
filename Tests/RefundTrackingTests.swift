@@ -19,6 +19,26 @@ final class RefundTrackingTests: XCTestCase {
         XCTAssertEqual(data.sources.count, 1)
     }
 
+    func testJournalVisibilityIncludesWaitingAndNeedsAttentionButHidesSettledAndStopped() throws {
+        let f = RefundFixture()
+        XCTAssertFalse(RefundTracking.overview(in: f.data, ledgerID: f.ledger.id).hasActiveTracking)
+        var waiting = try RefundTracking.saving(f.draft, in: f.data)
+        XCTAssertTrue(RefundTracking.overview(in: waiting, ledgerID: f.ledger.id).hasActiveTracking)
+        waiting = try RefundTracking.linking(purchaseID: f.purchase.id, incomingTransactionID: f.refund60.id, amount: 60, in: waiting)
+        XCTAssertTrue(RefundTracking.overview(in: waiting, ledgerID: f.ledger.id).hasActiveTracking)
+        var settled = try RefundTracking.linking(purchaseID: f.purchase.id, incomingTransactionID: f.refund40.id, amount: 40, in: waiting)
+        XCTAssertFalse(RefundTracking.overview(in: settled, ledgerID: f.ledger.id).hasActiveTracking)
+        XCTAssertNotNil(try RefundTracking.record(for: f.purchase.id, in: settled), "History remains available from the purchase")
+        let stopped = try RefundTracking.cancelling(purchaseID: f.purchase.id, in: waiting)
+        XCTAssertFalse(RefundTracking.overview(in: stopped, ledgerID: f.ledger.id).hasActiveTracking)
+        XCTAssertNotNil(try RefundTracking.record(for: f.purchase.id, in: stopped))
+        settled.transactions.removeAll { $0.id == f.refund40.id }
+        XCTAssertTrue(RefundTracking.overview(in: settled, ledgerID: f.ledger.id).hasActiveTracking, "Broken settled links need a reachable repair entry point")
+        var unreadable = stopped
+        unreadable.sources[0].externalID = RefundTracking.externalIDPrefix + "{}"
+        XCTAssertTrue(RefundTracking.overview(in: unreadable, ledgerID: f.ledger.id).hasActiveTracking)
+    }
+
     func testAllocationCannotDoubleCountIncomingPaymentAcrossPurchases() throws {
         let f = RefundFixture()
         var data = try RefundTracking.saving(f.draft, in: f.data)
@@ -192,6 +212,36 @@ final class RefundTrackingPersistenceTests: XCTestCase {
         await MobileLedgerStore.drainPersistenceQueueForTesting()
         for directory in directories { try FileManager.default.removeItem(at: directory) }
         try await super.tearDown()
+    }
+
+    func testEmptyTrackingPresentationStaysCheapAndRefreshesWhenTrackingArrives() async throws {
+        let f = RefundFixture(), cache = RefundPresentationCache()
+        let empty = try await cache.presentation(data: f.data, ledgerID: f.ledger.id, revision: 1)
+        XCTAssertFalse(empty.overview.hasActiveTracking)
+        XCTAssertTrue(empty.candidatesByCurrency.isEmpty, "Opening an empty journal must not build a transaction candidate index")
+        let reused = try await cache.presentation(data: f.data, ledgerID: f.ledger.id, revision: 1)
+        XCTAssertEqual(empty.id, reused.id)
+        let changed = try RefundTracking.saving(f.draft, in: f.data)
+        let waiting = try await cache.presentation(data: changed, ledgerID: f.ledger.id, revision: 2)
+        XCTAssertTrue(waiting.overview.hasActiveTracking)
+        XCTAssertFalse(waiting.candidatesByCurrency.isEmpty)
+    }
+
+    func testJournalVisibilityExpiresWhenLinkedFuturePaymentBecomesSettled() async throws {
+        let f = RefundFixture(), cache = RefundPresentationCache()
+        var draft = f.draft; draft.expectedAmount = 60
+        var data = try RefundTracking.saving(draft, in: f.data)
+        data = try RefundTracking.linking(purchaseID: f.purchase.id, incomingTransactionID: f.refund60.id, amount: 60, in: data)
+        let now = Date(), deadline = now.addingTimeInterval(60)
+        data.transactions[data.transactions.firstIndex { $0.id == f.refund60.id }!].date = deadline
+        let before = try await cache.presentation(data: data, ledgerID: f.ledger.id, revision: 1, asOf: now)
+        XCTAssertTrue(before.overview.hasActiveTracking, "A future linked payment still needs attention")
+        XCTAssertEqual(before.nextFutureDate, deadline)
+        let after = try await cache.presentation(data: data, ledgerID: f.ledger.id, revision: 1, asOf: deadline)
+        XCTAssertFalse(after.overview.hasActiveTracking, "A valid fully received payment no longer needs a journal shortcut")
+        XCTAssertNotNil(after.recordsByPurchase[f.purchase.id], "Settled details must remain accessible")
+        let rewound = try await cache.presentation(data: data, ledgerID: f.ledger.id, revision: 1, asOf: now)
+        XCTAssertTrue(rewound.overview.hasActiveTracking)
     }
 
     func testReadPresentationMatchesDomainAndReusesRevisionWithoutStalePaymentCapacity() async throws {

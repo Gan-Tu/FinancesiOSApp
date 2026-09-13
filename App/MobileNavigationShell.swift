@@ -43,6 +43,7 @@ enum ShellSheet: Identifiable {
 
 struct JournalsHomeScreen: View {
     @EnvironmentObject private var store: MobileLedgerStore
+    @ObservedObject private var inbox = SystemEntryRouter.shared
     @State private var journalEditMode: EditMode = .inactive
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var navigationPath: [MobileRoute]
@@ -61,9 +62,12 @@ struct JournalsHomeScreen: View {
 
     var body: some View {
         List {
-            Section {
-                NavigationLink(value: MobileRoute.suggestions) {
-                    Label("Suggestions", systemImage: "tray")
+            if !inbox.suggestions.isEmpty {
+                Section {
+                    NavigationLink(value: MobileRoute.suggestions) {
+                        Label("Suggestions", systemImage: "tray")
+                    }
+                    .accessibilityIdentifier("journal-suggestions")
                 }
             }
             Section {
@@ -120,7 +124,7 @@ struct JournalsHomeScreen: View {
         .animation(FinanceMotion.disclosure(reduceMotion: reduceMotion), value: hiddenJournalIDs)
         .contentMargins(.top, 16, for: .scrollContent)
         .overlay {
-            if visibleJournals.isEmpty {
+            if visibleJournals.isEmpty && inbox.suggestions.isEmpty {
                 ContentUnavailableView {
                     Label("Your Journals", systemImage: "folder")
                 } description: {
@@ -165,6 +169,8 @@ struct JournalOverviewScreen: View {
     @AppStorage private var expandedKindIDs: String
     @AppStorage private var collapsedAccountIDs: String
     @State private var pendingAccountDelete: Account?
+    @State private var hasActiveRefundTracking = false
+    @State private var showingRefundTracking = false
 
     init(ledgerID: UUID, navigationPath: Binding<[MobileRoute]>, route: Binding<EditorRoute?>) {
         self.ledgerID = ledgerID
@@ -197,8 +203,13 @@ struct JournalOverviewScreen: View {
     var body: some View {
         List {
             TransactionLinksSection(ledgerID: ledgerID) { navigationPath.append(.templates(ledgerID)) }
-            Section {
-                NavigationLink("Refunds & Reimbursements") { RefundTrackingListView(ledgerID: ledgerID) }
+            if hasActiveRefundTracking {
+                Section {
+                    Button { showingRefundTracking = true } label: {
+                        RefundTrackingNavigationLabel(title: "Refunds & Reimbursements")
+                    }
+                    .accessibilityIdentifier("journal-refund-tracking")
+                }
             }
             Section {
                 ForEach(AccountKind.allCases) { kind in
@@ -303,6 +314,10 @@ struct JournalOverviewScreen: View {
             ToolbarItem(placement: .topBarTrailing) { EditButton() }
         }
         .onAppear { store.selectLedger(ledgerID) }
+        .modifier(RefundTrackingJournalVisibility(ledgerID: ledgerID, isVisible: $hasActiveRefundTracking))
+        .navigationDestination(isPresented: $showingRefundTracking) {
+            RefundTrackingListView(ledgerID: ledgerID)
+        }
         .confirmationDialog("Delete Account?", isPresented: Binding(get: { pendingAccountDelete != nil }, set: { if !$0 { pendingAccountDelete = nil } }), presenting: pendingAccountDelete) { account in
             Button("Delete \(account.name)", role: .destructive) { store.deleteAccount(account.id) }
         } message: { _ in Text("Accounts that have transactions cannot be deleted.") }
@@ -831,9 +846,7 @@ private struct TransactionDetailContent: View {
                 if !transaction.note.isEmpty { DetailValueRow(label: "Notes", value: transaction.note) }
                 if !transaction.payee.isEmpty { DetailValueRow(label: "Payee", value: transaction.payee) }
                 if !transaction.number.isEmpty { DetailValueRow(label: "Number", value: transaction.number) }
-                NavigationLink {
-                    RefundTrackingDetailView(purchaseID: transaction.id)
-                } label: { Label("Refund or Reimbursement", systemImage: "arrow.uturn.backward.circle") }
+                RefundTrackingEntryRow(purchaseID: transaction.id)
                 let displayedAssets = attachmentSave.pendingAssets ?? transaction.attachment?.assets ?? []
                 if !displayedAssets.isEmpty {
                     ForEach(displayedAssets) { asset in

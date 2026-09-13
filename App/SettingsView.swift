@@ -610,6 +610,66 @@ struct HelpSettingsView: View {
                     "Swipe left to duplicate or delete. Swipe right to mark an entry cleared or uncleared.",
                     "hand.draw"
                 )
+                helpRow(
+                    "View attachments while editing",
+                    "Tap an attachment's name to preview the image or PDF, then close the preview to continue editing.",
+                    "paperclip"
+                )
+            }
+
+            Section("Sharing Receipts") {
+                helpRow(
+                    "From Photos or Files",
+                    "Open an image in Photos or a PDF in Files, tap Share, and choose Finances v2. Look under More if needed. Choose the journal and accounts, enter the amount and details, then tap Save. Cancel discards the new draft.",
+                    "square.and.arrow.up"
+                )
+                helpRow(
+                    "From a screenshot preview",
+                    "If Finances v2 is not offered or does not open a draft, save the screenshot to Photos and share it from there, or use a receipt Shortcut.",
+                    "photo"
+                )
+                helpRow(
+                    "Receipt Shortcut",
+                    "In Shortcuts, add New Transaction with Receipts and set Receipts to Shortcut Input. Enable Show in Share Sheet for images and PDFs. Run that shortcut from the sharing app to open an editable transaction with the receipt attached.",
+                    "bolt"
+                )
+            }
+
+            Section("Suggestions") {
+                helpRow(
+                    "Capture Apple Pay purchases",
+                    "Create a personal Transaction automation in Shortcuts with Add Apple Pay to Suggestions. Connect the amount and currency, merchant, and optional Notes. Card Name is your account's name in Finances, such as AMEX Platinum. Check all fields before saving a captured purchase.",
+                    "creditcard"
+                )
+                NavigationLink("Apple Pay Setup Instructions") { ApplePayCaptureSetupView() }
+                helpRow(
+                    "Review before recording",
+                    "Open Suggestions from Journals when drafts are waiting, or from Settings at any time. Tap a suggestion, check its journal, accounts and currency, then Save. Cancel keeps it for later; swipe left and tap Dismiss to remove it.",
+                    "tray"
+                )
+                helpRow(
+                    "Pending drafts stay on this device",
+                    "Suggestions do not affect balances until you save them as transactions. Pending suggestions are not included in iCloud sync or journal backups.",
+                    "iphone"
+                )
+            }
+
+            Section("Refunds & Reimbursements") {
+                helpRow(
+                    "Track money you expect back",
+                    "Open the purchase's details and tap Add Refund & Reimbursement. Choose the type, expected amount and currency, and optional person, note and expected date, then Start Tracking.",
+                    "arrow.uturn.backward"
+                )
+                helpRow(
+                    "Link a received payment",
+                    "Record the received payment as a transaction first. Open the purchase's Refund or Reimbursement row, tap Link Received Transaction, select the payment and enter the amount belonging to this purchase. Partial payments reduce the outstanding amount; only received payments in the tracking currency can be linked.",
+                    "link"
+                )
+                helpRow(
+                    "Find tracking and history",
+                    "Refunds & Reimbursements appears in a journal while money is outstanding or tracking needs attention. Completed and stopped tracking remains available from the original purchase's details. Linking, unlinking or removing tracking never changes transaction amounts or cleared status.",
+                    "clock"
+                )
             }
 
             Section("Accounts") {

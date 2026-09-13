@@ -20,11 +20,19 @@ The open actions can be assigned using the system's Shortcuts Action button and 
 
 ## Receipt sharing
 
-Share/Open In an image or PDF and choose Finances. The app copies the receipt into a pending local batch, then opens New Transaction with a journal picker. If another editor or the app lock is active, the batch waits without replacing that editor. Cancel removes that batch; Save uses the normal durable transaction and attachment pipeline.
+1. Open an image in Photos or a PDF in Files, tap Share, and choose Finances v2. Look under More if it is not visible in the app row.
+2. In New Transaction, choose the journal and accounts, then enter the amount, notes and payee.
+3. Tap an attachment's name to preview the image or PDF without leaving the editor. Close the preview to continue editing.
+4. Tap Save to record the transaction and its attachments, or Cancel to discard the new draft. Sharing alone does not record a transaction.
 
-Some sharing apps provide raw image data rather than an Open In file. For those apps, create a Shortcut with New Transaction with Receipts, connect Receipts to Shortcut Input, and enable Show in Share Sheet for images/PDFs. This uses the same editable transaction flow, without an unsupported Share-extension app-launch workaround.
+If sharing directly from the screenshot preview does not offer Finances v2 or does not open a draft, save the screenshot to Photos and share it from there. Another option is a receipt Shortcut:
 
-Pending receipt batches survive an interrupted launch. After a successful save, their stable identity prevents another copy if the app exits before cleanup.
+1. In Shortcuts, create a shortcut and add the Finances action New Transaction with Receipts.
+2. Set Receipts to Shortcut Input.
+3. Enable Show in Share Sheet in the shortcut's details, accepting images and PDFs.
+4. Share the screenshot or PDF and choose your shortcut in the action list. It opens the same editable transaction flow.
+
+The app copies shared files into a pending local batch. If another editor or the app lock is active, that batch waits without replacing the unfinished editor. Cancel removes the batch; pending batches survive an interrupted launch. After a successful save, their stable identity prevents another copy if the app exits before cleanup.
 
 ## Apple Pay Suggestions
 
@@ -34,12 +42,24 @@ Card Name is the account name in Finances, such as AMEX Platinum. Matching is ca
 
 Check your first capture's currency. If the trigger supplies only a number, explicitly configure Currency Code in the action. No exchange rate is guessed. An unknown card requires account selection; changing journals resets the draft's accounts. A journal without the captured currency cannot save it as a different currency accidentally.
 
-Suggestions are local pending drafts on this device and are not posted balances, iCloud records, or part of a journal backup. Open Suggestions from Journals or Settings, edit, and Save; Cancel keeps the suggestion for later. Dismiss removes a suggestion. Stable capture IDs prevent duplicate conversion after a save/relaunch.
+Suggestions are local pending drafts on this device and are not posted balances, iCloud records, or part of a journal backup.
+
+1. Open Suggestions from Journals when captures are waiting. Its row is hidden when empty; Settings → Suggestions is always available.
+2. Tap a suggestion and check the journal, accounts, amount, currency and notes.
+3. Tap Save to record it as a transaction. Cancel keeps the suggestion for later.
+4. To discard a suggestion without recording it, swipe left and tap Dismiss.
+
+Stable capture IDs prevent duplicate conversion after a save/relaunch.
 
 ## Refunds and reimbursements
 
-Open a purchase → Refund or Reimbursement. Choose the type, expected amount/currency, person or merchant, optional note and expected date, then Start Tracking. Link existing received transactions and assign the amount belonging to the purchase. Partial payments reduce the outstanding amount; allocations cannot exceed the incoming payment or expected amount. Future payments, transfers with no incoming net amount, and mismatched currencies do not count as received payments.
+1. Open a purchase's details and tap Add Refund & Reimbursement.
+2. Choose Refund or Reimbursement, enter the expected amount and currency, and optionally add the person or merchant, a note and an expected date. Tap Start Tracking.
+3. When payment arrives, record it as a transaction if it is not already in the journal.
+4. Reopen the purchase's Refund or Reimbursement row, tap Link Received Transaction, choose the received payment and enter how much belongs to this purchase. Tap Link Payment.
 
-Journal → Refunds & Reimbursements lists tracked purchases, outstanding amounts and records needing attention. Unlinking, stopping, or removing tracking never changes monetary postings or cleared status. Invalid/deleted links need attention instead of silently appearing settled.
+Partial payments reduce the outstanding amount; allocations cannot exceed the incoming payment or expected amount. Future payments, transfers with no incoming net amount, and mismatched currencies do not count as received payments. Starting tracking or linking a payment does not create a financial transaction.
+
+Journal → Refunds & Reimbursements appears while there is an outstanding payment or a record needs attention. When nothing is active, that journal row is hidden. Completed and stopped tracking remains available through the original purchase's Refund or Reimbursement row above Add Attachment. Unlinking, stopping, or removing tracking never changes monetary postings or cleared status. Invalid/deleted links need attention instead of silently appearing settled.
 
 Tracking uses versioned metadata in existing transaction source records, so ordinary Mac edits, iCloud sync, and full backups preserve it without a new CloudKit schema. Older Mac versions do not offer the tracking UI. Their Import as New Journal does not remap tracking links: cloned tracking shows Needs Attention. Remove the unreadable tracking metadata from that journal's Refunds & Reimbursements screen, then recreate the tracking relationships if needed; transaction amounts are kept. Use full restore to preserve tracking IDs and links automatically. The original journal is unaffected by a clone.

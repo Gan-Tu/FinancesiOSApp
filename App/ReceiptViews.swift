@@ -512,6 +512,101 @@ final class ReceiptThumbnailModel: ObservableObject {
     }
 }
 
+/// Keep the editor and its import session mounted while Quick Look is shown.
+/// Previewing an imported asset must not save, discard, or transfer ownership of it.
+struct ReceiptAttachmentEditorRow: View {
+    @EnvironmentObject private var store: MobileLedgerStore
+    let asset: AttachmentAsset
+    let onRemove: () -> Void
+    @State private var previewItem: ReceiptEditorPreviewItem?
+    @State private var unavailable = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button {
+                let url = store.attachmentURL(for: asset)
+                if FileManager.default.fileExists(atPath: url.path) {
+                    previewItem = ReceiptEditorPreviewItem(url: url, title: asset.originalFilename)
+                }
+                else { unavailable = true }
+            } label: {
+                Label(asset.originalFilename, systemImage: "paperclip")
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, minHeight: 31, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.tint)
+            .accessibilityHint("Opens the full attachment without saving your changes.")
+            .accessibilityIdentifier("editor-receipt-preview-\(asset.id.uuidString)")
+
+            Button("Remove Attachment", systemImage: "minus.circle", role: .destructive, action: onRemove)
+                .labelStyle(.iconOnly)
+                .accessibilityIdentifier("editor-receipt-remove-\(asset.id.uuidString)")
+        }
+        .sheet(item: $previewItem) { item in
+            ReceiptEditorPreviewSheet(item: item)
+        }
+        .alert("Receipt Unavailable", isPresented: $unavailable) { Button("OK", role: .cancel) {} } message: {
+            Text("This file hasn’t downloaded yet. Sync again to retrieve it from iCloud.")
+        }
+    }
+}
+
+private struct ReceiptEditorPreviewItem: Identifiable {
+    let url: URL
+    let title: String
+    var id: URL { url }
+}
+
+/// Own the dismissal control instead of relying on Quick Look's overlay, which
+/// can disappear behind its remote image renderer when opened above an editor.
+private struct ReceiptEditorPreviewSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let item: ReceiptEditorPreviewItem
+
+    var body: some View {
+        NavigationStack {
+            ReceiptEditorQuickLook(url: item.url)
+                .navigationTitle(item.title)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
+                            .accessibilityIdentifier("editor-receipt-preview-done")
+                    }
+                }
+        }
+    }
+}
+
+private struct ReceiptEditorQuickLook: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeCoordinator() -> Coordinator { Coordinator(url: url) }
+
+    func makeUIViewController(context: Context) -> QLPreviewController {
+        let controller = QLPreviewController()
+        controller.dataSource = context.coordinator
+        controller.delegate = context.coordinator
+        return controller
+    }
+
+    func updateUIViewController(_ controller: QLPreviewController, context: Context) {
+        guard context.coordinator.url != url else { return }
+        context.coordinator.url = url
+        controller.reloadData()
+    }
+
+    final class Coordinator: NSObject, QLPreviewControllerDataSource, QLPreviewControllerDelegate {
+        var url: URL
+        init(url: URL) { self.url = url }
+        func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
+        func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> any QLPreviewItem { url as NSURL }
+        nonisolated func previewController(_ controller: QLPreviewController, editingModeFor previewItem: any QLPreviewItem) -> QLPreviewItemEditingMode { .disabled }
+    }
+}
+
 struct ReceiptPreview: View {
     @EnvironmentObject private var store: MobileLedgerStore
     let asset: AttachmentAsset

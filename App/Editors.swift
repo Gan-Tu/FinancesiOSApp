@@ -264,12 +264,8 @@ struct TransactionEditorView: View {
             FinanceFormCard {
                 ForEach(draft.attachments) { asset in
                     FinanceFormRow {
-                        HStack {
-                            Text(asset.originalFilename).lineLimit(1)
-                            Spacer()
-                            Button("Remove Attachment", systemImage: "minus.circle", role: .destructive) {
-                                draft.attachments.removeAll { $0.id == asset.id }
-                            }.labelStyle(.iconOnly)
+                        ReceiptAttachmentEditorRow(asset: asset) {
+                            draft.attachments.removeAll { $0.id == asset.id }
                         }
                     }
                 }

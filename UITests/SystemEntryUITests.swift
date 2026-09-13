@@ -40,7 +40,7 @@ final class SystemEntryUITests: XCTestCase {
     }
     private func openRefund(_ app: XCUIApplication) {
         openPurchase(app)
-        let tracking = app.buttons["Refund or Reimbursement"]
+        let tracking = app.buttons["transaction-refund-tracking"]
         for _ in 0..<3 where !tracking.isHittable { app.swipeUp() }
         XCTAssertTrue(tracking.isHittable); tracking.tap()
         XCTAssertTrue(app.navigationBars["Refund / Reimbursement"].waitForExistence(timeout: 5))
@@ -188,6 +188,47 @@ final class SystemEntryUITests: XCTestCase {
         XCTAssertEqual(text(app, "Payee").value as? String, "SYNTHETIC Wallet Store")
     }
 
+    func testEmptyNavigationHidesSuggestionsAndRefundsWhileStoppedHistoryRemainsReachable() throws {
+        let app = XCUIApplication(); defer { app.terminate() }
+        launch(app)
+        XCTAssertFalse(app.buttons["journal-suggestions"].exists)
+        journal(app, "Alpha").tap()
+        XCTAssertFalse(app.buttons["journal-refund-tracking"].exists)
+        app.buttons["All"].tap()
+        let purchase = app.buttons["register-row-00000000-0000-0000-0000-000000000064"]
+        XCTAssertTrue(purchase.waitForExistence(timeout: 5)); purchase.tap()
+        let entry = app.buttons["transaction-refund-tracking"]
+        XCTAssertTrue(entry.waitForExistence(timeout: 5))
+        XCTAssertEqual(entry.label, "Add Refund & Reimbursement")
+        XCTAssertFalse(entry.images["arrow.uturn.backward.circle"].exists)
+        XCTAssertLessThan(entry.frame.minY, app.buttons["receipt-import-picker"].frame.minY)
+        entry.tap()
+        let save = app.buttons["refund-save-tracking"]
+        XCTAssertTrue(save.waitForExistence(timeout: 5)); save.tap()
+        let stop = app.buttons["Stop Waiting"]
+        for _ in 0..<4 where !stop.isHittable { app.swipeUp() }
+        XCTAssertTrue(stop.waitForExistence(timeout: 5), "Starting tracking must keep its detail screen open")
+        app.navigationBars["Refund / Reimbursement"].buttons.element(boundBy: 0).tap()
+        XCTAssertEqual(entry.label, "Refund or Reimbursement")
+        XCTAssertFalse(entry.images["arrow.uturn.backward.circle"].exists)
+        app.navigationBars["Details"].buttons.element(boundBy: 0).tap()
+        app.navigationBars["All"].buttons.element(boundBy: 0).tap()
+        let journalTracking = app.buttons["journal-refund-tracking"]
+        XCTAssertTrue(journalTracking.waitForExistence(timeout: 5)); journalTracking.tap()
+        let trackedPurchase = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Waiting for")).firstMatch
+        XCTAssertTrue(trackedPurchase.waitForExistence(timeout: 5)); trackedPurchase.tap()
+        for _ in 0..<4 where !stop.isHittable { app.swipeUp() }
+        XCTAssertTrue(stop.isHittable); stop.tap()
+        app.navigationBars["Refund / Reimbursement"].buttons.element(boundBy: 0).tap()
+        app.navigationBars["Refunds & Reimbursements"].buttons.element(boundBy: 0).tap()
+        let hidden = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: journalTracking)
+        XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 5), .completed)
+        app.buttons["All"].tap(); purchase.tap()
+        XCTAssertEqual(entry.label, "Refund or Reimbursement", "Stopped history stays reachable from purchase details")
+        entry.tap()
+        XCTAssertTrue(app.staticTexts["Tracking Stopped"].waitForExistence(timeout: 5))
+    }
+
     func testTrackPurchaseAndLinkExistingPartialRefundWithoutChangingTransactions() throws {
         let app = XCUIApplication(); defer { app.terminate() }
         launch(app); openRefund(app)
@@ -230,7 +271,8 @@ final class SystemEntryUITests: XCTestCase {
             if mode == "--demo-unreadable-refund" { openRefund(app) }
             else {
                 journal(app, "Alpha").tap()
-                app.buttons["Refunds & Reimbursements"].tap()
+                let tracking = app.buttons["journal-refund-tracking"]
+                XCTAssertTrue(tracking.waitForExistence(timeout: 5)); tracking.tap()
             }
             let repair = app.buttons["Remove Unreadable Tracking"]
             XCTAssertTrue(repair.waitForExistence(timeout: 5))

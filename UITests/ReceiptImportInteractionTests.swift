@@ -51,6 +51,66 @@ final class ReceiptImportInteractionTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Details"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["Delayed Receipt.txt"].exists)
     }
+
+    func testAttachmentPreviewPreservesUnsavedAndSavedEditorChanges() throws {
+        let app = try openDuplicate()
+        defer { app.terminate() }
+        let save = app.navigationBars["New Transaction"].buttons["Save"]
+        let imported = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: save)
+        XCTAssertEqual(XCTWaiter.wait(for: [imported], timeout: 15), .completed)
+        if app.keyboards.firstMatch.exists { app.buttons["Done"].tap() }
+
+        let notes = app.textFields["Notes"].exists ? app.textFields["Notes"] : app.textViews["Notes"]
+        for _ in 0..<3 where !notes.isHittable { app.swipeUp() }
+        notes.coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.5)).tap()
+        notes.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: (notes.value as? String ?? "").count) + "SYNTHETIC preview draft")
+        XCTAssertEqual(notes.value as? String, "SYNTHETIC preview draft")
+        app.buttons["Done"].tap()
+
+        func preview(_ editor: String) {
+            let receipt = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@",
+                "editor-receipt-preview-", "Delayed Receipt.txt")).firstMatch
+            for _ in 0..<5 where !receipt.isHittable { app.swipeUp() }
+            XCTAssertTrue(receipt.waitForExistence(timeout: 5)); receipt.tap()
+            let done = app.buttons["editor-receipt-preview-done"]
+            XCTAssertTrue(done.waitForExistence(timeout: 5), "The attachment must open in Quick Look from the editor")
+            XCTAssertFalse(app.alerts["Receipt Unavailable"].exists)
+            let image = XCTAttachment(screenshot: app.screenshot())
+            image.name = "Quick Look from \(editor)"; image.lifetime = .keepAlways; add(image)
+            done.tap()
+            XCTAssertTrue(done.waitForNonExistence(timeout: 5))
+            XCTAssertTrue(app.navigationBars[editor].waitForExistence(timeout: 5))
+            XCTAssertTrue(receipt.exists, "Closing Quick Look must keep the draft's attachment")
+        }
+
+        preview("New Transaction")
+        XCTAssertEqual(notes.value as? String, "SYNTHETIC preview draft")
+        save.tap()
+        XCTAssertTrue(app.navigationBars["All"].waitForExistence(timeout: 5))
+        // Reopen without the delayed-provider fixture, which otherwise starts
+        // another synthetic import each time an editor is presented.
+        app.terminate(); app.launchArguments = ["--demo"]; app.launch()
+        let journal = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Personal,")).firstMatch
+        XCTAssertTrue(journal.waitForExistence(timeout: 10)); journal.tap()
+        app.buttons["All"].tap()
+        let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "register-row-", "SYNTHETIC preview draft")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tap()
+        XCTAssertTrue(app.buttons["Delayed Receipt.txt"].waitForExistence(timeout: 5))
+        app.navigationBars["Details"].buttons["Edit"].tap()
+        XCTAssertTrue(app.navigationBars["Edit Transaction"].waitForExistence(timeout: 5))
+        preview("Edit Transaction")
+        let importedReceipt = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@",
+            "editor-receipt-preview-", "Delayed Receipt.txt")).firstMatch
+        let removeID = importedReceipt.identifier.replacingOccurrences(of: "editor-receipt-preview-", with: "editor-receipt-remove-")
+        app.buttons[removeID].tap()
+        XCTAssertFalse(importedReceipt.exists)
+        XCTAssertTrue(app.buttons["Sample Receipt.txt"].exists, "Removing one receipt must preserve the other")
+        app.navigationBars["Edit Transaction"].buttons["Cancel"].tap()
+        XCTAssertTrue(app.navigationBars["Details"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Delayed Receipt.txt"].waitForExistence(timeout: 5), "Cancelling an edit must keep the saved receipt even after preview and removal")
+        XCTAssertTrue(app.staticTexts["SYNTHETIC preview draft"].exists)
+    }
+
     func testDetailsDisableConflictingEditWhileAcceptedImportFinishesAfterBackNavigation() throws {
         continueAfterFailure = false
         let app = XCUIApplication()

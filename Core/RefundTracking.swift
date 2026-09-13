@@ -80,6 +80,14 @@ struct RefundTrackingOverview: Sendable {
     let summaries: [RefundTrackingSummary]
     let issues: [String]
     let unreadableSources: [RefundTrackingMetadataIssue]
+    /// Waiting payments and repairable metadata keep the journal entry point visible.
+    /// Settled or explicitly stopped records remain accessible from their purchase.
+    var hasActiveTracking: Bool {
+        !issues.isEmpty || !unreadableSources.isEmpty || summaries.contains {
+            !$0.issues.isEmpty || ($0.record.state == .active && !$0.isSettled)
+        }
+    }
+
     var outstandingByCurrency: [UUID: Decimal] {
         summaries.reduce(into: [:]) { result, summary in
             guard summary.record.state == .active, let amount = summary.outstandingAmount else { return }

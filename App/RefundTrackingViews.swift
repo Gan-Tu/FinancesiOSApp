@@ -41,6 +41,14 @@ private actor RefundPresentationWorker {
     func build(_ snapshot: RefundReadSnapshot) throws -> RefundPresentation {
         let data = snapshot.data, ledgerID = snapshot.ledgerID
         let currencies = data.commodities.filter { $0.ledgerID == ledgerID }
+        // Journal navigation only needs visibility. With no tracking records,
+        // there is no reason to scan/sort every transaction for payment options.
+        guard data.sources.contains(where: { $0.ledgerID == ledgerID && $0.type == RefundTracking.sourceType }) else {
+            return RefundPresentation(asOf: snapshot.asOf,
+                overview: RefundTrackingOverview(summaries: [], issues: [], unreadableSources: []),
+                recordsByPurchase: [:], summariesByPurchase: [:], currencies: currencies,
+                candidatesByCurrency: [:], allocatedByCurrency: [:], nextFutureDate: nil)
+        }
         let accountsByID = Dictionary(data.accounts.filter { $0.ledgerID == ledgerID }.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let ledgers = data.ledgers.filter { $0.id == ledgerID }
         var transactionsByID: [UUID: LedgerTransaction] = [:]
@@ -214,6 +222,76 @@ private struct RefundPresentationClock: ViewModifier {
     }
 }
 
+/// Reads asynchronously on the journal list itself, including when its optional
+/// refund section has no rows, without blocking account-list rendering.
+struct RefundTrackingJournalVisibility: ViewModifier {
+    @EnvironmentObject private var store: MobileLedgerStore
+    let ledgerID: UUID
+    @Binding var isVisible: Bool
+    @State private var nextFutureDate: Date?
+
+    func body(content: Content) -> some View {
+        content
+            .modifier(RefundPresentationClock(deadline: nextFutureDate))
+            .task(id: store.refundPresentationRevision) {
+                let revision = store.refundPresentationRevision
+                do {
+                    let presentation = try await store.refundPresentations.presentation(data: store.data, ledgerID: ledgerID, revision: revision)
+                    try Task.checkCancellation()
+                    guard revision == store.refundPresentationRevision else { return }
+                    isVisible = presentation.overview.hasActiveTracking
+                    nextFutureDate = presentation.nextFutureDate
+                } catch is CancellationError {} catch {
+                    // Keep recovery reachable when a read fails, rather than hiding
+                    // potentially active tracking behind an apparent empty state.
+                    isVisible = true
+                }
+            }
+    }
+}
+
+struct RefundTrackingNavigationLabel: View {
+    let title: String
+    var body: some View {
+        HStack {
+            Text(title).foregroundStyle(.primary)
+            Spacer()
+            Image(systemName: "chevron.forward")
+                .font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
+        }
+        .contentShape(Rectangle())
+    }
+}
+
+struct RefundTrackingEntryRow: View {
+    @EnvironmentObject private var store: MobileLedgerStore
+    let purchaseID: UUID
+    @State private var showingTracking = false
+
+    private var hasTracking: Bool {
+        // The metadata identity also finds stopped, settled, moved or unreadable
+        // records. Do not decode payloads or scan transaction history to style a row.
+        let id = RefundTracking.sourceID(for: purchaseID)
+        return store.data.sources.contains { $0.id == id }
+    }
+
+    var body: some View {
+        Button { showingTracking = true } label: {
+            if hasTracking {
+                RefundTrackingNavigationLabel(title: "Refund or Reimbursement")
+            } else {
+                Text("Add Refund & Reimbursement").foregroundStyle(.blue)
+            }
+        }
+        .accessibilityIdentifier("transaction-refund-tracking")
+        // Its destination owner survives changes between Add and existing tracking.
+        .navigationDestination(isPresented: $showingTracking) {
+            RefundTrackingDetailView(purchaseID: purchaseID)
+        }
+    }
+}
+
 private struct RefundMetadataRecoveryView: View {
     @EnvironmentObject private var store: MobileLedgerStore
     let issue: RefundTrackingMetadataIssue
@@ -271,7 +349,7 @@ struct RefundTrackingListView: View {
         }
         .overlay {
             if loading && summaries.isEmpty { ProgressView() }
-            else if summaries.isEmpty && issues.isEmpty { ContentUnavailableView("No Tracked Refunds", systemImage: "arrow.uturn.backward.circle", description: Text("Open a purchase and choose Refund or Reimbursement to track money you expect back.")) }
+            else if summaries.isEmpty && issues.isEmpty { ContentUnavailableView("No Tracked Refunds", systemImage: "arrow.uturn.backward.circle", description: Text("Open a purchase and choose Add Refund & Reimbursement to track money you expect back.")) }
         }
         .navigationTitle("Refunds & Reimbursements").navigationBarTitleDisplayMode(.inline)
         .modifier(RefundPresentationClock(deadline: nextFutureDate))

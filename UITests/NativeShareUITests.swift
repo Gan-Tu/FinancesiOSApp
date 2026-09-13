@@ -70,6 +70,9 @@ final class NativeShareUITests: XCTestCase {
         let photos = XCUIApplication(bundleIdentifier: "com.apple.mobileslideshow")
         photos.activate()
         XCTAssertTrue(photos.wait(for: .runningForeground, timeout: 5))
+        // A failed prior run can leave a share controller whose activity target
+        // belongs to the previous installation. Always export a fresh item.
+        if shareCell(in: photos).exists { photos.buttons["header.closeButton"].tap() }
         if !shareCell(in: photos).exists {
             if photos.buttons["Continue"].exists { photos.buttons["Continue"].tap() }
             let share = photos.buttons["PUOneUpBarButtonItemIdentifierShare"]
@@ -88,7 +91,8 @@ final class NativeShareUITests: XCTestCase {
 
     private func receipt(in app: XCUIApplication, extension suffix: String) -> XCUIElement {
         // Photos adds a numeric suffix when exporting the same image again.
-        app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@ AND label ENDSWITH[c] %@", "SYNTHETIC-Receipt", suffix)).firstMatch
+        app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@ AND label ENDSWITH[c] %@",
+            "editor-receipt-preview-", "SYNTHETIC-Receipt", suffix)).firstMatch
     }
 
     private func assertReceipt(in app: XCUIApplication, extension suffix: String) {
@@ -100,6 +104,16 @@ final class NativeShareUITests: XCTestCase {
         XCTAssertTrue(attachment.waitForExistence(timeout: 10))
         XCTAssertEqual(app.buttons["receipt-import-picker"].value as? String, "Ready")
         XCTAssertFalse(app.navigationBars["New Transaction"].buttons["Save"].isEnabled)
+        attachment.tap()
+        let previewDone = app.buttons["editor-receipt-preview-done"]
+        XCTAssertTrue(previewDone.waitForExistence(timeout: 5), "Shared images and PDFs must open the attachment preview")
+        XCTAssertTrue(app.otherElements["QLPreviewControllerView"].waitForExistence(timeout: 5), "The sheet must contain the native document preview")
+        XCTAssertFalse(app.alerts["Receipt Unavailable"].exists)
+        capture(app, "Shared receipt Quick Look \(suffix)")
+        previewDone.tap()
+        XCTAssertTrue(previewDone.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["New Transaction"].waitForExistence(timeout: 5))
+        XCTAssertTrue(attachment.exists, "Closing the preview must preserve the unsaved receipt")
     }
 
     private func cancelAndCheckBaseline(_ app: XCUIApplication) {
