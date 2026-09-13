@@ -79,6 +79,16 @@ final class HomeScreenQuickActions: ObservableObject {
         }
     }
 
+    /// Initial metadata can be published before the app's scene connects.
+    /// Reassert the current menu when leaving the scene so SpringBoard does
+    /// not retain the previous launch's shortcuts. This uses metadata only.
+    func refreshForHomeScreen() {
+        // A preference notification may still be queued on the main actor.
+        // Read it now, then publish once with the latest visibility/selection.
+        preferencesChanged(publishChanges: false)
+        publishSelection(force: true)
+    }
+
     @discardableResult
     func addTemplate(_ id: UUID) -> Bool {
         guard hasLoadedMetadata, canAddTemplate, eligibleByID[id] != nil,
@@ -128,7 +138,7 @@ final class HomeScreenQuickActions: ObservableObject {
         return true
     }
 
-    private func preferencesChanged() {
+    private func preferencesChanged(publishChanges: Bool = true) {
         let selected = Self.decodeSelection(preferences.string(forKey: Self.preferenceKey) ?? "")
         let hidden = JournalVisibility(rawValue: preferences.string(forKey: JournalVisibility.preferenceKey) ?? "").hiddenIDs
         let visibilityChanged = hidden != observedHiddenIDs
@@ -137,8 +147,8 @@ final class HomeScreenQuickActions: ObservableObject {
         configuredIDs = selected
         if visibilityChanged { hiddenIDs = hidden }
         guard hasLoadedMetadata else { return }
-        if visibilityChanged { rebuildEligibleTemplates() }
-        else { rebuildSelection() }
+        if visibilityChanged { rebuildEligibleTemplates(publishChanges: publishChanges) }
+        else { rebuildSelection(publishChanges: publishChanges) }
     }
 
     private func setSelection(_ ids: [UUID]) {
@@ -155,7 +165,7 @@ final class HomeScreenQuickActions: ObservableObject {
             .filter { seen.insert($0).inserted }.prefix(maximumCount))
     }
 
-    private func rebuildEligibleTemplates() {
+    private func rebuildEligibleTemplates(publishChanges: Bool = true) {
         let orderedLedgers = ledgers.filter { !hiddenIDs.contains($0.id) }.sorted {
             if $0.listIndex != $1.listIndex { return $0.listIndex < $1.listIndex }
             return $0.id.uuidString < $1.id.uuidString
@@ -174,16 +184,21 @@ final class HomeScreenQuickActions: ObservableObject {
             configuredIDs = Array((preferred + remaining).prefix(Self.maximumCount).map(\.id))
             preferences.set(configuredIDs.map(\.uuidString).joined(separator: ","), forKey: Self.preferenceKey)
         }
-        rebuildSelection()
+        rebuildSelection(publishChanges: publishChanges)
     }
 
-    private func rebuildSelection() {
+    private func rebuildSelection(publishChanges: Bool = true) {
         let selected = configuredIDs.compactMap { eligibleByID[$0] }
         let ids = Set(selected.map(\.id))
         let available = eligibleTemplates.filter { !ids.contains($0.id) }
         let next = DisplayState(selected: selected, available: available)
         if displayState != next { displayState = next }
-        guard hasLoadedMetadata, lastPublished != selected else { return }
+        if publishChanges { publishSelection() }
+    }
+
+    private func publishSelection(force: Bool = false) {
+        let selected = selectedTemplates
+        guard hasLoadedMetadata, force || lastPublished != selected else { return }
         lastPublished = selected
         publish(selected.map { template in
             UIApplicationShortcutItem(type: Self.shortcutPrefix + template.id.uuidString,
@@ -209,6 +224,10 @@ final class HomeScreenQuickActionSceneDelegate: NSObject, UIWindowSceneDelegate 
 
     func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
         receiveFiles(URLContexts)
+    }
+
+    func sceneWillResignActive(_ scene: UIScene) {
+        coordinator.refreshForHomeScreen()
     }
 
     private func receiveFiles(_ contexts: Set<UIOpenURLContext>) {

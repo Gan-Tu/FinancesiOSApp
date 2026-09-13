@@ -137,6 +137,51 @@ final class HomeScreenQuickActionsTests: XCTestCase {
         XCTAssertEqual(recorder.opened, [id])
     }
 
+    func testHomeScreenTransitionRepublishesUnchangedMenuAfterMetadataLoads() {
+        let prefs = preferences(), recorder = Recorder(), data = fixture()
+        let id = data.transactionTemplates[0].id
+        selected([id], in: prefs)
+        let actions = manager(prefs, recorder)
+        actions.refreshForHomeScreen()
+        XCTAssertTrue(recorder.menus.isEmpty, "A scene transition before metadata loads must preserve SpringBoard's cached menu")
+        actions.update(data: data, hiddenLedgerIDs: [])
+        XCTAssertEqual(recorder.menus.count, 1)
+        actions.update(data: data, hiddenLedgerIDs: [])
+        XCTAssertEqual(recorder.menus.count, 1, "Normal unchanged updates remain cached")
+
+        actions.refreshForHomeScreen()
+        XCTAssertEqual(recorder.menus.count, 2, "Leaving the app must reassert even an unchanged menu published before scene connection")
+        XCTAssertEqual(menuIDs(recorder), [id])
+        XCTAssertTrue(recorder.opened.isEmpty)
+    }
+
+    func testHomeScreenTransitionReadsPendingPreferencesAndPublishesExactlyOnce() {
+        let prefs = preferences(), recorder = Recorder(), data = fixture()
+        let first = data.transactionTemplates[0].id, second = data.transactionTemplates[3].id
+        selected([first], in: prefs)
+        let actions = manager(prefs, recorder)
+        actions.update(data: data, hiddenLedgerIDs: [])
+
+        // Do not yield to queued UserDefaults notifications before the scene
+        // callback. A simultaneously hidden selection must never be published.
+        selected([second], in: prefs)
+        prefs.set(data.ledgers[1].id.uuidString, forKey: JournalVisibility.preferenceKey)
+        actions.refreshForHomeScreen()
+        XCTAssertEqual(recorder.menus.count, 2)
+        XCTAssertTrue(menuIDs(recorder).isEmpty)
+
+        prefs.set("", forKey: JournalVisibility.preferenceKey)
+        actions.refreshForHomeScreen()
+        XCTAssertEqual(recorder.menus.count, 3)
+        XCTAssertEqual(menuIDs(recorder), [second], "Unhiding restores the actual latest selection")
+
+        selected([], in: prefs)
+        actions.refreshForHomeScreen()
+        XCTAssertEqual(recorder.menus.count, 4)
+        XCTAssertTrue(menuIDs(recorder).isEmpty, "An explicitly empty selection must remain empty")
+        XCTAssertTrue(recorder.opened.isEmpty)
+    }
+
     func testHiddenPreferenceChangesUpdateMenuWithoutAnyStoreMutation() async {
         let prefs = preferences(), recorder = Recorder(), data = fixture()
         let id = data.transactionTemplates[0].id
@@ -219,6 +264,9 @@ final class HomeScreenQuickActionsTests: XCTestCase {
             if scenario == 0 { data.transactionTemplates[0].enabled = false }
             if scenario == 1 { data.transactionTemplates.removeFirst() }
             actions.update(data: data, hiddenLedgerIDs: scenario == 2 ? [data.ledgers[0].id] : [])
+            let publications = recorder.menus.count
+            actions.refreshForHomeScreen()
+            XCTAssertEqual(recorder.menus.count, publications + 1)
             XCTAssertTrue(menuIDs(recorder).isEmpty)
             XCTAssertFalse(actions.handle(staleItem))
             XCTAssertTrue(recorder.opened.isEmpty)

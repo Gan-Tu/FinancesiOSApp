@@ -80,6 +80,61 @@ final class SystemEntryUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Add Lunch, SYNTHETIC Alpha"].exists, "The removed action stays removed after relaunch")
     }
 
+    func testSpringBoardTemplateMenuOpensEditableDraftAndCancelDoesNotPost() throws {
+        let app = XCUIApplication(); defer { app.terminate() }
+        launch(app)
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+
+        // Exercise SpringBoard's real icon menu, not a mocked publication or
+        // an in-app template button. Keep this process warm so its explicit
+        // synthetic launch arguments cannot be lost in a system cold launch.
+        XCUIDevice.shared.press(.home)
+        XCTAssertTrue(springboard.wait(for: .runningForeground, timeout: 5))
+        // Start from the first page even if a previous test left SpringBoard
+        // on a page after the app icon.
+        XCUIDevice.shared.press(.home)
+        let icon = springboard.icons.matching(identifier: "Finances v2").firstMatch
+        for _ in 0..<6 where !icon.isHittable { springboard.swipeLeft() }
+        XCTAssertTrue(icon.waitForExistence(timeout: 5), "The installed app must appear on the Home Screen")
+        XCTAssertTrue(icon.isHittable)
+        icon.press(forDuration: 1)
+        let menuScreenshot = XCTAttachment(screenshot: springboard.screenshot())
+        menuScreenshot.name = "SpringBoard Home Screen Template Menu"
+        menuScreenshot.lifetime = .keepAlways; add(menuScreenshot)
+        print("HOME_SCREEN_TEMPLATE_MENU\n\(springboard.debugDescription)")
+
+        func action(_ title: String) -> XCUIElement {
+            springboard.buttons.matching(NSPredicate(format: "label == %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@",
+                title, title + ",", title + "\n")).firstMatch
+        }
+        for title in ["Coffee", "Lunch", "Transit", "Groceries"] {
+            XCTAssertTrue(action(title).waitForExistence(timeout: 5), "The Home Screen menu must include configured template \(title)")
+        }
+        action("Coffee").tap()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
+        XCTAssertTrue(app.navigationBars["New Transaction"].waitForExistence(timeout: 10))
+        let amount = app.textFields["Amount for SYNTHETIC Bank"]
+        XCTAssertTrue(amount.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.textFields["Amount for SYNTHETIC Expense"].exists, "Both accounts must come from the chosen template")
+        enter("-7.25", into: amount)
+        try assertAmount(amount, "-7.25")
+        try assertAmount(app.textFields["Amount for SYNTHETIC Expense"], "7.25")
+        XCTAssertTrue(app.navigationBars["New Transaction"].buttons["Save"].isEnabled, "The shortcut must open an editable draft")
+        let draftScreenshot = XCTAttachment(screenshot: app.screenshot())
+        draftScreenshot.name = "Editable Draft From SpringBoard Template"
+        draftScreenshot.lifetime = .keepAlways; add(draftScreenshot)
+        app.navigationBars["New Transaction"].buttons["Cancel"].tap()
+        XCTAssertTrue(app.navigationBars["Journals"].waitForExistence(timeout: 5))
+        XCTAssertTrue(journal(app, "Alpha").label.contains("2 Transactions"))
+        XCTAssertTrue(journal(app, "Beta").label.contains("0 Transactions"))
+
+        // A fresh synthetic process confirms that cancelling did not write a
+        // transaction before or while the Home Screen action was presented.
+        app.terminate(); launch(app, reset: false)
+        XCTAssertTrue(journal(app, "Alpha").label.contains("2 Transactions"))
+        XCTAssertTrue(journal(app, "Beta").label.contains("0 Transactions"))
+    }
+
     func testWalletSuggestionIsEditableAndCancelDoesNotPostIt() throws {
         let app = XCUIApplication(); defer { app.terminate() }
         launch(app, wallet: true)
