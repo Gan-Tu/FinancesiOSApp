@@ -1,5 +1,27 @@
 import SwiftUI
 
+/// Keep keyboard controls owned by the editor instead of relying on a newly
+/// presented navigation stack registering a UIKit keyboard toolbar in time.
+/// SwiftUI's keyboard safe area keeps this row immediately above a docked
+/// keyboard; the fixed height also keeps amount and suggestion modes aligned.
+struct FinanceKeyboardAccessory<Accessory: View>: ViewModifier {
+    let isPresented: Bool
+    @ViewBuilder let accessory: () -> Accessory
+
+    func body(content: Content) -> some View {
+        content.safeAreaInset(edge: .bottom, spacing: 0) {
+            if isPresented {
+                accessory()
+                    .frame(maxWidth: .infinity, minHeight: 44, maxHeight: 44)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color(uiColor: .systemGroupedBackground))
+                    .overlay(alignment: .top) { Divider() }
+            }
+        }
+    }
+}
+
 /// A short group fade with coordinated layout movement, shared by explicit
 /// disclosure controls. Do not attach this to arbitrary journal data updates.
 enum FinanceMotion {

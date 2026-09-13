@@ -307,11 +307,8 @@ struct TransactionEditorView: View {
                 } label: { EditorSaveLabel(isSaving: isSaving) }
                 .disabled(isSaving || missingCaptureJournal || missingCaptureCurrency || !receiptImports.canSave || draft.postings.count < 2 || draft.postings.contains { $0.accountID == nil || decimalFromInput($0.amount) == nil } || !draft.postings.contains { (decimalFromInput($0.amount) ?? 0) != 0 })
             }
-            ToolbarItem(placement: .keyboard) {
-                keyboardToolbar
-            }
-
         }
+        .modifier(FinanceKeyboardAccessory(isPresented: isActive && focusedField != nil) { keyboardToolbar })
         .task {
             reconcileIncomingCurrency()
             if !importedInitialReceipts && !initialReceiptURLs.isEmpty {
@@ -988,8 +985,8 @@ struct TemplateEditorView: View {
                         }
                     } label: { EditorSaveLabel(isSaving: isSaving) }.disabled(isSaving || draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-                ToolbarItem(placement: .keyboard) { keyboardToolbar }
             }
+            .modifier(FinanceKeyboardAccessory(isPresented: isActive && focusedField != nil) { keyboardToolbar })
         }
     }
 
