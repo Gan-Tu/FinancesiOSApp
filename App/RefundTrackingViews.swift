@@ -1,5 +1,12 @@
 import SwiftUI
 
+/// Payment rows must remain tappable even when both editable title fields are blank.
+private func refundPaymentTitle(_ transaction: LedgerTransaction) -> String {
+    let payee = transaction.payee.trimmingCharacters(in: .whitespacesAndNewlines)
+    let note = transaction.note.trimmingCharacters(in: .whitespacesAndNewlines)
+    return !payee.isEmpty ? payee : !note.isEmpty ? note : "Transaction"
+}
+
 private struct RefundReadSnapshot: @unchecked Sendable {
     let data: JournalData
     let ledgerID: UUID
@@ -125,14 +132,12 @@ private actor RefundPresentationWorker {
             currencies: currencies, candidatesByCurrency: candidates, allocatedByCurrency: allocatedByCurrency, nextFutureDate: nextFuture)
     }
 
-    func search(_ presentation: RefundPresentation, record: RefundTrackingRecord, query: String) throws -> [RefundPaymentCandidate] {
+    func candidates(_ presentation: RefundPresentation, record: RefundTrackingRecord) throws -> [RefundPaymentCandidate] {
         var result: [RefundPaymentCandidate] = []
         for (offset, candidate) in (presentation.candidatesByCurrency[record.commodityID] ?? []).enumerated() {
             if offset.isMultiple(of: 128) { try Task.checkCancellation() }
             guard candidate.id != record.purchaseTransactionID, presentation.available(candidate, for: record) > .zero else { continue }
-            if query.isEmpty || candidate.transaction.payee.localizedStandardContains(query) || candidate.transaction.note.localizedStandardContains(query) {
-                result.append(candidate)
-            }
+            result.append(candidate)
         }
         return result
     }
@@ -144,12 +149,12 @@ private actor RefundPresentationWorker {
 final class RefundPresentationCache {
     private struct Key: Hashable { let ledgerID: UUID; let revision: UInt64 }
     private struct BuildKey: Hashable { let key: Key; let asOf: Date }
-    private struct SearchKey: Hashable { let presentationID: UUID; let recordID: UUID; let query: String }
+    private struct CandidateKey: Hashable { let presentationID: UUID; let recordID: UUID }
     private var entries: [Key: RefundPresentation] = [:]
     private var pending: [BuildKey: Task<RefundPresentation, Error>] = [:]
     private var builds: [Key: BuildKey] = [:]
     private var latest: [UUID: UInt64] = [:]
-    private var searches: [SearchKey: [RefundPaymentCandidate]] = [:]
+    private var candidateLists: [CandidateKey: [RefundPaymentCandidate]] = [:]
 
     func presentation(data: JournalData, ledgerID: UUID, revision: UInt64, asOf: Date = Date()) async throws -> RefundPresentation {
         try Task.checkCancellation()
@@ -158,7 +163,7 @@ final class RefundPresentationCache {
             entries = entries.filter { $0.key.ledgerID != ledgerID }
             for (oldKey, task) in pending where oldKey.key.ledgerID == ledgerID { task.cancel(); pending[oldKey] = nil }
             builds = builds.filter { $0.key.ledgerID != ledgerID }
-            searches.removeAll()
+            candidateLists.removeAll()
         }
         latest[ledgerID] = revision
         if let entry = entries[key], entry.isCurrent(at: asOf) { return entry }
@@ -184,20 +189,20 @@ final class RefundPresentationCache {
             return try await presentation(data: data, ledgerID: ledgerID, revision: revision, asOf: asOf)
         }
         if builds[key] == buildKey {
-            if entries.count >= 2, entries[key] == nil { entries.removeAll(); searches.removeAll() }
+            if entries.count >= 2, entries[key] == nil { entries.removeAll(); candidateLists.removeAll() }
             entries[key] = result
         }
         try Task.checkCancellation()
         return result
     }
 
-    func candidates(in presentation: RefundPresentation, record: RefundTrackingRecord, matching query: String) async throws -> [RefundPaymentCandidate] {
-        let key = SearchKey(presentationID: presentation.id, recordID: record.id, query: query)
-        if let cached = searches[key] { return cached }
-        let result = try await RefundPresentationWorker.shared.search(presentation, record: record, query: query)
+    func candidates(in presentation: RefundPresentation, record: RefundTrackingRecord) async throws -> [RefundPaymentCandidate] {
+        let key = CandidateKey(presentationID: presentation.id, recordID: record.id)
+        if let cached = candidateLists[key] { return cached }
+        let result = try await RefundPresentationWorker.shared.candidates(presentation, record: record)
         try Task.checkCancellation()
-        if searches.count >= 12 { searches.removeAll() }
-        searches[key] = result
+        if candidateLists.count >= 12 { candidateLists.removeAll() }
+        candidateLists[key] = result
         return result
     }
 }
@@ -339,8 +344,14 @@ struct RefundTrackingListView: View {
                     RefundTrackingDetailView(purchaseID: summary.record.purchaseTransactionID)
                 } label: {
                     VStack(alignment: .leading, spacing: 4) {
-                        let purchase = store.transaction(summary.record.purchaseTransactionID)
-                        Text(purchase?.payee.isEmpty == false ? purchase!.payee : (purchase?.note ?? "Deleted Purchase"))
+                        if let purchase = store.transaction(summary.record.purchaseTransactionID) {
+                            let payee = purchase.payee.trimmingCharacters(in: .whitespacesAndNewlines)
+                            let note = purchase.note.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !payee.isEmpty { Text(payee) }
+                            else if !note.isEmpty { Text(note) }
+                        } else {
+                            Text("Deleted Purchase")
+                        }
                         RefundStatusLabel(summary: summary)
                         if let due = summary.record.dueDate { Text("Expected \(due.formatted(date: .abbreviated, time: .omitted))").font(.caption).foregroundStyle(.secondary) }
                     }
@@ -434,7 +445,7 @@ struct RefundTrackingDetailView: View {
                         HStack {
                             VStack(alignment: .leading) {
                                 if let incoming = store.transaction(link.transactionID) {
-                                    Button(incoming.payee.isEmpty ? incoming.note : incoming.payee) { route = .transaction(store.draft(for: incoming), "Edit Transaction") }
+                                    Button(refundPaymentTitle(incoming)) { route = .transaction(store.draft(for: incoming), "Edit Transaction") }
                                     Text(incoming.date, style: .date).font(.caption).foregroundStyle(.secondary)
                                 } else { Text("Deleted Payment").foregroundStyle(.orange) }
                                 Text(moneyString(link.amount, symbol: store.commodity(record.commodityID)?.symbol ?? ""))
@@ -528,44 +539,135 @@ struct RefundTrackingDetailView: View {
     }
 }
 
+/// Keeps the selected payment's currency fixed for the lifetime of its editor,
+/// even if the parent picker refreshes its candidates from an iCloud update.
+private struct RefundPaymentSelection {
+    let record: RefundTrackingRecord
+    let transaction: LedgerTransaction
+    let currencySymbol: String
+}
+
 private struct RefundPaymentPicker: View {
     @EnvironmentObject private var store: MobileLedgerStore
     let record: RefundTrackingRecord
     @State private var search = ""
+    @State private var searchField: TransactionSearchField = .anywhere
     @State private var candidates: [RefundPaymentCandidate] = []
     @State private var loading = true
     @State private var nextFutureDate: Date?
-    private struct Request: Hashable { let revision: UInt64; let query: String }
+    @State private var selectedPayment: RefundPaymentSelection?
+    @State private var loadError: String?
+    @State private var retryID = UUID()
+    private struct Request: Hashable { let revision: UInt64; let retryID: UUID }
+    @State private var selectionPresentation: RegisterSelectionPresentation?
+    @State private var candidateIDs: Set<UUID> = []
+    @State private var currentRecord: RefundTrackingRecord?
+    private var searchQuery: TransactionSearchQuery? {
+        let text = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : TransactionSearchQuery(text: text, field: searchField)
+    }
+
     var body: some View {
-        List {
-            ForEach(candidates) { candidate in
-                let transaction = candidate.transaction
-                NavigationLink {
-                    RefundPaymentAllocationView(record: record, transaction: transaction)
-                } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(transaction.payee.isEmpty ? transaction.note : transaction.payee)
-                        Text(transaction.date, style: .date).font(.caption).foregroundStyle(.secondary)
+        Group {
+            if let selectionPresentation {
+                TransactionListScreen(scope: .currency((currentRecord ?? record).commodityID), title: "Link Received Payment",
+                    route: .constant(nil), transactionIDs: candidateIDs, ledgerID: record.ledgerID,
+                    searchFilter: searchQuery, selectionPresentation: selectionPresentation) { id in
+                    guard let transaction = candidates.first(where: { $0.id == id })?.transaction else { return }
+                    let current = currentRecord ?? record
+                    selectedPayment = RefundPaymentSelection(record: current, transaction: transaction,
+                        currencySymbol: selectionPresentation.amounts[id]?.first?.symbol ?? "")
+                }
+            } else if let loadError {
+                ContentUnavailableView {
+                    Label("Couldn’t Load Received Payments", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text(loadError)
+                } actions: {
+                    Button("Retry", action: retry)
+                }
+            } else {
+                ProgressView("Loading Received Payments")
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if selectionPresentation != nil, let loadError {
+                VStack(spacing: 8) {
+                    Text("Couldn’t refresh received payments. \(loadError)").font(.footnote)
+                    Button("Retry", action: retry).disabled(loading)
+                }
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(Color(uiColor: .systemBackground))
+                .overlay(alignment: .top) { Divider() }
+            }
+        }
+        .navigationTitle("Link Received Payment")
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search")
+        .scrollDismissesKeyboard(.interactively)
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled()
+        .submitLabel(.done)
+        .onSubmit(of: .search) {
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Picker("Search In", selection: $searchField) {
+                        Text("Anywhere").tag(TransactionSearchField.anywhere)
+                        Text("Notes").tag(TransactionSearchField.note)
+                        Text("Number").tag(TransactionSearchField.number)
+                        Text("Payee").tag(TransactionSearchField.payee)
                     }
+                } label: {
+                    Image(systemName: "line.3.horizontal.decrease.circle")
                 }
+                .accessibilityLabel("Search In")
+                .accessibilityValue(searchField == .anywhere ? "Anywhere" : searchField.title)
+                .accessibilityIdentifier("refund-payment-search-field")
             }
-        }.navigationTitle("Link Received Payment").searchable(text: $search)
-            .modifier(RefundPresentationClock(deadline: nextFutureDate))
-            .overlay { if loading && candidates.isEmpty { ProgressView() } }
-            .task(id: Request(revision: store.refundPresentationRevision, query: search)) {
-                let revision = store.refundPresentationRevision, query = search
-                do {
-                    if !query.isEmpty { try await Task.sleep(for: .milliseconds(140)) }
-                    let presentation = try await store.refundPresentations.presentation(data: store.data, ledgerID: record.ledgerID, revision: revision)
-                    let current = presentation.recordsByPurchase[record.purchaseTransactionID] ?? record
-                    let results = try await store.refundPresentations.candidates(in: presentation, record: current, matching: query)
-                    try Task.checkCancellation()
-                    guard revision == store.refundPresentationRevision, query == search else { return }
-                    candidates = results; nextFutureDate = presentation.nextFutureDate; loading = false
-                } catch is CancellationError {} catch {
-                    loading = false; store.validationError = ValidationError(message: error.localizedDescription)
-                }
+        }
+        .navigationDestination(isPresented: Binding(get: { selectedPayment != nil }, set: { if !$0 { selectedPayment = nil } })) {
+            if let selectedPayment {
+                RefundPaymentAllocationView(record: selectedPayment.record, transaction: selectedPayment.transaction,
+                    currencySymbol: selectedPayment.currencySymbol)
             }
+        }
+        .modifier(RefundPresentationClock(deadline: nextFutureDate))
+        .task(id: Request(revision: store.refundPresentationRevision, retryID: retryID)) {
+            let revision = store.refundPresentationRevision
+            loading = true
+            do {
+                let presentation = try await store.refundPresentations.presentation(data: store.data, ledgerID: record.ledgerID, revision: revision)
+                let current = presentation.recordsByPurchase[record.purchaseTransactionID] ?? record
+                let results = try await store.refundPresentations.candidates(in: presentation, record: current)
+                try Task.checkCancellation()
+                guard revision == store.refundPresentationRevision else { return }
+                let symbol = presentation.currencies.first { $0.id == current.commodityID }?.symbol ?? ""
+                currentRecord = current
+                candidates = results
+                candidateIDs = Set(results.map(\.id))
+                selectionPresentation = RegisterSelectionPresentation(
+                    emptyTitle: "No Received Payments",
+                    emptyMessage: "Record an incoming refund or reimbursement in \(symbol.isEmpty ? "the tracking currency" : symbol) in this journal first. Outgoing payments, future entries, and payments fully linked elsewhere aren’t listed.",
+                    amounts: Dictionary(uniqueKeysWithValues: results.map { ($0.id, [RegisterMoney(commodityID: current.commodityID, symbol: symbol, amount: $0.incomingAmount)]) }))
+                nextFutureDate = presentation.nextFutureDate
+                loadError = nil
+                loading = false
+            } catch is CancellationError {} catch {
+                guard !Task.isCancelled, revision == store.refundPresentationRevision else { return }
+                loading = false
+                loadError = error.localizedDescription
+            }
+        }
+    }
+
+    private func retry() {
+        loadError = nil
+        loading = true
+        retryID = UUID()
     }
 }
 
@@ -574,27 +676,31 @@ private struct RefundPaymentAllocationView: View {
     @Environment(\.dismiss) private var dismiss
     let record: RefundTrackingRecord
     let transaction: LedgerTransaction
+    let currencySymbol: String
     @State private var amount = ""
     @State private var saving = false
     @State private var initialized = false
+    @State private var allocationIssue: String?
     @State private var nextFutureDate: Date?
     var body: some View {
         Form {
+            if let allocationIssue { Text(allocationIssue).foregroundStyle(.orange) }
             Section {
-                Text(transaction.payee.isEmpty ? transaction.note : transaction.payee)
+                Text(refundPaymentTitle(transaction))
                 Text(transaction.date, style: .date)
                 TextField("Amount Received", text: $amount).keyboardType(.decimalPad).accessibilityIdentifier("refund-link-amount")
-                Text(store.commodity(record.commodityID)?.symbol ?? "")
+                Text(currencySymbol)
             } footer: { Text("Enter how much of this payment belongs to the purchase. Use a partial amount when one payment covers multiple purchases.") }
             Button("Link Payment") {
                 guard let value = decimalFromInput(amount) else { return }
                 saving = true
                 Task {
-                    let saved = await store.linkRefundAsync(purchaseID: record.purchaseTransactionID, incomingTransactionID: transaction.id, amount: value)
+                    let saved = await store.linkRefundAsync(purchaseID: record.purchaseTransactionID, incomingTransactionID: transaction.id,
+                        amount: value, expectedCommodityID: record.commodityID)
                     saving = false
                     if saved { dismiss() }
                 }
-            }.disabled(saving || (decimalFromInput(amount) ?? 0) <= 0)
+            }.disabled(saving || !initialized || allocationIssue != nil || (decimalFromInput(amount) ?? 0) <= 0)
         }.navigationTitle("Received Amount")
             .modifier(RefundPresentationClock(deadline: nextFutureDate))
             .task(id: store.refundPresentationRevision) {
@@ -604,8 +710,16 @@ private struct RefundPaymentAllocationView: View {
                     try Task.checkCancellation()
                     guard revision == store.refundPresentationRevision else { return }
                     nextFutureDate = presentation.nextFutureDate
+                    guard let current = presentation.recordsByPurchase[record.purchaseTransactionID] else {
+                        allocationIssue = "This purchase’s tracking is no longer available. Go back to its details to review it."
+                        return
+                    }
+                    guard current.commodityID == record.commodityID else {
+                        allocationIssue = "The tracking currency changed. Go back and select the received payment again."
+                        return
+                    }
+                    allocationIssue = nil
                     guard !initialized else { return }
-                    let current = presentation.recordsByPurchase[record.purchaseTransactionID] ?? record
                     let candidate = presentation.candidatesByCurrency[current.commodityID]?.first { $0.id == transaction.id }
                     let capacity = candidate.map { presentation.available($0, for: current) } ?? .zero
                     let own = current.links.first { $0.transactionID == transaction.id }?.amount ?? .zero

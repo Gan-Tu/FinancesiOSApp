@@ -58,6 +58,8 @@ Stable capture IDs prevent duplicate conversion after a save/relaunch.
 3. When payment arrives, record it as a transaction if it is not already in the journal.
 4. Reopen the purchase's Refund or Reimbursement row, tap Link Received Transaction, choose the received payment and enter how much belongs to this purchase. Tap Link Payment.
 
+The payment picker uses the normal transaction rows, including dates, amounts and account flow. Search matches the same fields as the register; Search In narrows it to Notes, Number or Payee. Only eligible incoming payments from the same journal and currency appear. If No Received Payments is shown, record the incoming refund first; an outgoing purchase cannot be linked as money received.
+
 Partial payments reduce the outstanding amount; allocations cannot exceed the incoming payment or expected amount. Future payments, transfers with no incoming net amount, and mismatched currencies do not count as received payments. Starting tracking or linking a payment does not create a financial transaction.
 
 Journal → Refunds & Reimbursements appears while there is an outstanding payment or a record needs attention. When nothing is active, that journal row is hidden. Completed and stopped tracking remains available through the original purchase's Refund or Reimbursement row above Add Attachment. Unlinking, stopping, or removing tracking never changes monetary postings or cleared status. Invalid/deleted links need attention instead of silently appearing settled.

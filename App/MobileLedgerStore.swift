@@ -4054,9 +4054,17 @@ extension MobileLedgerStore {
         await performRefundTrackingMutation { try RefundTracking.saving(draft, in: $0) }
     }
 
-    func linkRefundAsync(purchaseID: UUID, incomingTransactionID: UUID, amount: Decimal) async -> Bool {
-        await performRefundTrackingMutation {
-            try RefundTracking.linking(purchaseID: purchaseID, incomingTransactionID: incomingTransactionID, amount: amount, in: $0)
+    func linkRefundAsync(purchaseID: UUID, incomingTransactionID: UUID, amount: Decimal, expectedCommodityID: UUID? = nil) async -> Bool {
+        await performRefundTrackingMutation { snapshot in
+            // Check against the exact snapshot being mutated, before the first
+            // suspension. A synced currency change must not reinterpret an
+            // amount entered for a different currency in an open picker.
+            if let expectedCommodityID,
+               let current = try RefundTracking.record(for: purchaseID, in: snapshot),
+               current.commodityID != expectedCommodityID {
+                throw ValidationError(message: "The tracking currency changed. Go back and select the received payment again.")
+            }
+            return try RefundTracking.linking(purchaseID: purchaseID, incomingTransactionID: incomingTransactionID, amount: amount, in: snapshot)
         }
     }
 

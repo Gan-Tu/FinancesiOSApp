@@ -256,7 +256,7 @@ final class RefundTrackingPersistenceTests: XCTestCase {
         let again = try await cache.presentation(data: data, ledgerID: f.ledger.id, revision: 1)
         XCTAssertEqual(presentation.id, again.id)
         let record = try XCTUnwrap(presentation.recordsByPurchase[f.purchase.id])
-        let candidates = try await cache.candidates(in: presentation, record: record, matching: "refund")
+        let candidates = try await cache.candidates(in: presentation, record: record)
         XCTAssertEqual(Set(candidates.map(\.id)), [f.refund60.id, f.refund40.id])
         let partial = try XCTUnwrap(candidates.first { $0.id == f.refund60.id })
         XCTAssertEqual(presentation.available(partial, for: record), 40, "The other purchase's allocation must be excluded")
@@ -271,8 +271,70 @@ final class RefundTrackingPersistenceTests: XCTestCase {
         let updated = try await cache.presentation(data: data, ledgerID: f.ledger.id, revision: 2)
         XCTAssertNotEqual(updated.id, presentation.id)
         XCTAssertNil(updated.summariesByPurchase[f.purchase.id]?.outstandingAmount)
-        let updatedCandidates = try await cache.candidates(in: updated, record: record, matching: "refund")
+        let updatedCandidates = try await cache.candidates(in: updated, record: record)
         XCTAssertEqual(updatedCandidates.map(\.id), [f.refund40.id])
+    }
+
+    func testPaymentRegisterUsesSharedSearchAndNeverAdmitsIneligibleRows() async throws {
+        let f = RefundFixture(), cache = RefundPresentationCache()
+        var data = f.data
+        let first = try XCTUnwrap(data.transactions.firstIndex { $0.id == f.refund60.id })
+        let second = try XCTUnwrap(data.transactions.firstIndex { $0.id == f.refund40.id })
+        data.transactions[first].note = "Receipt credit"
+        data.transactions[first].payee = "Merchant"
+        data.transactions[first].number = "CREDIT-060"
+        data.transactions[second].note = "Return paid"
+        data.transactions[second].payee = "Insurer"
+        data.transactions[second].number = "CREDIT-040"
+        data = try RefundTracking.saving(f.draft, in: data)
+        let presentation = try await cache.presentation(data: data, ledgerID: f.ledger.id, revision: 1)
+        let record = try XCTUnwrap(presentation.recordsByPurchase[f.purchase.id])
+        let candidates = try await cache.candidates(in: presentation, record: record)
+        let ids = Set(candidates.map(\.id))
+        XCTAssertEqual(ids, [f.refund60.id, f.refund40.id], "Purchases, other currencies, and zero-net transfers must not become selectable")
+        for (field, query, expected) in [
+            (TransactionSearchField.note, "  CREDIT  ", Set([f.refund60.id])),
+            (.payee, "insurer", Set([f.refund40.id])),
+            (.number, "CREDIT-040", Set([f.refund40.id])),
+            (.anywhere, "credit-", ids),
+            (.anywhere, "Bank", Set<UUID>()),
+            (.note, "insurer", Set<UUID>())
+        ] {
+            let request = RegisterRenderRequest(data: data, rows: data.transactions, scope: .currency(f.usd.id),
+                search: query, dateInterval: nil, transactionIDs: ids, searchField: field, filtersScope: true)
+            let result = try await RegisterRenderWorker.shared.render(request)
+            XCTAssertEqual(Set(result.presentation.months.flatMap(\.days).flatMap(\.transactions).map(\.id)), expected)
+            for amounts in result.presentation.amounts.values {
+                XCTAssertTrue(amounts.allSatisfy { $0.commodityID == f.usd.id })
+            }
+            for balances in result.presentation.balances.values {
+                XCTAssertTrue(balances.allSatisfy { $0.commodityID == f.usd.id })
+            }
+        }
+    }
+
+    func testPaymentCandidatesAreEmptyForOutgoingFutureOrFullyAllocatedTransactions() async throws {
+        let f = RefundFixture(), cache = RefundPresentationCache()
+        var data = f.data
+        data.transactions.removeAll { $0.id == f.refund40.id }
+        data = try RefundTracking.saving(f.draft, in: data)
+        var other = f.draft; other.purchaseTransactionID = f.secondPurchase.id
+        data = try RefundTracking.saving(other, in: data)
+        data = try RefundTracking.linking(purchaseID: f.secondPurchase.id, incomingTransactionID: f.refund60.id, amount: 60, in: data)
+        let presentation = try await cache.presentation(data: data, ledgerID: f.ledger.id, revision: 1)
+        let record = try XCTUnwrap(presentation.recordsByPurchase[f.purchase.id])
+        let allocated = try await cache.candidates(in: presentation, record: record)
+        XCTAssertTrue(allocated.isEmpty, "A payment fully allocated to another purchase cannot be linked again")
+
+        data = try RefundTracking.unlinking(purchaseID: f.secondPurchase.id, incomingTransactionID: f.refund60.id, in: data)
+        let now = Date()
+        data.transactions[data.transactions.firstIndex { $0.id == f.refund60.id }!].date = now.addingTimeInterval(60)
+        let future = try await cache.presentation(data: data, ledgerID: f.ledger.id, revision: 2, asOf: now)
+        let pending = try await cache.candidates(in: future, record: record)
+        XCTAssertTrue(pending.isEmpty, "Future payments, outgoing rows, other currencies, and internal transfers are not received payments")
+        let received = try await cache.presentation(data: data, ledgerID: f.ledger.id, revision: 2, asOf: now.addingTimeInterval(60))
+        let settled = try await cache.candidates(in: received, record: record)
+        XCTAssertEqual(settled.map(\.id), [f.refund60.id], "Payment eligibility refreshes as its date arrives")
     }
 
     func testReadPresentationUsesCapturedClockAndExpiresAtPaymentDateInBothDirections() async throws {
@@ -326,6 +388,49 @@ final class RefundTrackingPersistenceTests: XCTestCase {
         XCTAssertEqual(stored.transactions, f.data.transactions)
         let trackingRestarted = await store.saveRefundTrackingAsync(f.draft)
         XCTAssertTrue(trackingRestarted, "Removing unreadable metadata must unblock tracking in the journal")
+    }
+
+    func testLinkRejectsCurrencyChangedAfterPaymentSelectionWithoutReinterpretingAmount() async throws {
+        let f = RefundFixture(), directory = try directory()
+        var data = f.data
+        let euroCard = Account(ledgerID: f.ledger.id, commodityID: f.eur.id, name: "Euro Card", kind: .liability)
+        let euroExpense = Account(ledgerID: f.ledger.id, commodityID: f.eur.id, name: "Euro Expense", kind: .expense)
+        data.accounts += [euroCard, euroExpense]
+        // Both currencies are valid for these rows: without a captured-currency
+        // guard an old USD editor could silently allocate the same digits as EUR.
+        for (id, amount) in [(f.purchase.id, Decimal(-100)), (f.refund60.id, Decimal(60))] {
+            let index = try XCTUnwrap(data.transactions.firstIndex { $0.id == id })
+            data.transactions[index].postings += [
+                Posting(accountID: euroCard.id, commodityID: f.eur.id, amount: amount, listIndex: 2),
+                Posting(accountID: euroExpense.id, commodityID: f.eur.id, amount: -amount, listIndex: 3)
+            ]
+        }
+        let store = makeStore(directory, initialData: data)
+        let originalSaved = await store.saveRefundTrackingAsync(f.draft)
+        XCTAssertTrue(originalSaved)
+        let selectedCurrency = try XCTUnwrap(store.refundTracking(for: f.purchase.id)).commodityID
+        XCTAssertEqual(selectedCurrency, f.usd.id)
+        var changedDraft = f.draft; changedDraft.commodityID = f.eur.id
+        let changed = await store.saveRefundTrackingAsync(changedDraft)
+        XCTAssertTrue(changed)
+        let before = try XCTUnwrap(store.cloudKitSQLiteStore.loadData())
+
+        let stale = await store.linkRefundAsync(purchaseID: f.purchase.id, incomingTransactionID: f.refund60.id,
+            amount: 40, expectedCommodityID: selectedCurrency)
+        XCTAssertFalse(stale)
+        XCTAssertEqual(store.validationError?.message, "The tracking currency changed. Go back and select the received payment again.")
+        XCTAssertEqual(store.data.sources, before.sources)
+        XCTAssertEqual(try store.cloudKitSQLiteStore.loadData()?.sources, before.sources)
+        XCTAssertTrue(try XCTUnwrap(store.refundTracking(for: f.purchase.id)).links.isEmpty)
+
+        let reselected = await store.linkRefundAsync(purchaseID: f.purchase.id, incomingTransactionID: f.refund60.id,
+            amount: 40, expectedCommodityID: f.eur.id)
+        XCTAssertTrue(reselected)
+        let saved = try XCTUnwrap(store.cloudKitSQLiteStore.loadData())
+        let tracking = try XCTUnwrap(RefundTracking.record(for: f.purchase.id, in: saved))
+        XCTAssertEqual(tracking.commodityID, f.eur.id)
+        XCTAssertEqual(tracking.links.first?.amount, 40)
+        XCTAssertEqual(saved.transactions, data.transactions)
     }
 
     func testAsyncSaveLinkUnlinkCancelReopenAndDiskFailureRetry() async throws {

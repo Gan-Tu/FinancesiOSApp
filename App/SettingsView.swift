@@ -662,7 +662,7 @@ struct HelpSettingsView: View {
                 )
                 helpRow(
                     "Link a received payment",
-                    "Record the received payment as a transaction first. Open the purchase's Refund or Reimbursement row, tap Link Received Transaction, select the payment and enter the amount belonging to this purchase. Partial payments reduce the outstanding amount; only received payments in the tracking currency can be linked.",
+                    "Record the received payment as a transaction first. Open the purchase's Refund or Reimbursement row, tap Link Received Transaction, select the payment and enter the amount belonging to this purchase. The picker shows incoming payments in the same journal and currency; outgoing purchases, transfers between your own accounts and future payments are excluded. Partial payments reduce the outstanding amount.",
                     "link"
                 )
                 helpRow(

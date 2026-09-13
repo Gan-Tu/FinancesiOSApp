@@ -197,6 +197,15 @@ final class SystemEntryUITests: XCTestCase {
         app.buttons["All"].tap()
         let purchase = app.buttons["register-row-00000000-0000-0000-0000-000000000064"]
         XCTAssertTrue(purchase.waitForExistence(timeout: 5)); purchase.tap()
+        app.navigationBars["Details"].buttons["Edit"].tap()
+        dismissKeyboard(app)
+        for label in ["Notes", "Payee"] {
+            let field = text(app, label)
+            for _ in 0..<3 where !field.isHittable { app.swipeUp() }
+            enter("", into: field)
+        }
+        app.navigationBars["Edit Transaction"].buttons["Save"].tap()
+        XCTAssertTrue(app.navigationBars["Details"].waitForExistence(timeout: 5))
         let entry = app.buttons["transaction-refund-tracking"]
         XCTAssertTrue(entry.waitForExistence(timeout: 5))
         XCTAssertEqual(entry.label, "Add Refund & Reimbursement")
@@ -216,7 +225,13 @@ final class SystemEntryUITests: XCTestCase {
         let journalTracking = app.buttons["journal-refund-tracking"]
         XCTAssertTrue(journalTracking.waitForExistence(timeout: 5)); journalTracking.tap()
         let trackedPurchase = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Waiting for")).firstMatch
-        XCTAssertTrue(trackedPurchase.waitForExistence(timeout: 5)); trackedPurchase.tap()
+        XCTAssertTrue(trackedPurchase.waitForExistence(timeout: 5))
+        let status = trackedPurchase.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Waiting for")).firstMatch
+        XCTAssertTrue(status.exists)
+        XCTAssertEqual(status.frame.midY, trackedPurchase.frame.midY, accuracy: 2, "An unnamed purchase must not reserve a blank title line above its status")
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Aligned unnamed refund row"; screenshot.lifetime = .keepAlways; add(screenshot)
+        trackedPurchase.tap()
         for _ in 0..<4 where !stop.isHittable { app.swipeUp() }
         XCTAssertTrue(stop.isHittable); stop.tap()
         app.navigationBars["Refund / Reimbursement"].buttons.element(boundBy: 0).tap()
@@ -240,12 +255,31 @@ final class SystemEntryUITests: XCTestCase {
         for _ in 0..<3 where !link.isHittable { app.swipeUp() }
         XCTAssertTrue(link.waitForExistence(timeout: 5)); link.tap()
         XCTAssertTrue(app.navigationBars["Link Received Payment"].waitForExistence(timeout: 5))
-        let received = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "SYNTHETIC Partial Refund")).firstMatch
-        XCTAssertTrue(received.waitForExistence(timeout: 5)); received.tap()
+        let received = app.buttons["register-row-00000000-0000-0000-0000-000000000065"]
+        XCTAssertTrue(received.waitForExistence(timeout: 5))
+        XCTAssertTrue(received.label.contains("SYNTHETIC Received Payment"), "Selection must use the normal note-first transaction row")
+        XCTAssertTrue(received.label.contains("40.00"))
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "month-heading").firstMatch.exists)
+        XCTAssertFalse(app.buttons["register-row-00000000-0000-0000-0000-000000000064"].exists, "The outgoing purchase cannot be linked as money received")
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.exists)
+        enter("no matching payment", into: search)
+        XCTAssertTrue(app.staticTexts["No Results"].waitForExistence(timeout: 5))
+        enter("SYN-REFUND", into: search)
+        XCTAssertTrue(received.waitForExistence(timeout: 5), "Transaction numbers must match just as they do in the normal register")
+        search.typeText("\n")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Link Received Payment"].exists, "Done must dismiss the keyboard without changing screens")
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Received payments use the transaction register"; screenshot.lifetime = .keepAlways; add(screenshot)
+        received.tap()
         try assertAmount(app.textFields["refund-link-amount"], "40")
         app.buttons["Link Payment"].tap()
         XCTAssertTrue(app.navigationBars["Link Received Payment"].waitForExistence(timeout: 5))
+        let searchCancel = app.navigationBars["Link Received Payment"].buttons["Cancel"]
+        if searchCancel.exists { searchCancel.tap() }
         app.navigationBars["Link Received Payment"].buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.navigationBars["Refund / Reimbursement"].waitForExistence(timeout: 5))
         let waiting = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@ AND label CONTAINS %@", "Waiting for", "60.00")).firstMatch
         for _ in 0..<4 where !waiting.isHittable { app.swipeDown() }
         XCTAssertTrue(waiting.waitForExistence(timeout: 5))
@@ -259,6 +293,28 @@ final class SystemEntryUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Edit Transaction"].waitForExistence(timeout: 5))
         try assertAmount(app.textFields["Amount for SYNTHETIC Bank"], "40")
         try assertAmount(app.textFields["Amount for SYNTHETIC Expense"], "-40")
+    }
+
+    func testPaymentPickerExplainsWhyOutgoingTransactionsCannotBeLinked() throws {
+        let app = XCUIApplication(); defer { app.terminate() }
+        launch(app)
+        journal(app, "Alpha").tap(); app.buttons["All"].tap()
+        let received = app.buttons["register-row-00000000-0000-0000-0000-000000000065"]
+        XCTAssertTrue(received.waitForExistence(timeout: 5)); received.swipeLeft()
+        app.buttons["Delete"].tap()
+        XCTAssertTrue(received.waitForNonExistence(timeout: 5))
+        app.buttons["register-row-00000000-0000-0000-0000-000000000064"].tap()
+        app.buttons["transaction-refund-tracking"].tap()
+        let start = app.buttons["refund-save-tracking"]
+        XCTAssertTrue(start.waitForExistence(timeout: 5)); start.tap()
+        let link = app.buttons["refund-link-payment"]
+        for _ in 0..<3 where !link.isHittable { app.swipeUp() }
+        XCTAssertTrue(link.isHittable); link.tap()
+        XCTAssertTrue(app.staticTexts["No Received Payments"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Outgoing")).firstMatch.exists)
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "register-row-")).firstMatch.exists)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Outgoing-only journal explains missing received payments"; screenshot.lifetime = .keepAlways; add(screenshot)
     }
 
     func testUnreadableRefundRecoveryIsReachableFromPurchaseAndClonedJournalList() {
