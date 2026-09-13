@@ -97,8 +97,12 @@ struct ApplePayCaptureSetupView: View {
                 Text("1. Open Shortcuts → Automation → + → Transaction (or Wallet).")
                 Text("2. Choose the card you tap with Apple Pay and select Run Immediately.")
                 Text("3. Add the Finances action ‘Add Apple Pay to Suggestions’.")
-                Text("4. Connect Amount to the transaction’s amount and currency, Merchant to its merchant, and optionally Card Name and Date. Choose a journal, or leave it open for review.")
+                Text("4. Connect Amount to the transaction’s amount and currency, and Merchant to its merchant. Optionally add Card Name, Notes and Date. Choose a journal, or leave it open for review.")
                 Text("5. Check the currency on your first capture. If Wallet supplies a number without currency, set Currency Code explicitly in the action.")
+            }
+            Section("Card Name & Notes") {
+                Text("Card Name is the account name in Finances, such as AMEX Platinum. A unique matching account is selected when you review the draft. If the name does not match, choose the account during review.")
+                Text("Notes is optional. Enter text or connect a Shortcuts variable; it will appear in the transaction’s Notes field when you review the suggestion.")
             }
             Section {
                 Text("The automation captures supported Wallet transactions. It does not import your card’s full history or record purchases automatically in the ledger.")

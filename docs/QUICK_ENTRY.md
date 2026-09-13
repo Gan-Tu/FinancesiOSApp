@@ -28,7 +28,9 @@ Pending receipt batches survive an interrupted launch. After a successful save, 
 
 ## Apple Pay Suggestions
 
-Create a personal Wallet/Transaction automation in Shortcuts, select your tapped card, and add Add Apple Pay to Suggestions. Connect Amount (including currency), Merchant, and optionally Card Name and Date; choose a journal if desired. Run Immediately captures the supported Wallet event without opening the ledger. The app cannot create this personal automation for you or read a card's complete history.
+Create a personal Wallet/Transaction automation in Shortcuts, select your tapped card, and add Add Apple Pay to Suggestions. Connect Amount (including currency), Merchant, and optionally Card Name, Notes and Date; choose a journal if desired. Run Immediately captures the supported Wallet event without opening the ledger. The app cannot create this personal automation for you or read a card's complete history.
+
+Card Name is the account name in Finances, such as AMEX Platinum. Matching is case-insensitive and requires one matching funding account in the selected journal; an unmatched or ambiguous name requires account selection during review. Notes accepts optional text or a Shortcuts variable and carries through to the transaction draft. Existing automations that omit Notes continue to work.
 
 Check your first capture's currency. If the trigger supplies only a number, explicitly configure Currency Code in the action. No exchange rate is guessed. An unknown card requires account selection; changing journals resets the draft's accounts. A journal without the captured currency cannot save it as a different currency accidentally.
 

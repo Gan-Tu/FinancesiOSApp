@@ -92,18 +92,21 @@ struct CaptureWalletTransactionIntent: AppIntent {
     static let openAppWhenRun = false
     @Parameter(title: "Amount", inputConnectionBehavior: .connectToPreviousIntentResult) var amount: IntentCurrencyAmount
     @Parameter(title: "Merchant") var merchant: String
-    @Parameter(title: "Card Name") var card: String?
+    @Parameter(title: "Card Name", description: "Optional account name in Finances, such as AMEX Platinum. A unique matching account is selected when you review the draft.") var card: String?
+    @Parameter(title: "Notes", description: "Optional notes to include in the transaction draft.") var notes: String?
     @Parameter(title: "Currency Code (optional override)") var currencyCode: String?
     @Parameter(title: "Date") var date: Date?
     @Parameter(title: "Journal") var journal: JournalIntentEntity?
     static var parameterSummary: some ParameterSummary {
-        Summary("Add \(\.$amount) at \(\.$merchant) to Suggestions") { \.$card; \.$currencyCode; \.$date; \.$journal }
+        Summary("Add \(\.$amount) at \(\.$merchant) to Suggestions") { \.$card; \.$notes; \.$currencyCode; \.$date; \.$journal }
+    }
+    func makeSuggestion() -> CaptureSuggestion {
+        CaptureSuggestion(source: .applePay, date: date ?? Date(), amount: amount.amount,
+            currencyCode: currencyCode?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? currencyCode! : amount.currencyCode,
+            merchant: merchant, card: card ?? "", note: notes ?? "", journalID: journal?.id)
     }
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let suggestion = CaptureSuggestion(source: .applePay, date: date ?? Date(), amount: amount.amount,
-            currencyCode: currencyCode?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? currencyCode! : amount.currencyCode,
-            merchant: merchant, card: card ?? "", note: "", journalID: journal?.id)
-        try await CaptureSuggestionRepository.shared.add(suggestion)
+        try await CaptureSuggestionRepository.shared.add(makeSuggestion())
         await MainActor.run { NotificationCenter.default.post(name: .financesSuggestionsChanged, object: nil) }
         return .result(dialog: "Saved to Suggestions. Review it in Finances before adding it to your journal.")
     }

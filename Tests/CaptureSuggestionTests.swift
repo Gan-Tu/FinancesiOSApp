@@ -1,4 +1,5 @@
 import XCTest
+import AppIntents
 @testable import FinancesClone
 
 @MainActor
@@ -49,6 +50,26 @@ final class CaptureSuggestionTests: XCTestCase {
         XCTAssertTrue(saved.isEmpty)
     }
 
+    func testWalletActionNotesSurviveInboxReopenAndRemainOptional() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var intent = CaptureWalletTransactionIntent()
+        intent.amount = IntentCurrencyAmount(amount: Decimal(string: "12.34")!, currencyCode: "USD")
+        intent.merchant = "Test Merchant"
+        intent.card = "Test Card"
+        intent.date = Date(timeIntervalSince1970: 1_788_858_000)
+        XCTAssertEqual(intent.makeSuggestion().note, "", "Existing automations without Notes must still work")
+
+        let notes = "Lunch with Alex\n收据 #123"
+        intent.notes = notes
+        let capture = intent.makeSuggestion()
+        try await CaptureSuggestionRepository(directory: directory).add(capture)
+        let saved = try await CaptureSuggestionRepository(directory: directory).all()
+        XCTAssertEqual(saved, [capture], "Capture fields, including multiline Notes, must survive reopening the inbox")
+        XCTAssertEqual(saved.first?.note, notes)
+        XCTAssertEqual(saved.first?.card, "Test Card")
+    }
+
     @MainActor
     func testIncomingDraftPreservesAmountDateAndRequiresUnknownCardSelection() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -58,12 +79,14 @@ final class CaptureSuggestionTests: XCTestCase {
         }, automaticTriggersEnabled: false)
         let store = MobileLedgerStore(supportDirectory: directory, initialData: DemoData.fixture(), cloudKitSyncDependencies: dependencies)
         stores.append(store)
-        let capture = suggestion()
+        var capture = suggestion()
+        capture.note = "Lunch with Alex\n收据 #123"
         let original = store.data
         let request = IncomingTransactionRequest(suggestion: capture)
         let draft = IncomingTransactionDraftFactory.make(request: request, store: store)
         XCTAssertEqual(draft.saveOperationID, capture.id)
         XCTAssertEqual(draft.payee, capture.merchant)
+        XCTAssertEqual(draft.note, capture.note)
         XCTAssertEqual(draft.date, capture.date)
         XCTAssertFalse(draft.cleared)
         XCTAssertEqual(decimalFromInput(draft.postings[0].amount), -capture.amount!)
