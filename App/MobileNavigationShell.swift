@@ -704,7 +704,7 @@ struct RegisterRow: View, Equatable {
     var body: some View {
         HStack(alignment: .top, spacing: 7) {
             VStack(alignment: .leading, spacing: 3) {
-                (Text(transaction.note.isEmpty ? (transaction.payee.isEmpty ? "Transaction" : transaction.payee) : transaction.note) + Text(!transaction.note.isEmpty && !transaction.payee.isEmpty ? " @\(transaction.payee)" : "").foregroundColor(.secondary))
+                (Text(transactionTitle(for: transaction)) + Text(!transaction.payee.isEmpty ? " @\(transaction.payee)" : "").foregroundColor(.secondary))
                     .lineLimit(1)
                     .accessibilityIdentifier("transaction-title")
                 HStack(spacing: 4) {
@@ -1091,8 +1091,7 @@ private func mobileTransactionPreviewPresentation(
 
 private func transactionTitle(for transaction: LedgerTransaction) -> String {
     if !transaction.note.isEmpty { return transaction.note }
-    if !transaction.payee.isEmpty { return transaction.payee }
-    return "Transaction"
+    return "Transfer"
 }
 
 private struct MobileTransactionPreviewRow: View, Equatable {
