@@ -4014,6 +4014,7 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
     }
 
     func cloudKitSyncDidFinish(at date: Date) throws {
+        PaymentMetadataStore.shared.refreshIfStarted()
         var updated = data
         updated.lastSyncedAt = date
         let snapshot = updated

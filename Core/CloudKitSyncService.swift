@@ -60,7 +60,7 @@ struct CloudKitSyncConfiguration: Equatable, Sendable {
     }
 }
 
-struct CloudKitSyncRecord: Equatable, Sendable {
+struct CloudKitSyncRecord: Equatable, Sendable, Codable {
     var recordType: String
     var recordID: String
     var operation: String = "upsert"
@@ -228,7 +228,7 @@ struct CloudKitSyncRecordCodec: Sendable {
     let zoneID: CKRecordZone.ID
 
     func recordID(type: String, id: String) throws -> CKRecord.ID {
-        guard Self.domainTypes.contains(type), let uuid = UUID(uuidString: id), uuid.uuidString == id else {
+        guard (zoneID.zoneName == "FinancesAssist_v1" ? Set(["assist_account"]) : Self.domainTypes).contains(type), let uuid = UUID(uuidString: id), uuid.uuidString == id else {
             throw CloudKitSyncError.invalidData("The sync record has an invalid type or identifier.")
         }
         return CKRecord.ID(recordName: "\(type)_\(id)", zoneID: zoneID)

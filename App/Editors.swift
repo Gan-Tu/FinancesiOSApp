@@ -271,6 +271,11 @@ struct TransactionEditorView: View {
                 }
                 FinanceFormRow(last: true) { ReceiptPicker(assets: $draft.attachments, textOnly: true, startWithScan: scanInvoice) }
             }
+            if let ledgerID = draft.ledgerID ?? store.selectedLedgerID {
+                ReceiptAnalysisPanel(draft: $draft, initialDraft: initialDraft.preparedForAmountEntry, ledgerID: ledgerID,
+                    accounts: store.data.accounts.filter { $0.ledgerID == ledgerID },
+                    commodities: store.data.commodities.filter { $0.ledgerID == ledgerID }, attachmentURL: store.attachmentURL(for:))
+            }
         }
         .disabled(isSaving)
         .interactiveDismissDisabled(isSaving)
@@ -651,6 +656,9 @@ struct AccountEditorView: View {
                         } label: { FinanceFormLabel(title: "Currency", value: draft.commodityID.flatMap { store.commodity($0)?.name } ?? "") }
                         .buttonStyle(.plain)
                     }
+                }
+                if [.asset, .liability, .equity].contains(draft.kind), let id = draft.id, let ledgerID = draft.ledgerID ?? store.selectedLedgerID {
+                    FinanceFormCard { FinanceFormRow(last: true) { PaymentIdentityEditor(accountID: id, ledgerID: ledgerID) } }
                 }
                 FinanceFormCard {
                     ForEach(AppColors.names, id: \.self) { name in

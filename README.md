@@ -45,3 +45,14 @@ For a local demonstration, add `--demo --reset-demo` to the scheme’s launch ar
 Source lives at [Gan-Tu/FinancesiOSApp](https://github.com/Gan-Tu/FinancesiOSApp). Every push to `main` starts the **Finances v2 iOS Release** Xcode Cloud workflow: required iPhone tests, a signed archive, and delivery to the **Internal Testing** group. GitHub Actions also runs tests on pushes and pull requests. See [Release Setup](docs/RELEASE.md) for the workflow and tester details.
 
 See [UI reference and parity](docs/UI_REFERENCE.md), [CloudKit compatibility](docs/CLOUDKIT.md), [verification](docs/VERIFICATION.md), and [source provenance](docs/SOURCE_PROVENANCE.md).
+
+
+## Receipt suggestions and account cards
+
+Existing assets, liabilities, and equity accounts now have an inline Cards editor with multiple labels, optional networks, and four-digit suffixes. Cards use a separate private `FinancesAssist_v1` CloudKit zone and separate local cache, pending writes, and conflicts; existing journal records are unchanged. Settings → Receipt Suggestions contains model, effort, custom instructions, and card backup export/restore. Restoring cards requires matching existing account IDs and preserves conflicting entries.
+
+Add receipts in a transaction editor and tap **Suggest from attachments**. The API fills untouched fields and offers compact replacements for existing values. Changes go through normal transaction Save. Attachments retain their originals; PDF, JPEG, PNG, WebP, HEIC, and HEIF are supported, with 10 files / 20 MB each / 40 MB combined / 30 PDF pages per request. Oversized requests show receipt selection.
+
+Configure the web API origin in Receipt Suggestions settings. The OpenAI key and Markdown classification prompt stay on that server. Hosted access uses native Sign in with Apple; enable that capability in the app's Apple provisioning profile and allow its bundle ID in the API's `APPLE_NATIVE_CLIENT_IDS`. Debug Simulator builds may use the Mac's running loopback API, such as `http://127.0.0.1:5176`. Release builds require HTTPS and verified Apple sign-in. The default hosted origin must have the Node API configured before hosted analysis works.
+
+Assist sources are mirrored in the macOS checkout and tested against the same wire contract. Demo launches keep card metadata local and do not access the private CloudKit zone.

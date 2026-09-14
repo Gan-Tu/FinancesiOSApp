@@ -4,6 +4,10 @@
 <dict>
 	<key>aps-environment</key>
 	<string>$(FINANCES_PUSH_ENVIRONMENT)</string>
+	<key>com.apple.developer.applesignin</key>
+	<array>
+		<string>Default</string>
+	</array>
 	<key>com.apple.developer.icloud-container-environment</key>
 	<string>$(FINANCES_CLOUDKIT_ENVIRONMENT)</string>
 	<key>com.apple.developer.icloud-container-identifiers</key>

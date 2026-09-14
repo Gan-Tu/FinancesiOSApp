@@ -58,6 +58,12 @@ struct SettingsView: View {
 
                 Section {
                     NavigationLink {
+                        ScrollView { ReceiptAISettingsView(accounts: store.data.accounts).padding() }
+                            .navigationTitle("Receipt Suggestions")
+                    } label: { SettingsIconLabel(title: "Receipt Suggestions", systemImage: "sparkles", tint: .purple) }
+                }
+                Section {
+                    NavigationLink {
                         DisplaySettingsView()
                     } label: {
                         SettingsIconLabel(title: "Display", systemImage: "textformat.size", tint: .green)

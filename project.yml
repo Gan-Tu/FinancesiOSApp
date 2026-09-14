@@ -110,6 +110,8 @@ targets:
     entitlements:
       path: App/FinancesMobile.entitlements
       properties:
+        com.apple.developer.applesignin:
+        - Default
         com.apple.developer.icloud-container-identifiers:
         - iCloud.dev.gan.FinanceApp
         com.apple.developer.icloud-services:
@@ -129,6 +131,8 @@ targets:
         LD_RUNPATH_SEARCH_PATHS: $(inherited) @executable_path/Frameworks
     attributes:
       SystemCapabilities:
+        com.apple.SignInWithApple:
+          enabled: 1
         com.apple.iCloud:
           enabled: 1
         com.apple.Push:
