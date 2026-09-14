@@ -179,6 +179,33 @@ struct ReceiptDraftProposal {
             number: suggestion.invoiceNumber ?? suggestion.orderNumber,
             postings: response.postingsApplicable || hasCounter ? postings : nil)
     }
+    mutating func keepCurrentAccountsForReview(
+        response: ReceiptAnalysisResponse, current: TransactionDraft, accounts: [Account]
+    ) {
+        guard var rows = postings else { return }
+        var roles = response.suggestion.postings.map(\.role)
+        if !roles.contains("source") { roles.insert("source", at: 0) }
+        for index in rows.indices where rows[index].accountID == nil {
+            let row = rows[index]
+            guard let currency = row.commodityID, !row.amount.isEmpty,
+                let amount = Decimal(string: row.amount, locale: Locale(identifier: "en_US_POSIX")),
+                roles.indices.contains(index) else { continue }
+            let matches = current.postings.compactMap { existing -> UUID? in
+                guard let account = accounts.first(where: { $0.id == existing.accountID }),
+                    account.ledgerID == current.ledgerID, account.parentID != nil,
+                    (roles[index] == "source" ? [.asset, .liability, .equity] : [.expense, .income]).contains(account.kind),
+                    (existing.commodityID ?? account.commodityID) == currency,
+                    account.commodityID == nil || account.commodityID == currency,
+                    !existing.amount.isEmpty,
+                    Decimal(string: existing.amount, locale: Locale(identifier: "en_US_POSIX")) == amount
+                else { return nil }
+                return account.id
+            }
+            let ids = Set(matches)
+            if ids.count == 1 { rows[index].accountID = ids.first }
+        }
+        postings = rows
+    }
     var fields: [ReceiptProposalField] {
         ReceiptProposalField.allCases.filter { field in
             switch field {

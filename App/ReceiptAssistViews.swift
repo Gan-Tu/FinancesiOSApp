@@ -355,8 +355,16 @@ struct ReceiptAnalysisPanel: View {
                             Button("Replace") { replace(field, proposal: proposal) }
                         }
                         if field == .postings {
-                            postingTable("Current", draft.postings)
-                            postingTable("Suggested", proposal.postings ?? [])
+                            ReceiptPostingTable(title: "Current", postings: draft.postings,
+                                accounts: accounts, commodities: commodities, ledgerID: ledgerID)
+                            ReceiptPostingTable(title: "Suggested", postings: proposal.postings ?? [],
+                                accounts: accounts, commodities: commodities, ledgerID: ledgerID,
+                                onAccountChange: { rowID, accountID in
+                                    guard var next = self.proposal,
+                                        let index = next.postings?.firstIndex(where: { $0.id == rowID }) else { return }
+                                    next.postings?[index].accountID = accountID
+                                    self.proposal = next
+                                })
                         } else {
                             HStack(alignment: .top) {
                                 VStack(alignment: .leading) {
@@ -417,12 +425,15 @@ struct ReceiptAnalysisPanel: View {
                 guard draft.ledgerID == baseline.ledgerID,
                     assets.allSatisfy({ asset in draft.attachments.contains(asset) })
                 else { throw AssistError.message("The journal or receipts changed. Analyze again.") }
-                let next = try ReceiptDraftProposal.make(result, accounts: accounts, commodities: commodities)
+                var next = try ReceiptDraftProposal.make(result, accounts: accounts, commodities: commodities)
                 var protected = protectedFields
                 for field in [ReceiptProposalField.note, .payee, .number]
                 where !text(field, draft: initialDraft).isEmpty { protected.insert(field) }
                 var updated = draft
                 replacements = next.autofill(&updated, initial: initialDraft, protected: protected)
+                if replacements.contains(.postings) {
+                    next.keepCurrentAccountsForReview(response: result, current: updated, accounts: accounts)
+                }
                 autoApplied = updated
                 draft = updated
                 reviewed = updated
@@ -463,17 +474,49 @@ struct ReceiptAnalysisPanel: View {
         proposal.apply(field, to: &value)
         return text(field, draft: value)
     }
-    private func postingTable(_ title: String, _ postings: [PostingDraft]) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+}
+
+struct ReceiptPostingTable: View {
+    let title: String
+    let postings: [PostingDraft]
+    let accounts: [Account]
+    let commodities: [Commodity]
+    let ledgerID: UUID
+    var onAccountChange: ((UUID, UUID?) -> Void)?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
             Text(title).foregroundStyle(.secondary)
-            ForEach(postings) { row in
-                HStack(alignment: .top) {
-                    Text(accounts.first { $0.id == row.accountID }?.name ?? "Not identified").frame(
-                        maxWidth: .infinity, alignment: .leading)
-                    Text(row.amount.isEmpty ? "Not identified" : row.amount).monospacedDigit()
-                    Text(commodities.first { $0.id == row.commodityID }?.symbol ?? "—").foregroundStyle(
-                        .secondary)
+            ForEach(Array(postings.enumerated()), id: \.element.id) { index, row in
+                HStack(alignment: .center, spacing: 8) {
+                    if let onAccountChange {
+                        Picker("Account to apply for posting \(index + 1)", selection: Binding(
+                            get: { row.accountID },
+                            set: { onAccountChange(row.id, $0) }
+                        )) {
+                            Text("Not identified").tag(nil as UUID?)
+                            ForEach(accounts.filter { account in
+                                account.ledgerID == ledgerID && account.parentID != nil &&
+                                (row.commodityID == nil || account.commodityID == nil || account.commodityID == row.commodityID || account.id == row.accountID)
+                            }) { account in
+                                Text(account.name).tag(Optional(account.id))
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                        .accessibilityLabel("Account to apply for posting \(index + 1)")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .layoutPriority(1)
+                    } else {
+                        Text(accounts.first { $0.id == row.accountID }?.name ?? "Not identified")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    Text(row.amount.isEmpty ? "Not identified" : row.amount)
+                        .monospacedDigit().fixedSize()
+                    Text(commodities.first { $0.id == row.commodityID }?.symbol ?? "—")
+                        .foregroundStyle(.secondary).fixedSize()
                 }
+                .fixedSize(horizontal: false, vertical: true)
             }
         }
     }

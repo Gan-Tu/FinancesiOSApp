@@ -1,6 +1,10 @@
 import CloudKit
 import Foundation
 import XCTest
+#if os(iOS)
+import SwiftUI
+import UIKit
+#endif
 
 @testable import FinancesClone
 
@@ -270,4 +274,74 @@ extension ReceiptAssistTests {
             XCTAssertNil(try store.load(endpoint: endpoint))
         #endif
     }
+}
+
+extension ReceiptAssistTests {
+    private func accountChoiceFixture() throws -> (ReceiptAnalysisResponse, TransactionDraft, [Account], Commodity) {
+        let ledger = UUID(), parent = UUID()
+        let currency = Commodity(ledgerID: ledger, symbol: "USD", name: "US Dollar")
+        let bank = Account(ledgerID: ledger, parentID: parent, commodityID: currency.id, name: "AMEX Platinum", kind: .liability)
+        let other = Account(ledgerID: ledger, parentID: parent, commodityID: currency.id, name: "BoA Premium Rewards", kind: .asset)
+        let expense = Account(ledgerID: ledger, parentID: parent, commodityID: currency.id, name: "Dining", kind: .expense)
+        let response = ReceiptAnalysisResponse(suggestion: .init(postings: [
+            .init(accountID: nil, commodityID: currency.id, amount: "-52.14", role: "source"),
+            .init(accountID: expense.id, commodityID: currency.id, amount: "52.14", role: "counter"),
+        ], warnings: []), postingsApplicable: false)
+        var draft = TransactionDraft(ledgerID: ledger)
+        draft.postings = [PostingDraft(accountID: bank.id, amount: "-52.140", commodityID: currency.id),
+                          PostingDraft(accountID: expense.id, amount: "52.14", commodityID: currency.id)]
+        return (response, draft, [bank, other, expense], currency)
+    }
+    func testReviewKeepsCurrentAccountAndAppliesChosenReplacementOnlyOnRequest() throws {
+        let (response, initial, accounts, currency) = try accountChoiceFixture()
+        var proposal = try ReceiptDraftProposal.make(response, accounts: accounts, commodities: [currency])
+        proposal.keepCurrentAccountsForReview(response: response, current: initial, accounts: accounts)
+        XCTAssertEqual(proposal.postings?.first?.accountID, accounts[0].id)
+        proposal.postings?[0].accountID = accounts[1].id
+        XCTAssertEqual(initial.postings[0].accountID, accounts[0].id)
+        var applied = initial
+        proposal.apply(.postings, to: &applied)
+        XCTAssertEqual(applied.postings[0].accountID, accounts[1].id)
+        XCTAssertEqual(applied.postings[0].amount, "-52.14")
+        XCTAssertEqual(applied.postings[1].accountID, accounts[2].id)
+        XCTAssertEqual(applied.postings[1].amount, "52.14")
+    }
+    func testReviewDoesNotGuessAcrossAccountsOrCurrencies() throws {
+        let (response, initial, accounts, currency) = try accountChoiceFixture()
+        var ambiguous = initial
+        ambiguous.postings.append(PostingDraft(accountID: accounts[1].id, amount: "-52.14", commodityID: currency.id))
+        var proposal = try ReceiptDraftProposal.make(response, accounts: accounts, commodities: [currency])
+        proposal.keepCurrentAccountsForReview(response: response, current: ambiguous, accounts: accounts)
+        XCTAssertNil(proposal.postings?.first?.accountID)
+        var foreign = initial
+        foreign.postings[0].commodityID = UUID()
+        proposal.keepCurrentAccountsForReview(response: response, current: foreign, accounts: accounts)
+        XCTAssertNil(proposal.postings?.first?.accountID)
+    }
+    #if os(iOS)
+    func testReceiptAccountChoicesFitNarrowLayout() async throws {
+        let (_, draft, accounts, currency) = try accountChoiceFixture()
+        let root = ReceiptPostingTable(title: "Suggested", postings: draft.postings, accounts: accounts,
+            commodities: [currency], ledgerID: try XCTUnwrap(draft.ledgerID), onAccountChange: { _, _ in })
+            .padding().font(.caption)
+        let controller = UIHostingController(rootView: root)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 340, height: 240)
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        controller.view.frame = window.bounds
+        controller.view.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        let image = UIGraphicsImageRenderer(bounds: controller.view.bounds).image { _ in
+            controller.view.drawHierarchy(in: controller.view.bounds, afterScreenUpdates: true)
+        }
+        let attachment = XCTAttachment(image: image)
+        attachment.name = "Receipt account choices on narrow layout"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertLessThanOrEqual(controller.sizeThatFits(in: CGSize(width: 340, height: 1000)).height, 240)
+    }
+    #endif
 }
