@@ -26,16 +26,6 @@ enum DemoData {
         if isSplitEditorFixtureRequested { data = splitEditorFixture() }
         if isTextSuggestionFixtureRequested { data = textSuggestionFixture() }
         if isSystemEntryFixtureRequested { data = systemEntryFixture() }
-        if isSystemEntryFixtureRequested,
-           CommandLine.arguments.contains("--demo-unreadable-refund") || CommandLine.arguments.contains("--demo-cloned-refund"),
-           let purchase = data.transactions.first,
-           let currencyID = purchase.postings.first?.commodityID,
-           let tracked = try? RefundTracking.saving(RefundTrackingDraft(purchaseTransactionID: purchase.id, expectedAmount: 100, commodityID: currencyID), in: data),
-           var source = tracked.sources.first(where: { $0.type == RefundTracking.sourceType }) {
-            if CommandLine.arguments.contains("--demo-cloned-refund") { source.id = UUID(uuidString: "00000000-0000-0000-0000-00000000F001")! }
-            else { source.externalID = RefundTracking.externalIDPrefix + "invalid synthetic metadata" }
-            data.sources.append(source)
-        }
         if CommandLine.arguments.contains("--demo-performance") { data = performanceFixture() }
         if CommandLine.arguments.contains("--demo-search-matches"), let ledgerID = data.selectedLedgerID {
             let root = data.accounts.first { $0.ledgerID == ledgerID && $0.kind == .asset && $0.parentID == nil }!
@@ -138,7 +128,7 @@ enum DemoData {
         data.transactions = [
             LedgerTransaction(id: id(100), ledgerID: id(1), date: Date().addingTimeInterval(-3600), payee: "SYNTHETIC Store", note: "SYNTHETIC Purchase", number: "SYN-PURCHASE", cleared: true,
                 postings: [Posting(id: id(1000), accountID: id(20), commodityID: id(2), amount: -100), Posting(id: id(1001), accountID: id(21), commodityID: id(2), amount: 100, listIndex: 1)]),
-            LedgerTransaction(id: id(101), ledgerID: id(1), date: Date().addingTimeInterval(-60), payee: "SYNTHETIC Partial Refund", note: "SYNTHETIC Received Payment", number: "SYN-REFUND", cleared: true,
+            LedgerTransaction(id: id(101), ledgerID: id(1), date: Date().addingTimeInterval(-60), payee: "SYNTHETIC Payment", note: "SYNTHETIC Received Payment", number: "SYN-PAYMENT", cleared: true,
                 postings: [Posting(id: id(1010), accountID: id(20), commodityID: id(2), amount: 40), Posting(id: id(1011), accountID: id(21), commodityID: id(2), amount: -40, listIndex: 1)])
         ]
         data.transactionTemplates = ["Coffee", "Lunch", "Transit", "Groceries"].enumerated().map { index, name in

@@ -169,8 +169,6 @@ struct JournalOverviewScreen: View {
     @AppStorage private var expandedKindIDs: String
     @AppStorage private var collapsedAccountIDs: String
     @State private var pendingAccountDelete: Account?
-    @State private var hasActiveRefundTracking = false
-    @State private var showingRefundTracking = false
 
     init(ledgerID: UUID, navigationPath: Binding<[MobileRoute]>, route: Binding<EditorRoute?>) {
         self.ledgerID = ledgerID
@@ -203,14 +201,6 @@ struct JournalOverviewScreen: View {
     var body: some View {
         List {
             TransactionLinksSection(ledgerID: ledgerID) { navigationPath.append(.templates(ledgerID)) }
-            if hasActiveRefundTracking {
-                Section {
-                    Button { showingRefundTracking = true } label: {
-                        RefundTrackingNavigationLabel(title: "Refunds & Reimbursements")
-                    }
-                    .accessibilityIdentifier("journal-refund-tracking")
-                }
-            }
             Section {
                 ForEach(AccountKind.allCases) { kind in
                     Button { withAnimation(FinanceMotion.disclosure(reduceMotion: reduceMotion)) { toggleKind(kind) } } label: {
@@ -314,10 +304,6 @@ struct JournalOverviewScreen: View {
             ToolbarItem(placement: .topBarTrailing) { EditButton() }
         }
         .onAppear { store.selectLedger(ledgerID) }
-        .modifier(RefundTrackingJournalVisibility(ledgerID: ledgerID, isVisible: $hasActiveRefundTracking))
-        .navigationDestination(isPresented: $showingRefundTracking) {
-            RefundTrackingListView(ledgerID: ledgerID)
-        }
         .confirmationDialog("Delete Account?", isPresented: Binding(get: { pendingAccountDelete != nil }, set: { if !$0 { pendingAccountDelete = nil } }), presenting: pendingAccountDelete) { account in
             Button("Delete \(account.name)", role: .destructive) { store.deleteAccount(account.id) }
         } message: { _ in Text("Accounts that have transactions cannot be deleted.") }
@@ -403,14 +389,6 @@ private struct SectionActionHeader: View {
     }
 }
 
-/// Reuses the register's rows and search projection for a constrained selection
-/// flow without exposing ledger mutations or unrelated navigation controls.
-struct RegisterSelectionPresentation {
-    let emptyTitle: String
-    let emptyMessage: String
-    let amounts: [UUID: [RegisterMoney]]
-}
-
 struct TransactionListScreen: View {
     @EnvironmentObject private var store: MobileLedgerStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -421,7 +399,6 @@ struct TransactionListScreen: View {
     var transactionIDs: Set<UUID>? = nil
     var ledgerID: UUID? = nil
     var searchFilter: TransactionSearchQuery? = nil
-    var selectionPresentation: RegisterSelectionPresentation? = nil
     let openTransaction: (UUID) -> Void
     @State private var pendingDeletion: LedgerTransaction?
     @AppStorage(TransactionSearchDatePolicy.preferenceKey, store: MobileDisplayPreferences.defaults) private var includeAllFutureEntries = false
@@ -454,7 +431,7 @@ struct TransactionListScreen: View {
             .allowsHitTesting(contentReady)
             .accessibilityHidden(!contentReady)
             .safeAreaInset(edge: .top, spacing: 0) {
-                if selectionPresentation == nil && showsChart && dateInterval == nil {
+                if showsChart && dateInterval == nil {
                     RegisterChart(months: presentation.months, ledgerID: ledgerID ?? store.selectedLedgerID, isLoading: !hasLoaded)
                         .padding(.horizontal, 20).padding(.vertical, 8)
                         .background(Color(uiColor: .systemBackground))
@@ -470,17 +447,17 @@ struct TransactionListScreen: View {
             .overlay {
                 if let loadError {
                     ContentUnavailableView("Couldn’t Load Transactions", systemImage: "exclamationmark.triangle", description: Text(loadError))
-                } else if !contentReady && loadingVisible && !(selectionPresentation == nil && showsChart && dateInterval == nil) {
+                } else if !contentReady && loadingVisible && !(showsChart && dateInterval == nil) {
                     ProgressView("Loading Transactions").accessibilityIdentifier("register-loading")
                 } else if hasLoaded && presentation.months.isEmpty {
-                    ContentUnavailableView(searchFilter == nil ? selectionPresentation?.emptyTitle ?? "No Transactions" : "No Results", systemImage: searchFilter == nil ? "arrow.left.arrow.right" : "magnifyingglass", description: Text(searchFilter.map { $0.suggestion } ?? selectionPresentation?.emptyMessage ?? "Use the compose button to add your first transaction."))
+                    ContentUnavailableView(searchFilter == nil ? "No Transactions" : "No Results", systemImage: searchFilter == nil ? "arrow.left.arrow.right" : "magnifyingglass", description: Text(searchFilter.map { $0.suggestion } ?? "Use the compose button to add your first transaction."))
                         .accessibilityIdentifier("register-empty-state")
                 }
             }
             .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    if selectionPresentation == nil && searchFilter != nil {
+                    if searchFilter != nil {
                         Button {
                             includeAllFutureEntries.toggle()
                         } label: {
@@ -490,7 +467,7 @@ struct TransactionListScreen: View {
                         .accessibilityIdentifier("search-future-toggle")
                         .accessibilityValue(includeAllFutureEntries ? "All dates" : "Recent entries")
                     }
-                    if selectionPresentation == nil && dateInterval == nil {
+                    if dateInterval == nil {
                         Button(showsChart ? "Hide Chart" : "Show Chart", systemImage: showsChart ? "chart.bar.fill" : "chart.bar") {
                             withAnimation(FinanceMotion.disclosure(reduceMotion: reduceMotion)) { showsChart.toggle() }
                         }
@@ -577,7 +554,7 @@ struct TransactionListScreen: View {
                         Button {
                             FinancePerformanceTrace.begin("transaction-detail-navigation"); openTransaction(transaction.id)
                         } label: {
-                            RegisterRow(transaction: transaction, amounts: selectionPresentation?.amounts[transaction.id] ?? presentation.amounts[transaction.id] ?? [], balances: presentation.balances[transaction.id] ?? [], flow: store.accountFlowDisplay(for: transaction), isFuture: RegisterPresentation.isFuture(transaction.date))
+                            RegisterRow(transaction: transaction, amounts: presentation.amounts[transaction.id] ?? [], balances: presentation.balances[transaction.id] ?? [], flow: store.accountFlowDisplay(for: transaction), isFuture: RegisterPresentation.isFuture(transaction.date))
                                 .equatable()
                                 .padding(EdgeInsets(top: 8, leading: 28, bottom: 8, trailing: 20))
                         }
@@ -589,7 +566,7 @@ struct TransactionListScreen: View {
                 .listRowInsets(item.transaction == nil
                     ? EdgeInsets(top: 0, leading: 28, bottom: 0, trailing: 20) : EdgeInsets())
                 .listRowSeparator(.hidden)
-                .modifier(TransactionRowSwipeActions(store: store, transaction: selectionPresentation == nil ? item.transaction : nil,
+                .modifier(TransactionRowSwipeActions(store: store, transaction: item.transaction,
                     pendingDeletion: $pendingDeletion, pendingDuplication: $pendingDuplication))
             }
         }.listSectionSeparator(.hidden)
@@ -602,9 +579,7 @@ struct TransactionListScreen: View {
                     .accessibilityIdentifier("month-title")
                 Text(month.date.formatted(.dateTime.year())).font(.title3).foregroundStyle(.secondary)
                 Spacer()
-                if selectionPresentation == nil {
-                    Button("Monthly Summary", systemImage: "ellipsis") { selectedMonth = month.date }.labelStyle(.iconOnly)
-                }
+                Button("Monthly Summary", systemImage: "ellipsis") { selectedMonth = month.date }.labelStyle(.iconOnly)
             }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
@@ -624,7 +599,7 @@ struct TransactionListScreen: View {
     private func scheduleRefresh() {
         guard isActive else { return }
         var request = RegisterRenderRequest(data: store.data, rows: store.registerSourceRows(ledgerID: ledgerID), scope: scope, search: searchFilter?.text ?? "", dateInterval: dateInterval, transactionIDs: transactionIDs, searchField: searchFilter?.field ?? .anywhere, filtersScope: true)
-        if selectionPresentation == nil && searchFilter != nil {
+        if searchFilter != nil {
             request.searchDatePolicy = TransactionSearchDatePolicy(includeAllFuture: includeAllFutureEntries, now: request.referenceDate, calendar: request.calendar)
         }
         let key = RegisterPresentationCacheKey(revision: store.registerContentRevision, ledgerID: ledgerID ?? store.selectedLedgerID, request: request)
@@ -686,11 +661,7 @@ struct TransactionListScreen: View {
             Text(label).font(.caption2.weight(.semibold))
             Text(moneyString(value.amount, symbol: value.symbol)).font(.headline).monospacedDigit()
         }.foregroundStyle(.white).padding(.horizontal, 14).padding(.vertical, 9).background(color.gradient, in: RoundedRectangle(cornerRadius: 18))
-        if selectionPresentation == nil {
-            Button { selectedMonth = month } label: { content }.buttonStyle(.plain)
-        } else {
-            content
-        }
+        Button { selectedMonth = month } label: { content }.buttonStyle(.plain)
     }
 }
 
@@ -867,7 +838,6 @@ private struct TransactionDetailContent: View {
                 if !transaction.note.isEmpty { DetailValueRow(label: "Notes", value: transaction.note) }
                 if !transaction.payee.isEmpty { DetailValueRow(label: "Payee", value: transaction.payee) }
                 if !transaction.number.isEmpty { DetailValueRow(label: "Number", value: transaction.number) }
-                RefundTrackingEntryRow(purchaseID: transaction.id)
                 let displayedAssets = attachmentSave.pendingAssets ?? transaction.attachment?.assets ?? []
                 if !displayedAssets.isEmpty {
                     ForEach(displayedAssets) { asset in

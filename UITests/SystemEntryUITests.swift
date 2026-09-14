@@ -38,14 +38,6 @@ final class SystemEntryUITests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tap()
         XCTAssertTrue(app.navigationBars["Details"].waitForExistence(timeout: 5))
     }
-    private func openRefund(_ app: XCUIApplication) {
-        openPurchase(app)
-        let tracking = app.buttons["transaction-refund-tracking"]
-        for _ in 0..<3 where !tracking.isHittable { app.swipeUp() }
-        XCTAssertTrue(tracking.isHittable); tracking.tap()
-        XCTAssertTrue(app.navigationBars["Refund / Reimbursement"].waitForExistence(timeout: 5))
-    }
-
     func testConfigureReorderAndReplaceHomeScreenTemplateAction() throws {
         let app = XCUIApplication(); defer { app.terminate() }
         launch(app); openShortcutSettings(app)
@@ -188,162 +180,18 @@ final class SystemEntryUITests: XCTestCase {
         XCTAssertEqual(text(app, "Payee").value as? String, "SYNTHETIC Wallet Store")
     }
 
-    func testEmptyNavigationHidesSuggestionsAndRefundsWhileStoppedHistoryRemainsReachable() throws {
+    func testPurchaseDetailsKeepReceiptImportAfterTrackingRemoval() {
         let app = XCUIApplication(); defer { app.terminate() }
         launch(app)
         XCTAssertFalse(app.buttons["journal-suggestions"].exists)
-        journal(app, "Alpha").tap()
-        XCTAssertFalse(app.buttons["journal-refund-tracking"].exists)
-        app.buttons["All"].tap()
-        let purchase = app.buttons["register-row-00000000-0000-0000-0000-000000000064"]
-        XCTAssertTrue(purchase.waitForExistence(timeout: 5)); purchase.tap()
-        app.navigationBars["Details"].buttons["Edit"].tap()
-        dismissKeyboard(app)
-        for label in ["Notes", "Payee"] {
-            let field = text(app, label)
-            for _ in 0..<3 where !field.isHittable { app.swipeUp() }
-            enter("", into: field)
-        }
-        app.navigationBars["Edit Transaction"].buttons["Save"].tap()
-        XCTAssertTrue(app.navigationBars["Details"].waitForExistence(timeout: 5))
-        let entry = app.buttons["transaction-refund-tracking"]
-        XCTAssertTrue(entry.waitForExistence(timeout: 5))
-        XCTAssertEqual(entry.label, "Add Refund & Reimbursement")
-        XCTAssertFalse(entry.images["arrow.uturn.backward.circle"].exists)
-        XCTAssertLessThan(entry.frame.minY, app.buttons["receipt-import-picker"].frame.minY)
-        entry.tap()
-        let save = app.buttons["refund-save-tracking"]
-        XCTAssertTrue(save.waitForExistence(timeout: 5)); save.tap()
-        let stop = app.buttons["Stop Waiting"]
-        for _ in 0..<4 where !stop.isHittable { app.swipeUp() }
-        XCTAssertTrue(stop.waitForExistence(timeout: 5), "Starting tracking must keep its detail screen open")
-        app.navigationBars["Refund / Reimbursement"].buttons.element(boundBy: 0).tap()
-        XCTAssertEqual(entry.label, "Refund or Reimbursement")
-        XCTAssertFalse(entry.images["arrow.uturn.backward.circle"].exists)
-        app.navigationBars["Details"].buttons.element(boundBy: 0).tap()
-        app.navigationBars["All"].buttons.element(boundBy: 0).tap()
-        let journalTracking = app.buttons["journal-refund-tracking"]
-        XCTAssertTrue(journalTracking.waitForExistence(timeout: 5)); journalTracking.tap()
-        let trackedPurchase = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Waiting for")).firstMatch
-        XCTAssertTrue(trackedPurchase.waitForExistence(timeout: 5))
-        let status = trackedPurchase.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Waiting for")).firstMatch
-        XCTAssertTrue(status.exists)
-        XCTAssertEqual(status.frame.midY, trackedPurchase.frame.midY, accuracy: 2, "An unnamed purchase must not reserve a blank title line above its status")
-        let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "Aligned unnamed refund row"; screenshot.lifetime = .keepAlways; add(screenshot)
-        trackedPurchase.tap()
-        for _ in 0..<4 where !stop.isHittable { app.swipeUp() }
-        XCTAssertTrue(stop.isHittable); stop.tap()
-        app.navigationBars["Refund / Reimbursement"].buttons.element(boundBy: 0).tap()
-        app.navigationBars["Refunds & Reimbursements"].buttons.element(boundBy: 0).tap()
-        let hidden = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: journalTracking)
-        XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 5), .completed)
-        app.buttons["All"].tap(); purchase.tap()
-        XCTAssertEqual(entry.label, "Refund or Reimbursement", "Stopped history stays reachable from purchase details")
-        entry.tap()
-        XCTAssertTrue(app.staticTexts["Tracking Stopped"].waitForExistence(timeout: 5))
-    }
-
-    func testTrackPurchaseAndLinkExistingPartialRefundWithoutChangingTransactions() throws {
-        let app = XCUIApplication(); defer { app.terminate() }
-        launch(app); openRefund(app)
-        try assertAmount(app.textFields["refund-expected-amount"], "100")
-        let start = app.buttons["refund-save-tracking"]
-        for _ in 0..<3 where !start.isHittable { app.swipeUp() }
-        XCTAssertTrue(start.isEnabled); start.tap()
-        let link = app.buttons["refund-link-payment"]
-        for _ in 0..<3 where !link.isHittable { app.swipeUp() }
-        XCTAssertTrue(link.waitForExistence(timeout: 5)); link.tap()
-        XCTAssertTrue(app.navigationBars["Link Received Payment"].waitForExistence(timeout: 5))
-        let received = app.buttons["register-row-00000000-0000-0000-0000-000000000065"]
-        XCTAssertTrue(received.waitForExistence(timeout: 5))
-        XCTAssertTrue(received.label.contains("SYNTHETIC Received Payment"), "Selection must use the normal note-first transaction row")
-        XCTAssertTrue(received.label.contains("40.00"))
-        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "month-heading").firstMatch.exists)
-        XCTAssertFalse(app.buttons["register-row-00000000-0000-0000-0000-000000000064"].exists, "The outgoing purchase cannot be linked as money received")
-        let search = app.searchFields.firstMatch
-        XCTAssertTrue(search.exists)
-        enter("no matching payment", into: search)
-        XCTAssertTrue(app.staticTexts["No Results"].waitForExistence(timeout: 5))
-        enter("SYN-REFUND", into: search)
-        XCTAssertTrue(received.waitForExistence(timeout: 5), "Transaction numbers must match just as they do in the normal register")
-        search.typeText("\n")
-        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
-        XCTAssertTrue(app.navigationBars["Link Received Payment"].exists, "Done must dismiss the keyboard without changing screens")
-        let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "Received payments use the transaction register"; screenshot.lifetime = .keepAlways; add(screenshot)
-        received.tap()
-        try assertAmount(app.textFields["refund-link-amount"], "40")
-        app.buttons["Link Payment"].tap()
-        XCTAssertTrue(app.navigationBars["Link Received Payment"].waitForExistence(timeout: 5))
-        let searchCancel = app.navigationBars["Link Received Payment"].buttons["Cancel"]
-        if searchCancel.exists { searchCancel.tap() }
-        app.navigationBars["Link Received Payment"].buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(app.navigationBars["Refund / Reimbursement"].waitForExistence(timeout: 5))
-        let waiting = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@ AND label CONTAINS %@", "Waiting for", "60.00")).firstMatch
-        for _ in 0..<4 where !waiting.isHittable { app.swipeDown() }
-        XCTAssertTrue(waiting.waitForExistence(timeout: 5))
-        app.terminate(); launch(app, reset: false)
-        XCTAssertTrue(journal(app, "Alpha").label.contains("2 Transactions"), "Tracking links an existing payment; it must not create another")
-        openRefund(app)
-        XCTAssertTrue(waiting.waitForExistence(timeout: 5), "The remaining expected amount must persist")
-        let linkedPayment = app.buttons["SYNTHETIC Partial Refund"]
-        for _ in 0..<4 where !linkedPayment.isHittable { app.swipeUp() }
-        XCTAssertTrue(linkedPayment.isHittable); linkedPayment.tap()
-        XCTAssertTrue(app.navigationBars["Edit Transaction"].waitForExistence(timeout: 5))
-        try assertAmount(app.textFields["Amount for SYNTHETIC Bank"], "40")
-        try assertAmount(app.textFields["Amount for SYNTHETIC Expense"], "-40")
-    }
-
-    func testPaymentPickerExplainsWhyOutgoingTransactionsCannotBeLinked() throws {
-        let app = XCUIApplication(); defer { app.terminate() }
-        launch(app)
-        journal(app, "Alpha").tap(); app.buttons["All"].tap()
-        let received = app.buttons["register-row-00000000-0000-0000-0000-000000000065"]
-        XCTAssertTrue(received.waitForExistence(timeout: 5)); received.swipeLeft()
-        app.buttons["Delete"].tap()
-        XCTAssertTrue(received.waitForNonExistence(timeout: 5))
-        app.buttons["register-row-00000000-0000-0000-0000-000000000064"].tap()
-        app.buttons["transaction-refund-tracking"].tap()
-        let start = app.buttons["refund-save-tracking"]
-        XCTAssertTrue(start.waitForExistence(timeout: 5)); start.tap()
-        let link = app.buttons["refund-link-payment"]
-        for _ in 0..<3 where !link.isHittable { app.swipeUp() }
-        XCTAssertTrue(link.isHittable); link.tap()
-        XCTAssertTrue(app.staticTexts["No Received Payments"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Outgoing")).firstMatch.exists)
-        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "register-row-")).firstMatch.exists)
-        let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "Outgoing-only journal explains missing received payments"; screenshot.lifetime = .keepAlways; add(screenshot)
-    }
-
-    func testUnreadableRefundRecoveryIsReachableFromPurchaseAndClonedJournalList() {
-        continueAfterFailure = false
-        let app = XCUIApplication(); defer { app.terminate() }
-        for mode in ["--demo-unreadable-refund", "--demo-cloned-refund"] {
-            app.launchArguments = ["--demo", "--demo-system-entry", "--reset-demo", mode]
-            app.launch()
-            XCTAssertTrue(app.navigationBars["Journals"].waitForExistence(timeout: 10))
-            if mode == "--demo-unreadable-refund" { openRefund(app) }
-            else {
-                journal(app, "Alpha").tap()
-                let tracking = app.buttons["journal-refund-tracking"]
-                XCTAssertTrue(tracking.waitForExistence(timeout: 5)); tracking.tap()
-            }
-            let repair = app.buttons["Remove Unreadable Tracking"]
-            XCTAssertTrue(repair.waitForExistence(timeout: 5))
-            XCTAssertTrue(repair.isEnabled)
-            repair.tap()
-            let confirm = app.buttons["Remove Tracking"]
-            XCTAssertTrue(confirm.waitForExistence(timeout: 5)); confirm.tap()
-            let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: repair)
-            XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 5), .completed)
-            app.terminate(); launch(app, reset: false)
-            XCTAssertTrue(journal(app, "Alpha").label.contains("2 Transactions"))
-            openRefund(app)
-            XCTAssertTrue(app.textFields["refund-expected-amount"].waitForExistence(timeout: 5))
-            XCTAssertFalse(repair.exists)
-            app.terminate()
-        }
+        openPurchase(app)
+        XCTAssertFalse(app.buttons["transaction-refund-tracking"].exists)
+        let receipt = app.buttons["receipt-import-picker"]
+        for _ in 0..<3 where !receipt.isHittable { app.swipeUp() }
+        XCTAssertTrue(receipt.isHittable)
+        // XCTest exposes the full list row as the menu button. Its tappable
+        // label occupies the leading edge; the center is empty row space.
+        receipt.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.5)).tap()
+        XCTAssertTrue(app.buttons["Choose Files"].waitForExistence(timeout: 5))
     }
 }

@@ -370,12 +370,9 @@ final class MobileLedgerStore: ObservableObject {
         didSet {
             appIconBadge?.update(data)
             if systemIntegrationsEnabled { refreshSystemIntegrations() }
-            refundPresentationRevision &+= 1
         }
     }
     @Published private(set) var registerContentRevision: UInt64 = 0
-    @Published private(set) var refundPresentationRevision: UInt64 = 0
-    let refundPresentations = RefundPresentationCache()
     @Published private(set) var searchContentRevision: UInt64 = 0
     let registerPresentations = RegisterPresentationCache()
     let receiptAttachmentSaves = ReceiptAttachmentSaveRegistry()
@@ -2947,7 +2944,6 @@ final class MobileLedgerStore: ObservableObject {
         refreshCloudKitForegroundTriggers()
         if isForegroundActive {
             refreshSystemIntegrations()
-            refreshRefundPresentationsForClockChange()
             refreshDailyBalancesIfNeeded()
             if let selectedLedgerID { historicalTextSuggestions.prewarm(data: data, ledgerID: selectedLedgerID) }
             synchronizeIfEnabled()
@@ -4027,85 +4023,5 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
         data = snapshot
         validationError = nil
         refreshCloudSyncDataAvailability()
-    }
-}
-
-// MARK: - Refund and reimbursement tracking (metadata only)
-
-extension MobileLedgerStore {
-    /// Clock changes affect refund eligibility without changing journal data.
-    func refreshRefundPresentationsForClockChange() {
-        refundPresentationRevision &+= 1
-    }
-
-    func refundTracking(for purchaseID: UUID) throws -> RefundTrackingRecord? {
-        try RefundTracking.record(for: purchaseID, in: data)
-    }
-
-    func refundTrackingOverview(in ledgerID: UUID) -> RefundTrackingOverview {
-        RefundTracking.overview(in: data, ledgerID: ledgerID)
-    }
-
-    func refundTrackingSummaries(in ledgerID: UUID) -> [RefundTrackingSummary] {
-        refundTrackingOverview(in: ledgerID).summaries
-    }
-
-    func saveRefundTrackingAsync(_ draft: RefundTrackingDraft) async -> Bool {
-        await performRefundTrackingMutation { try RefundTracking.saving(draft, in: $0) }
-    }
-
-    func linkRefundAsync(purchaseID: UUID, incomingTransactionID: UUID, amount: Decimal, expectedCommodityID: UUID? = nil) async -> Bool {
-        await performRefundTrackingMutation { snapshot in
-            // Check against the exact snapshot being mutated, before the first
-            // suspension. A synced currency change must not reinterpret an
-            // amount entered for a different currency in an open picker.
-            if let expectedCommodityID,
-               let current = try RefundTracking.record(for: purchaseID, in: snapshot),
-               current.commodityID != expectedCommodityID {
-                throw ValidationError(message: "The tracking currency changed. Go back and select the received payment again.")
-            }
-            return try RefundTracking.linking(purchaseID: purchaseID, incomingTransactionID: incomingTransactionID, amount: amount, in: snapshot)
-        }
-    }
-
-    func unlinkRefundAsync(purchaseID: UUID, incomingTransactionID: UUID) async -> Bool {
-        await performRefundTrackingMutation {
-            try RefundTracking.unlinking(purchaseID: purchaseID, incomingTransactionID: incomingTransactionID, in: $0)
-        }
-    }
-
-    func cancelRefundTrackingAsync(purchaseID: UUID) async -> Bool {
-        await performRefundTrackingMutation { try RefundTracking.cancelling(purchaseID: purchaseID, in: $0) }
-    }
-
-    func removeRefundTrackingAsync(purchaseID: UUID) async -> Bool {
-        await performRefundTrackingMutation { try RefundTracking.removing(purchaseID: purchaseID, in: $0) }
-    }
-
-    func removeUnreadableRefundTrackingAsync(_ confirmedSource: TransactionSource) async -> Bool {
-        await performRefundTrackingMutation { try RefundTracking.removingUnreadableSource(confirmedSource, in: $0) }
-    }
-
-    private func performRefundTrackingMutation(_ mutation: (JournalData) throws -> JournalData) async -> Bool {
-        do {
-            try requireWritableJournal()
-            let updated = try mutation(data)
-            // The pure operations change only sources. Keep balance/register
-            // caches intact and publish before the durable queue suspends.
-            if updated.sources != data.sources { data.sources = updated.sources }
-            validationError = nil
-        } catch {
-            validationError = ValidationError(message: error.localizedDescription)
-            return false
-        }
-        do {
-            try await flushLocalChangesAsync()
-            return true
-        } catch {
-            // The durable writer owns sequenced error reporting. Accepted
-            // memory stays dirty, and deterministic source/link IDs make retry
-            // safe without duplicate tracking or duplicate payment allocation.
-            return false
-        }
     }
 }

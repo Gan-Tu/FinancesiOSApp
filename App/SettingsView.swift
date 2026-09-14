@@ -654,24 +654,6 @@ struct HelpSettingsView: View {
                 )
             }
 
-            Section("Refunds & Reimbursements") {
-                helpRow(
-                    "Track money you expect back",
-                    "Open the purchase's details and tap Add Refund & Reimbursement. Choose the type, expected amount and currency, and optional person, note and expected date, then Start Tracking.",
-                    "arrow.uturn.backward"
-                )
-                helpRow(
-                    "Link a received payment",
-                    "Record the received payment as a transaction first. Open the purchase's Refund or Reimbursement row, tap Link Received Transaction, select the payment and enter the amount belonging to this purchase. The picker shows incoming payments in the same journal and currency; outgoing purchases, transfers between your own accounts and future payments are excluded. Partial payments reduce the outstanding amount.",
-                    "link"
-                )
-                helpRow(
-                    "Find tracking and history",
-                    "Refunds & Reimbursements appears in a journal while money is outstanding or tracking needs attention. Completed and stopped tracking remains available from the original purchase's details. Linking, unlinking or removing tracking never changes transaction amounts or cleared status.",
-                    "clock"
-                )
-            }
-
             Section("Accounts") {
                 helpRow(
                     "Groups",

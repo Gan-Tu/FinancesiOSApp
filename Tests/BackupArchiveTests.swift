@@ -5,6 +5,43 @@ import ZIPFoundation
 @testable import FinancesClone
 
 final class BackupArchiveTests: XCTestCase {
+    @MainActor
+    func testRetiredSourceMetadataDoesNotBlockRestoreEditOrReopen() throws {
+        var fixture = try Fixture()
+        defer { fixture.remove() }
+        let ledgerID = try XCTUnwrap(fixture.data.ledgers.first?.id)
+        // Historical feature metadata stays opaque, even when its contents are
+        // unreadable. No retired feature decoder is needed to open the journal.
+        fixture.data.sources = [
+            TransactionSource(ledgerID: ledgerID, type: 0x4652,
+                externalID: "finances.refund-tracking.v1:invalid historical metadata"),
+            TransactionSource(ledgerID: ledgerID, type: 1, externalID: "existing-import-source")
+        ]
+        let archive = fixture.root.appendingPathComponent("Historical.zip")
+        try BackupArchive.export(fixture.data, to: archive, progress: Progress(totalUnitCount: 1)) { _ in fixture.receipt }
+        let directory = fixture.root.appendingPathComponent("restored-app")
+        let store = MobileLedgerStore(supportDirectory: directory, initialData: JournalData())
+        store.importBackup(from: archive)
+        XCTAssertNil(store.validationError)
+        XCTAssertFalse(store.requiresJournalRecovery)
+        XCTAssertFalse(store.data.syncEnabled)
+        XCTAssertEqual(Set(store.data.sources), Set(fixture.data.sources))
+        let transaction = try XCTUnwrap(store.data.transactions.first)
+        var draft = store.draft(for: transaction)
+        draft.note = "Edited after historical restore"
+        store.saveTransaction(draft)
+        XCTAssertNil(store.validationError)
+        try store.flushLocalChanges()
+        let reopened = MobileLedgerStore(supportDirectory: directory)
+        XCTAssertFalse(reopened.requiresJournalRecovery)
+        XCTAssertEqual(Set(reopened.data.sources), Set(fixture.data.sources))
+        let saved = try XCTUnwrap(reopened.transaction(transaction.id))
+        XCTAssertEqual(saved.note, draft.note)
+        XCTAssertEqual(saved.postings, transaction.postings)
+        let receipt = try XCTUnwrap(saved.attachment?.assets.first)
+        XCTAssertEqual(try Data(contentsOf: reopened.attachmentURL(for: receipt)), fixture.bytes)
+    }
+
     func testZIPRoundTripPreservesMetadataAndSharedReceiptBytes() throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
@@ -154,7 +191,7 @@ final class BackupArchiveTests: XCTestCase {
             let expense = Account(ledgerID: journal.id, commodityID: currency.id, name: "Expense", kind: .expense)
             let receiptSize = Int64(bytes.count)
             let rows = (0..<2).map { index in
-                LedgerTransaction(ledgerID: journal.id, date: Date(timeIntervalSince1970: 1_800_000_000 + Double(index)), payee: "Shop", note: "Receipt \(index)", number: "", cleared: true, postings: [Posting(accountID: cash.id, amount: -10), Posting(accountID: expense.id, amount: 10)], attachment: AttachmentContainer(assets: [AttachmentAsset(originalFilename: "Receipt.txt", storedPath: "Attachments/shared.txt", mimeType: "text/plain", sizeBytes: receiptSize)]))
+                LedgerTransaction(ledgerID: journal.id, date: Date(timeIntervalSince1970: 1_800_000_000 + Double(index)), payee: "Shop", note: "Receipt \(index)", number: "", cleared: true, postings: [Posting(accountID: cash.id, amount: -10), Posting(accountID: expense.id, amount: 10, listIndex: 1)], attachment: AttachmentContainer(assets: [AttachmentAsset(originalFilename: "Receipt.txt", storedPath: "Attachments/shared.txt", mimeType: "text/plain", sizeBytes: receiptSize)]))
             }
             data = JournalData(ledgers: [journal], commodities: [currency], accounts: [cash, expense], transactions: rows, selectedLedgerID: journal.id, lastSyncedAt: Date(), syncEnabled: true, security: SecuritySettings(passwordHash: "synthetic", passwordSalt: "salt"))
         }
