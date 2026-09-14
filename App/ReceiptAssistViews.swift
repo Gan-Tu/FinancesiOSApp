@@ -346,7 +346,6 @@ struct ReceiptAnalysisPanel: View {
                     busy || selected.isEmpty)
             }
             if let proposal {
-                if !replacements.isEmpty { Text("Suggested replacements").font(.headline) }
                 ForEach(replacements) { field in
                     VStack(alignment: .leading, spacing: 5) {
                         HStack {
@@ -490,21 +489,35 @@ struct ReceiptPostingTable: View {
             ForEach(Array(postings.enumerated()), id: \.element.id) { index, row in
                 HStack(alignment: .center, spacing: 8) {
                     if let onAccountChange {
-                        Picker("Account to apply for posting \(index + 1)", selection: Binding(
-                            get: { row.accountID },
-                            set: { onAccountChange(row.id, $0) }
-                        )) {
-                            Text("Not identified").tag(nil as UUID?)
-                            ForEach(accounts.filter { account in
-                                account.ledgerID == ledgerID && account.parentID != nil &&
-                                (row.commodityID == nil || account.commodityID == nil || account.commodityID == row.commodityID || account.id == row.accountID)
-                            }) { account in
-                                Text(account.name).tag(Optional(account.id))
+                        Menu {
+                            Picker("Account", selection: Binding(
+                                get: { row.accountID },
+                                set: { onAccountChange(row.id, $0) }
+                            )) {
+                                Text("Not identified").tag(nil as UUID?)
+                                ForEach(accounts.filter { account in
+                                    account.ledgerID == ledgerID && account.parentID != nil &&
+                                    (row.commodityID == nil || account.commodityID == nil || account.commodityID == row.commodityID || account.id == row.accountID)
+                                }) { account in
+                                    Text(account.name).tag(Optional(account.id))
+                                }
                             }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text(accounts.first { $0.id == row.accountID }?.name ?? "Not identified")
+                                    .font(.caption).foregroundStyle(.primary)
+                                    .lineLimit(1).truncationMode(.tail)
+                                Image(systemName: "chevron.down")
+                                    .font(.system(size: 9, weight: .medium))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
                         }
-                        .pickerStyle(.menu)
-                        .labelsHidden()
+                        .buttonStyle(.plain)
+                        .menuIndicator(.hidden)
                         .accessibilityLabel("Account to apply for posting \(index + 1)")
+                        .accessibilityValue(accounts.first { $0.id == row.accountID }?.name ?? "Not identified")
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .layoutPriority(1)
                     } else {
