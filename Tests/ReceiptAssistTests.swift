@@ -195,3 +195,79 @@ private actor AssistTestTransport: CloudKitSyncTransport {
         XCTAssertTrue(proposed.postings?.contains { $0.accountID == counter.id } == true)
     }
 }
+
+@MainActor private final class MemoryReceiptCredentials: ReceiptCredentialStore {
+    var values: [String: Data] = [:]
+    func load(endpoint: String) throws -> ReceiptSessionCredential? {
+        try values[endpoint].map { try JSONDecoder().decode(ReceiptSessionCredential.self, from: $0) }
+    }
+    func save(_ value: ReceiptSessionCredential, endpoint: String) throws {
+        values[endpoint] = try JSONEncoder().encode(value)
+    }
+    func remove(endpoint: String) throws { values[endpoint] = nil }
+}
+extension ReceiptAssistTests {
+    private func syntheticSession() throws -> ReceiptSessionCredential {
+        let data = try JSONSerialization.data(withJSONObject: [
+            "exp": Date().addingTimeInterval(3600).timeIntervalSince1970
+        ])
+        let payload = data.base64EncodedString().replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        return try ReceiptSessionCredential(token: "test.\(payload).synthetic")
+    }
+    func testReceiptSessionRestoresAcrossClientInstances() throws {
+        let store = MemoryReceiptCredentials()
+        try store.save(syntheticSession(), endpoint: "https://finances.tugan.app")
+        let first = ReceiptAnalysisClient(credentialStore: store)
+        try first.restoreSession(endpoint: "https://finances.tugan.app/")
+        XCTAssertTrue(first.authenticated)
+        let relaunched = ReceiptAnalysisClient(credentialStore: store)
+        try relaunched.restoreSession(endpoint: "https://finances.tugan.app")
+        XCTAssertTrue(relaunched.authenticated)
+    }
+    func testReceiptSessionIsScopedToTheAPIServer() throws {
+        let store = MemoryReceiptCredentials()
+        try store.save(syntheticSession(), endpoint: "https://finances.tugan.app")
+        let client = ReceiptAnalysisClient(credentialStore: store)
+        try client.restoreSession(endpoint: "https://finances.tugan.app")
+        XCTAssertTrue(client.authenticated)
+        try client.restoreSession(endpoint: "https://another.example")
+        XCTAssertFalse(client.authenticated)
+        try client.restoreSession(endpoint: "https://finances.tugan.app")
+        XCTAssertTrue(client.authenticated)
+    }
+    func testExpiredReceiptSessionIsRemovedInsteadOfRestored() throws {
+        let store = MemoryReceiptCredentials()
+        var value = try syntheticSession()
+        value.expiresAt = Date().addingTimeInterval(-1)
+        try store.save(value, endpoint: "https://finances.tugan.app")
+        let client = ReceiptAnalysisClient(credentialStore: store)
+        try client.restoreSession(endpoint: "https://finances.tugan.app")
+        XCTAssertFalse(client.authenticated)
+        XCTAssertTrue(store.values.isEmpty)
+    }
+    func testAccountChangeClearsPersistedReceiptSession() async throws {
+        let store = MemoryReceiptCredentials()
+        try store.save(syntheticSession(), endpoint: "https://finances.tugan.app")
+        let client = ReceiptAnalysisClient(credentialStore: store)
+        try client.restoreSession(endpoint: "https://finances.tugan.app")
+        NotificationCenter.default.post(name: .CKAccountChanged, object: nil)
+        for _ in 0..<20 where client.authenticated { await Task.yield() }
+        XCTAssertFalse(client.authenticated)
+        XCTAssertTrue(store.values.isEmpty)
+    }
+    func testReceiptSessionKeychainRoundTrip() throws {
+        #if SWIFT_PACKAGE
+            throw XCTSkip("Keychain requires a signed app test host; covered by the iOS app-hosted test.")
+        #else
+            let store = ReceiptKeychainStore()
+            let endpoint = "https://synthetic-" + UUID().uuidString.lowercased() + ".invalid"
+            defer { try? store.remove(endpoint: endpoint) }
+            let value = try syntheticSession()
+            try store.save(value, endpoint: endpoint)
+            XCTAssertEqual(try store.load(endpoint: endpoint)?.token, value.token)
+            try store.remove(endpoint: endpoint)
+            XCTAssertNil(try store.load(endpoint: endpoint))
+        #endif
+    }
+}
