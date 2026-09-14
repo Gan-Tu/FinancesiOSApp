@@ -47,7 +47,7 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDevelopmentRegion: en
-        CFBundleDisplayName: Finances v2
+        CFBundleDisplayName: Finances
         CFBundleExecutable: $(EXECUTABLE_NAME)
         CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
         CFBundleInfoDictionaryVersion: '6.0'

@@ -49,11 +49,11 @@ Template accounts now precede the details. Selecting a template with Scan Invoic
 - Templates opens in management mode, with delete and reorder controls and + at top right. Row taps edit a template; transaction creation remains in the compose menu. Customize Templates presents a Done/+ modal.
 - All five targeted register, template and layout UI checks passed in result bundle `test_sim_2026-09-07T07-23-30-813Z_pid89554_a38aa6ff.xcresult`.
 - A read-only comparison of the physical iPhone Production store snapshot and running production Mac store found identical journals, accounts, currencies, transactions, postings and templates. See `production-sync-verification.json`. The isolated Mac QA app was the apparent source of the data mismatch.
-- Phone display name is Finances v2. The separate Apple listing is Finances v2 for iOS because the Mac listing already reserves the shorter name.
+- Phone display name is Finances. The separate Apple listing is Finances v2 for iOS because the Mac listing already reserves the shorter name.
 
 ## Completion recheck before independent review
 
-The requested register, swipe, details, form, account hierarchy, currency selection, template order and template management changes were checked against their implementation and regression coverage. Customize Templates was also manually opened in the simulator: Done is on the left, + on the right, and delete/reorder controls remain visible; creating and saving a template from the modal passed. The 64 original FinanceClone file hashes still match the initial snapshot. App display name is Finances v2, with the latest green square icon.
+The requested register, swipe, details, form, account hierarchy, currency selection, template order and template management changes were checked against their implementation and regression coverage. Customize Templates was also manually opened in the simulator: Done is on the left, + on the right, and delete/reorder controls remain visible; creating and saving a template from the modal passed. The 64 original FinanceClone file hashes still match the initial snapshot. App display name is Finances, with the latest green square icon.
 
 This recheck does not claim actual camera capture was tested or that Apple has approved external beta review. Physical foreground/background CloudKit checks and read-only Production parity are documented separately.
 

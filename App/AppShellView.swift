@@ -321,7 +321,7 @@ private struct LockedAppView: View {
                     .foregroundStyle(.blue)
 
                 VStack(spacing: 6) {
-                    Text("Finances v2")
+                    Text("Finances")
                         .font(.title.weight(.bold))
                     Text("Password Required")
                         .font(.subheadline)

@@ -2,7 +2,7 @@
 
 ## Home Screen quick actions
 
-Touch and hold the Finances v2 icon to open a new transaction from a template. Settings → Quick Entry & Shortcuts → Home Screen Quick Actions lets you choose and reorder up to four included templates across visible journals. The first available templates are selected initially; removing every shortcut keeps the menu empty. Hidden journals and excluded or deleted templates are never offered.
+Touch and hold the Finances icon to open a new transaction from a template. Settings → Quick Entry & Shortcuts → Home Screen Quick Actions lets you choose and reorder up to four included templates across visible journals. The first available templates are selected initially; removing every shortcut keeps the menu empty. Hidden journals and excluded or deleted templates are never offered.
 
 Quick actions open editable drafts. A template with missing accounts uses the existing account-first selection flow. Incoming actions wait while the app is locked or another editor is open.
 
@@ -16,16 +16,16 @@ Find these actions under Finances in Shortcuts:
 - New Transaction with Receipts: accepts image/PDF files and opens a transaction with those receipts.
 - Add Apple Pay to Suggestions: captures a purchase for later review without posting it.
 
-The open actions can be assigned using the system's Shortcuts Action button and Control Center options. App Shortcuts include “Log an expense in Finances v2” and “Use a template in Finances v2.”
+The open actions can be assigned using the system's Shortcuts Action button and Control Center options. App Shortcuts include “Log an expense in Finances” and “Use a template in Finances.”
 
 ## Receipt sharing
 
-1. Open an image in Photos or a PDF in Files, tap Share, and choose Finances v2. Look under More if it is not visible in the app row.
+1. Open an image in Photos or a PDF in Files, tap Share, and choose Finances. Look under More if it is not visible in the app row.
 2. In New Transaction, choose the journal and accounts, then enter the amount, notes and payee.
 3. Tap an attachment's name to preview the image or PDF without leaving the editor. Close the preview to continue editing.
 4. Tap Save to record the transaction and its attachments, or Cancel to discard the new draft. Sharing alone does not record a transaction.
 
-If sharing directly from the screenshot preview does not offer Finances v2 or does not open a draft, save the screenshot to Photos and share it from there. Another option is a receipt Shortcut:
+If sharing directly from the screenshot preview does not offer Finances or does not open a draft, save the screenshot to Photos and share it from there. Another option is a receipt Shortcut:
 
 1. In Shortcuts, create a shortcut and add the Finances action New Transaction with Receipts.
 2. Set Receipts to Shortcut Input.

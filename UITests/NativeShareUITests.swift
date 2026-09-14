@@ -63,7 +63,7 @@ final class NativeShareUITests: XCTestCase {
     }
 
     private func shareCell(in app: XCUIApplication) -> XCUIElement {
-        app.cells.matching(NSPredicate(format: "identifier == %@ AND label == %@", "shareCell", "Finances v2")).firstMatch
+        app.cells.matching(NSPredicate(format: "identifier == %@ AND label == %@", "shareCell", "Finances")).firstMatch
     }
 
     private func sharePhoto() {

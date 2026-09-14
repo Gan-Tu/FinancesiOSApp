@@ -620,12 +620,12 @@ struct HelpSettingsView: View {
             Section("Sharing Receipts") {
                 helpRow(
                     "From Photos or Files",
-                    "Open an image in Photos or a PDF in Files, tap Share, and choose Finances v2. Look under More if needed. Choose the journal and accounts, enter the amount and details, then tap Save. Cancel discards the new draft.",
+                    "Open an image in Photos or a PDF in Files, tap Share, and choose Finances. Look under More if needed. Choose the journal and accounts, enter the amount and details, then tap Save. Cancel discards the new draft.",
                     "square.and.arrow.up"
                 )
                 helpRow(
                     "From a screenshot preview",
-                    "If Finances v2 is not offered or does not open a draft, save the screenshot to Photos and share it from there, or use a receipt Shortcut.",
+                    "If Finances is not offered or does not open a draft, save the screenshot to Photos and share it from there, or use a receipt Shortcut.",
                     "photo"
                 )
                 helpRow(

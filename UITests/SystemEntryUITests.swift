@@ -93,7 +93,7 @@ final class SystemEntryUITests: XCTestCase {
         // Start from the first page even if a previous test left SpringBoard
         // on a page after the app icon.
         XCUIDevice.shared.press(.home)
-        let icon = springboard.icons.matching(identifier: "Finances v2").firstMatch
+        let icon = springboard.icons.matching(identifier: "Finances").firstMatch
         for _ in 0..<6 where !icon.isHittable { springboard.swipeLeft() }
         XCTAssertTrue(icon.waitForExistence(timeout: 5), "The installed app must appear on the Home Screen")
         XCTAssertTrue(icon.isHittable)

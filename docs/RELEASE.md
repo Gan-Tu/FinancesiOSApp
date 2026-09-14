@@ -1,6 +1,6 @@
 # Release setup
 
-The app displays **Finances v2** on iPhone and iPad. Its separate App Store Connect listing is **Finances v2 for iOS** (Apple ID **6809320145**); Apple reserves the exact Finances v2 listing name for the existing Mac app. The iOS bundle ID remains **dev.gan.FinancesApp.iOS**, under team **K3URZZFDQP**. Version is **1.0.0**.
+The app displays **Finances** on iPhone and iPad. Its separate App Store Connect listing is **Finances v2 for iOS** (Apple ID **6809320145**); Apple reserves the exact Finances v2 listing name for the existing Mac app. The iOS bundle ID remains **dev.gan.FinancesApp.iOS**, under team **K3URZZFDQP**. Version is **1.0.0**.
 
 ## Automatic releases
 
@@ -20,7 +20,7 @@ GitHub Actions independently builds and tests pushes and pull requests. Xcode Cl
 
 ## CloudKit and signing
 
-Both released apps use the user's private `iCloud.dev.gan.FinanceApp` container, Production environment and `FinancesJournal_v1` zone. Debug builds use Development and a separate local store. Use the production **Finances v2.app** on Mac when comparing with TestFlight; isolated QA apps intentionally have different data. Read-only Production data comparison passed; see `production-sync-verification.json`.
+Both released apps use the user's private `iCloud.dev.gan.FinanceApp` container, Production environment and `FinancesJournal_v1` zone. Debug builds use Development and a separate local store. Use the production **Finances.app** on Mac when comparing with TestFlight; isolated QA apps intentionally have different data. Read-only Production data comparison passed; see `production-sync-verification.json`.
 
 The project includes CloudKit/APNs entitlements, background notifications, privacy manifest, usage descriptions, an opaque app icon and a shared test/archive scheme. Apple-managed signing and App Store IPA export have passed. No private signing key is stored in this repository.
 

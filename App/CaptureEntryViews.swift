@@ -119,7 +119,7 @@ struct SystemIntegrationsSettingsView: View {
             NavigationLink("Apple Pay Suggestions") { ApplePayCaptureSetupView() }
             Section("Siri & Shortcuts") {
                 Text("Use New Transaction, Use Transaction Template, Open Suggestions, or New Transaction with Receipts in Shortcuts. You can assign a shortcut to your Action button or Control Center.")
-                Text("Try saying ‘Log an expense in Finances v2’. Transactions open as drafts for you to review and save.")
+                Text("Try saying ‘Log an expense in Finances’. Transactions open as drafts for you to review and save.")
             }
             Section("Share a Receipt") {
                 Text("Share or open an image or PDF in Finances to start a transaction with the receipt attached. Choose the journal and edit the transaction before saving.")

@@ -266,7 +266,7 @@ struct HomeScreenQuickActionSettingsView: View {
                     Text("Choose up to four templates below.").foregroundStyle(.secondary)
                 }
             } header: { Text("Included") } footer: {
-                Text("Touch and hold Finances v2 on the Home Screen to start a transaction from one of these templates.")
+                Text("Touch and hold Finances on the Home Screen to start a transaction from one of these templates.")
             }
             Section("More Templates") {
                 ForEach(coordinator.availableTemplates, id: \.availableRowID) { template in
