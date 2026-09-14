@@ -17,27 +17,63 @@ struct PaymentIdentityEditor: View {
                 Button("Add card", systemImage: "plus") { identities.append(PaymentIdentity()) }
             }
             ForEach($identities) { $identity in
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 10) {
                     TextField("Card label", text: $identity.label)
-                    HStack {
-                        Picker(
-                            "Network",
-                            selection: Binding(
-                                get: { identity.network ?? "" },
-                                set: { identity.network = $0.isEmpty ? nil : $0 })
-                        ) {
-                            Text("Unspecified / store card").tag("")
-                            ForEach(PaymentIdentity.networks, id: \.self) {
-                                Text($0 == "amex" ? "American Express" : $0.capitalized).tag($0)
+                        .accessibilityLabel("Card label")
+                    #if os(iOS)
+                        HStack {
+                            Text("Network").foregroundStyle(.secondary)
+                            Spacer(minLength: 12)
+                            Menu {
+                                Button("Unspecified") { identity.network = nil }
+                                ForEach(PaymentIdentity.networks, id: \.self) { network in
+                                    Button(networkName(network)) { identity.network = network }
+                                }
+                            } label: {
+                                HStack(spacing: 5) {
+                                    Text(networkName(identity.network)).lineLimit(1)
+                                    Image(systemName: "chevron.up.chevron.down").font(.caption)
+                                }
                             }
-                        }.labelsHidden()
-                        TextField("Last four", text: $identity.last4).frame(width: 64)
-                            .accessibilityLabel("Last four digits")
-                        Button("Remove card", systemImage: "xmark") {
-                            identities.removeAll { $0.id == identity.id }
-                        }.labelStyle(.iconOnly)
-                    }
+                            .accessibilityLabel("Card network")
+                            .accessibilityValue(networkName(identity.network))
+                        }.frame(minHeight: 32)
+                        HStack(spacing: 12) {
+                            Text("Last four").foregroundStyle(.secondary)
+                            Spacer()
+                            TextField("0000", text: $identity.last4)
+                                .keyboardType(.numberPad)
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 82)
+                                .accessibilityLabel("Last four digits")
+                            Button("Remove card", systemImage: "minus.circle") {
+                                identities.removeAll { $0.id == identity.id }
+                            }.labelStyle(.iconOnly).foregroundStyle(.red)
+                        }.frame(minHeight: 32)
+                    #else
+                        HStack {
+                            Picker(
+                                "Network",
+                                selection: Binding(
+                                    get: { identity.network ?? "" },
+                                    set: { identity.network = $0.isEmpty ? nil : $0 })
+                            ) {
+                                Text("Unspecified / store card").tag("")
+                                ForEach(PaymentIdentity.networks, id: \.self) {
+                                    Text(networkName($0)).tag($0)
+                                }
+                            }.labelsHidden()
+                            TextField("Last four", text: $identity.last4).frame(width: 64)
+                                .accessibilityLabel("Last four digits")
+                            Button("Remove card", systemImage: "xmark") {
+                                identities.removeAll { $0.id == identity.id }
+                            }.labelStyle(.iconOnly)
+                        }
+                    #endif
                 }
+                .padding(.vertical, 6)
+                .fixedSize(horizontal: false, vertical: true)
+                if identity.id != identities.last?.id { Divider() }
             }
             if store.conflicts.contains(accountID) {
                 Text("Cards changed on another device.").foregroundStyle(.orange)
@@ -87,11 +123,19 @@ struct PaymentIdentityEditor: View {
             if !message.isEmpty { Text(message).font(.caption).foregroundStyle(.secondary) }
             if !store.error.isEmpty { Text(store.error).font(.caption).foregroundStyle(.red) }
         }
+        .fixedSize(horizontal: false, vertical: true)
         .textFieldStyle(.roundedBorder)
         .task(id: accountID) {
             await store.refresh()
             reload()
         }
+    }
+    private func networkName(_ network: String?) -> String {
+        guard let network else { return "Unspecified" }
+        return [
+            "visa": "Visa", "mastercard": "Mastercard", "amex": "American Express", "discover": "Discover",
+            "unionpay": "UnionPay",
+        ][network] ?? network
     }
     private func reload() {
         original = store.metadata[accountID]
@@ -226,6 +270,7 @@ struct ReceiptAnalysisPanel: View {
     let commodities: [Commodity]
     let attachmentURL: (AttachmentAsset) -> URL
     var onContentChange: (() -> Void)? = nil
+    var inReceiptCard = false
     @ObservedObject private var metadata = PaymentMetadataStore.shared
     @State private var task: Task<Void, Never>?
     @State private var analysisGeneration = UUID()
@@ -240,6 +285,37 @@ struct ReceiptAnalysisPanel: View {
     @State private var protectedFields: Set<ReceiptProposalField> = []
     @State private var autoApplied: TransactionDraft?
     var body: some View {
+        renderedContent
+            .onChange(of: draft) { old, new in
+                if new == autoApplied {
+                    autoApplied = nil
+                    return
+                }
+                for field in ReceiptProposalField.allCases where !ReceiptDraftProposal.equal(field, old, new)
+                {
+                    protectedFields.insert(field)
+                }
+            }
+            .onChange(of: busy) { _, _ in onContentChange?() }
+            .onChange(of: replacements.count) { _, _ in onContentChange?() }
+            .onDisappear { task?.cancel() }
+    }
+    @ViewBuilder private var renderedContent: some View {
+        #if os(iOS)
+            if inReceiptCard {
+                if !draft.attachments.isEmpty {
+                    FinanceFormRow(last: true) { panelContents }
+                        .labelStyle(.titleOnly)
+                }
+            } else {
+                panelContents
+            }
+        #else
+            panelContents
+        #endif
+    }
+
+    private var panelContents: some View {
         VStack(alignment: .leading, spacing: 8) {
             if !draft.attachments.isEmpty {
                 HStack {
@@ -306,19 +382,8 @@ struct ReceiptAnalysisPanel: View {
             }
             if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }
         }
-        .onChange(of: draft) { old, new in
-            if new == autoApplied {
-                autoApplied = nil
-                return
-            }
-            for field in ReceiptProposalField.allCases where !ReceiptDraftProposal.equal(field, old, new) {
-                protectedFields.insert(field)
-            }
-        }
-        .onChange(of: busy) { _, _ in onContentChange?() }
-        .onChange(of: replacements.count) { _, _ in onContentChange?() }
-        .onDisappear { task?.cancel() }
     }
+
     private func analyze(useSelection: Bool) {
         let assets = draft.attachments.filter { !useSelection || selected.contains($0.id) }
         guard assets.count <= 10, assets.allSatisfy({ $0.sizeBytes <= 20_000_000 }),

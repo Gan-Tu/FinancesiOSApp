@@ -269,12 +269,15 @@ struct TransactionEditorView: View {
                         }
                     }
                 }
-                FinanceFormRow(last: true) { ReceiptPicker(assets: $draft.attachments, textOnly: true, startWithScan: scanInvoice) }
-            }
-            if let ledgerID = draft.ledgerID ?? store.selectedLedgerID {
-                ReceiptAnalysisPanel(draft: $draft, initialDraft: initialDraft.preparedForAmountEntry, ledgerID: ledgerID,
-                    accounts: store.data.accounts.filter { $0.ledgerID == ledgerID },
-                    commodities: store.data.commodities.filter { $0.ledgerID == ledgerID }, attachmentURL: store.attachmentURL(for:))
+                FinanceFormRow(last: draft.attachments.isEmpty) {
+                    ReceiptPicker(assets: $draft.attachments, textOnly: true, startWithScan: scanInvoice)
+                }
+                if let ledgerID = draft.ledgerID ?? store.selectedLedgerID {
+                    ReceiptAnalysisPanel(draft: $draft, initialDraft: initialDraft.preparedForAmountEntry, ledgerID: ledgerID,
+                        accounts: store.data.accounts.filter { $0.ledgerID == ledgerID },
+                        commodities: store.data.commodities.filter { $0.ledgerID == ledgerID },
+                        attachmentURL: store.attachmentURL(for:), inReceiptCard: true)
+                }
             }
         }
         .disabled(isSaving)

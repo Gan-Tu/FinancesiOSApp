@@ -18,6 +18,23 @@ final class ReceiptImportInteractionTests: XCTestCase {
         return app
     }
 
+    func testSuggestActionIsAnAlignedReceiptRow() throws {
+        let app = try openDuplicate()
+        defer { app.terminate() }
+        let suggest = app.buttons["Suggest from attachments"]
+        XCTAssertTrue(suggest.waitForExistence(timeout: 15))
+        if app.keyboards.firstMatch.exists { app.buttons["Done"].tap() }
+        for _ in 0..<5 where !suggest.isHittable { app.swipeUp() }
+        let addAttachment = app.buttons["receipt-import-picker"]
+        XCTAssertTrue(addAttachment.isHittable)
+        XCTAssertTrue(suggest.isHittable)
+        XCTAssertEqual(suggest.frame.minX, addAttachment.frame.minX, accuracy: 1.5)
+        XCTAssertGreaterThanOrEqual(suggest.frame.minY, addAttachment.frame.maxY)
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "Aligned receipt action rows"; shot.lifetime = .keepAlways; add(shot)
+        app.navigationBars["New Transaction"].buttons["Cancel"].tap()
+    }
+
     func testSaveWaitsForAcceptedReceiptImportAndPersistsThatReceipt() throws {
         let app = try openDuplicate()
         defer { app.terminate() }
