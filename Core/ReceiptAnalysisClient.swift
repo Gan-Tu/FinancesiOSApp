@@ -17,6 +17,7 @@ import UniformTypeIdentifiers
         var local: Bool
         var configured: Bool
         var localOrigin: String?
+        var stagedUploads: Bool?
     }
     struct Challenge: Decodable {
         var challenge: String
@@ -147,11 +148,65 @@ import UniformTypeIdentifiers
             try Self.multipart(context: context, assets: assets, boundary: boundary)
         }.value
         try Task.checkCancellation()
+        if options.stagedUploads == true && body.count > 3_500_000 {
+            return try await stagedAnalysis(
+                body, contentType: "multipart/form-data; boundary=\(boundary)", endpoint: settings.endpoint,
+                origin: options.localOrigin)
+        }
         return try await perform(
             request(
                 "receipt-analysis", endpoint: settings.endpoint, method: "POST", data: body,
                 contentType: "multipart/form-data; boundary=\(boundary)", origin: options.localOrigin))
     }
+    private func stagedAnalysis(_ body: Data, contentType: String, endpoint: String, origin: String?)
+        async throws -> ReceiptAnalysisResponse
+    {
+        struct Start: Decodable {
+            var uploadToken: String
+            var chunkBytes: Int
+        }
+        struct Part: Decodable { var part: String }
+        struct Cancelled: Decodable { var ok: Bool }
+        let start: Start = try await perform(
+            request(
+                "receipt-upload/start", endpoint: endpoint, method: "POST",
+                data: JSONSerialization.data(withJSONObject: [
+                    "bytes": body.count, "contentType": contentType,
+                ]), origin: origin))
+        guard (1...2_000_000).contains(start.chunkBytes) else {
+            throw AssistError.message("Invalid upload chunk size.")
+        }
+        do {
+            var parts: [String] = []
+            for offset in stride(from: 0, to: body.count, by: start.chunkBytes) {
+                try Task.checkCancellation()
+                var partRequest = try request(
+                    "receipt-upload/part", endpoint: endpoint, method: "POST",
+                    data: body.subdata(in: offset..<min(body.count, offset + start.chunkBytes)),
+                    contentType: "application/octet-stream", origin: origin)
+                partRequest.setValue(start.uploadToken, forHTTPHeaderField: "X-Receipt-Upload")
+                partRequest.setValue(String(parts.count), forHTTPHeaderField: "X-Receipt-Part")
+                let part: Part = try await perform(partRequest)
+                parts.append(part.part)
+            }
+            return try await perform(
+                request(
+                    "receipt-analysis", endpoint: endpoint, method: "POST",
+                    data: JSONSerialization.data(withJSONObject: [
+                        "uploadToken": start.uploadToken, "parts": parts,
+                    ]), origin: origin))
+        } catch {
+            if let cancellation = try? request(
+                "receipt-upload/cancel", endpoint: endpoint, method: "POST",
+                data: JSONSerialization.data(withJSONObject: ["uploadToken": start.uploadToken]),
+                origin: origin)
+            {
+                Task { let _: Cancelled? = try? await perform(cancellation) }
+            }
+            throw error
+        }
+    }
+
     static func context(
         draft: TransactionDraft, ledgerID: UUID, accounts: [Account], commodities: [Commodity],
         metadata: [UUID: PaymentAccountMetadata], settings: ReceiptAISettings
