@@ -51,7 +51,7 @@ targets:
         CFBundleExecutable: $(EXECUTABLE_NAME)
         CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
         CFBundleInfoDictionaryVersion: '6.0'
-        CFBundleName: $(PRODUCT_NAME)
+        CFBundleName: Finances
         CFBundlePackageType: APPL
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
