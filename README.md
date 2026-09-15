@@ -42,7 +42,7 @@ For a local demonstration, add `--demo --reset-demo` to the scheme’s launch ar
 
 ## Distribution
 
-Source lives at [Gan-Tu/FinancesiOSApp](https://github.com/Gan-Tu/FinancesiOSApp). Every push to `main` starts the **Finances v2 iOS Release** Xcode Cloud workflow: required iPhone tests, a signed archive, and delivery to the **Internal Testing** group. GitHub Actions also runs tests on pushes and pull requests. See [Release Setup](docs/RELEASE.md) for the workflow and tester details.
+Source lives at [Gan-Tu/FinancesiOSApp](https://github.com/Gan-Tu/FinancesiOSApp). Every push to `main` starts the **Finances v2 iOS Release** Xcode Cloud workflow: required iPhone tests, a signed archive, and delivery to the **Internal Testing** group. Xcode Cloud is the automated test and release pipeline. See [Release Setup](docs/RELEASE.md) for the workflow and tester details.
 
 See [UI reference and parity](docs/UI_REFERENCE.md), [CloudKit compatibility](docs/CLOUDKIT.md), [verification](docs/VERIFICATION.md), and [source provenance](docs/SOURCE_PROVENANCE.md).
 

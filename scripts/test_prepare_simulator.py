@@ -38,25 +38,13 @@ class SimulatorPreparationTests(unittest.TestCase):
         data = dict(DATA, devices={})
         with patch.object(simulator, 'inventory', return_value=data), patch.object(simulator.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, UDID+'\n')) as run:
             self.assertEqual(simulator.prepare(), f'platform=iOS Simulator,id={UDID}')
-            self.assertEqual(run.call_args.args[0], ['xcrun', 'simctl', 'create', 'Finances CI iPhone', 'phone-max', RUNTIME['identifier']])
-
-    def test_missing_runtime_installs_once_only_when_requested(self):
-        with patch.object(simulator, 'inventory', side_effect=[{}, DATA]), patch.object(simulator.subprocess, 'run') as run:
-            self.assertEqual(simulator.prepare(allow_install=True), f'platform=iOS Simulator,id={UDID}')
-            self.assertEqual(run.call_count, 1)
-            self.assertEqual(run.call_args.args[0], ['xcodebuild', '-downloadPlatform', 'iOS'])
+            self.assertEqual(run.call_args.args[0], ['xcrun', 'simctl', 'create', 'Finances Test iPhone', 'phone-max', RUNTIME['identifier']])
 
     def test_local_missing_runtime_does_not_start_a_download(self):
         with patch.object(simulator, 'inventory', return_value={}), patch.object(simulator.subprocess, 'run') as run:
             with self.assertRaisesRegex(RuntimeError, 'No available iOS'):
                 simulator.prepare()
             run.assert_not_called()
-
-    def test_missing_runtime_after_install_fails_with_actionable_error(self):
-        with patch.object(simulator, 'inventory', return_value={}), patch.object(simulator.subprocess, 'run') as run:
-            with self.assertRaisesRegex(RuntimeError, 'No available iOS'):
-                simulator.prepare(allow_install=True)
-            self.assertEqual(run.call_count, 1)
 
     def test_runtime_versions_sort_numerically(self):
         data = copy.deepcopy(DATA)

@@ -16,7 +16,7 @@ The iOS Cloud product is **DD1BB18D-ED95-4E32-A428-D109B0906D51**, separate from
 
 The owner-requested Hotmail tester was invited to Internal Testing and build **1.0.0 (100)** was assigned. The Gmail tester remains in external **Personal Beta**; build100 replaced build3 in Apple's beta-review queue with automatic notification enabled. Internal builds do not require that external review. Accept the TestFlight invitation with the corresponding Apple Account.
 
-GitHub Actions independently builds and tests pushes and pull requests. Xcode Cloud performs release signing and upload; no GitHub signing secrets or App Store Connect API key are required. The obsolete manual GitHub upload workflow has been removed. `TestFlight/WhatToTest.en-US.txt` supplies testing guidance for future Cloud releases.
+Xcode Cloud runs the automated iPhone tests, release signing, and upload. The duplicate GitHub Actions test workflow was removed after repeated hosted-runner failures while Xcode Cloud passed. Local checks remain available through `scripts/test.sh`; no GitHub signing secrets or App Store Connect API key are required. `TestFlight/WhatToTest.en-US.txt` supplies testing guidance for future Cloud releases.
 
 ## CloudKit and signing
 

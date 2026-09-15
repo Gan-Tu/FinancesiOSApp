@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Select an available iPhone by UDID, preparing a fresh CI device if needed."""
-import argparse
+"""Select an available iPhone by UDID for local tests, creating one if needed."""
 import json
 import re
 import subprocess
@@ -27,16 +26,11 @@ def available_runtimes(data):
     )
 
 
-def prepare(allow_install=False):
+def prepare():
     data = inventory()
     runtimes = available_runtimes(data)
-    if not runtimes and allow_install:
-        print("No available iOS runtime; installing one for the selected Xcode.", file=sys.stderr)
-        subprocess.run(["xcodebuild", "-downloadPlatform", "iOS"], check=True, stdout=sys.stderr, timeout=900)
-        data = inventory()
-        runtimes = available_runtimes(data)
     if not runtimes:
-        raise RuntimeError("No available iOS 17+ simulator runtime. Install an iOS runtime in Xcode, or use --install-runtime in CI.")
+        raise RuntimeError("No available iOS 17+ simulator runtime. Install an iOS runtime in Xcode.")
 
     iphone_types = {item["identifier"] for item in data.get("devicetypes", []) if item.get("productFamily") == "iPhone"}
     for runtime in runtimes:
@@ -48,7 +42,7 @@ def prepare(allow_install=False):
             print(f"Using {phone['name']} / iOS {runtime['version']} ({phone['udid']})", file=sys.stderr)
             return f"platform=iOS Simulator,id={phone['udid']}"
 
-    # A runner can have an installed runtime but no simulator devices at all.
+    # A local Xcode installation may have a runtime but no simulator devices.
     for runtime in runtimes:
         types = runtime.get("supportedDeviceTypes", [])
         phones = [item for item in types if item.get("productFamily") == "iPhone"]
@@ -56,7 +50,7 @@ def prepare(allow_install=False):
             continue
         phone = sorted(phones, key=lambda item: (item["name"] != PREFERRED_PHONE, item["name"]))[0]
         result = subprocess.run(
-            ["xcrun", "simctl", "create", "Finances CI iPhone", phone["identifier"], runtime["identifier"]],
+            ["xcrun", "simctl", "create", "Finances Test iPhone", phone["identifier"], runtime["identifier"]],
             check=True, capture_output=True, text=True,
         )
         identifier = result.stdout.strip()
@@ -68,11 +62,8 @@ def prepare(allow_install=False):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--install-runtime", action="store_true", help="Download an iOS runtime only when none is available")
-    arguments = parser.parse_args()
     try:
-        print(prepare(allow_install=arguments.install_runtime))
+        print(prepare())
         return 0
     except (RuntimeError, subprocess.SubprocessError, ValueError) as error:
         if isinstance(error, subprocess.CalledProcessError) and error.stderr:
