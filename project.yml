@@ -43,6 +43,7 @@ targets:
       - Info.plist
       - FinancesMobile.entitlements
     - path: Core
+    - path: SharedReceipts
     info:
       path: App/Info.plist
       properties:
@@ -110,6 +111,8 @@ targets:
     entitlements:
       path: App/FinancesMobile.entitlements
       properties:
+        com.apple.security.application-groups:
+        - group.dev.gan.FinancesApp.iOS
         com.apple.developer.applesignin:
         - Default
         com.apple.developer.icloud-container-identifiers:
@@ -131,6 +134,8 @@ targets:
         LD_RUNPATH_SEARCH_PATHS: $(inherited) @executable_path/Frameworks
     attributes:
       SystemCapabilities:
+        com.apple.ApplicationGroups.iOS:
+          enabled: 1
         com.apple.SignInWithApple:
           enabled: 1
         com.apple.iCloud:
@@ -140,9 +145,49 @@ targets:
         com.apple.BackgroundModes:
           enabled: 1
     dependencies:
+    - target: FinancesShareExtension
+      embed: true
     - package: ZIPFoundation
     - sdk: libsqlite3.tbd
     - sdk: CloudKit.framework
+  FinancesShareExtension:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: '17.0'
+    sources:
+    - path: ShareExtension
+      excludes:
+      - Info.plist
+      - FinancesShare.entitlements
+    - path: SharedReceipts
+    - path: App/PrivacyInfo.xcprivacy
+    info:
+      path: ShareExtension/Info.plist
+      properties:
+        CFBundleDisplayName: Add to Finances
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+          NSExtensionAttributes:
+            NSExtensionActivationRule: 'extensionItems.@count > 0 AND SUBQUERY(extensionItems, $item, $item.attachments.@count > 0 AND $item.attachments.@count <= 64 AND SUBQUERY($item.attachments, $attachment, ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.image" OR ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.adobe.pdf").@count == $item.attachments.@count).@count == extensionItems.@count'
+    entitlements:
+      path: ShareExtension/FinancesShare.entitlements
+      properties:
+        com.apple.security.application-groups:
+        - group.dev.gan.FinancesApp.iOS
+    attributes:
+      SystemCapabilities:
+        com.apple.ApplicationGroups.iOS:
+          enabled: 1
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.gan.FinancesApp.iOS.Share
+        APPLICATION_EXTENSION_API_ONLY: true
+        SKIP_INSTALL: true
+        TARGETED_DEVICE_FAMILY: 1,2
+        SUPPORTS_MACCATALYST: false
   FinancesiOSTests:
     type: bundle.unit-test
     platform: iOS

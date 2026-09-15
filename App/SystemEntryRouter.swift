@@ -22,19 +22,23 @@ final class SystemEntryRouter: ObservableObject {
     private var catalog: SystemIntegrationCatalog?
     private var catalogWrite: Task<Void, Never>?
     private var queuedReceiptIDs: Set<UUID> = []
-    private var restoredReceipts = false
+    private var restoringReceipts = false
+    private var receiptSources: [UUID: SharedReceiptInbox] = [:]
     private var editorIDs: Set<UUID> = []
     private var suggestionsRevision: UInt64 = 0
     private let receiptInbox: SharedReceiptInbox
+    private let extensionReceiptInbox: SharedReceiptInbox?
     private let suggestionRepository: CaptureSuggestionRepository
     private let catalogRepository: SystemIntegrationCatalogRepository
     private let publishShortcutParameters: () -> Void
 
     init(receiptInbox: SharedReceiptInbox = .shared,
+         extensionReceiptInbox: SharedReceiptInbox? = SystemEntryRouter.makeExtensionReceiptInbox(),
          suggestionRepository: CaptureSuggestionRepository = .shared,
          catalogRepository: SystemIntegrationCatalogRepository = .shared,
          publishShortcutParameters: @escaping () -> Void = { FinancesAppShortcuts.updateAppShortcutParameters() }) {
         self.receiptInbox = receiptInbox
+        self.extensionReceiptInbox = extensionReceiptInbox
         self.suggestionRepository = suggestionRepository
         self.catalogRepository = catalogRepository
         self.publishShortcutParameters = publishShortcutParameters
@@ -59,32 +63,50 @@ final class SystemEntryRouter: ObservableObject {
             catch { self.error = ValidationError(message: "Could not open receipt: \(error.localizedDescription)") }
         }
     }
-    func openSharedReceipt(_ entry: SharedReceiptEntry) async throws {
+    func openSharedReceipt(_ entry: SharedReceiptEntry, from source: SharedReceiptInbox? = nil) async throws {
         guard queuedReceiptIDs.insert(entry.id).inserted else { return }
+        let inbox = source ?? receiptInbox
         do {
-            let urls = try await receiptInbox.fileURLs(for: entry)
+            let urls = try await inbox.fileURLs(for: entry)
+            receiptSources[entry.id] = inbox
             requests.append(.init(destination: .incoming(.init(id: entry.id, receiptURLs: urls, sharedReceiptID: entry.id))))
         } catch { queuedReceiptIDs.remove(entry.id); throw error }
     }
     func restoreSharedReceipts(store: MobileLedgerStore) async {
-        guard !restoredReceipts else { return }
-        restoredReceipts = true
-        do {
-            let entries = try await receiptInbox.pendingEntries()
-            let committed = await store.durablyStoredTransactionIDs(Set(entries.map(\.id)))
-            for entry in entries {
-                if committed.contains(entry.id) { try await receiptInbox.discard(entry.id) }
-                else { try await openSharedReceipt(entry) }
-            }
-        } catch { self.error = ValidationError(message: "Could not restore pending receipts: \(error.localizedDescription)") }
+        guard !restoringReceipts else { return }
+        restoringReceipts = true
+        defer { restoringReceipts = false }
+        // A share extension can publish while this app is suspended. Rescan on
+        // every foreground entry; queued IDs preserve an already-open editor.
+        for inbox in [receiptInbox, extensionReceiptInbox].compactMap({ $0 }) {
+            do {
+                let entries = try await inbox.pendingEntries()
+                let committed = await store.durablyStoredTransactionIDs(Set(entries.map(\.id)))
+                for entry in entries {
+                    if committed.contains(entry.id) { try await inbox.discard(entry.id) }
+                    else { try await openSharedReceipt(entry, from: inbox) }
+                }
+            } catch { self.error = ValidationError(message: "Could not restore pending receipts: \(error.localizedDescription)") }
+        }
     }
     func finishSharedReceipt(_ id: UUID) {
         // Retain the delivered identity for this session so late duplicate
         // callbacks cannot reopen a batch while its cleanup is suspended.
+        let inbox = receiptSources.removeValue(forKey: id) ?? receiptInbox
         Task {
-            do { try await receiptInbox.discard(id) }
+            do { try await inbox.discard(id) }
             catch { self.error = ValidationError(message: "Could not remove the pending receipt: \(error.localizedDescription)") }
         }
+    }
+
+    private static func makeExtensionReceiptInbox() -> SharedReceiptInbox? {
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil { return nil }
+        #if DEBUG
+        if CommandLine.arguments.contains("--demo") {
+            return CommandLine.arguments.contains("--demo-native-share") ? try? SharedReceiptStorage.inbox(demo: true) : nil
+        }
+        #endif
+        return try? SharedReceiptStorage.inbox()
     }
     func openSuggestions() { requests.append(.init(destination: .suggestions)) }
     func takeNext() -> Request? { requests.isEmpty || !editorIDs.isEmpty ? nil : requests.removeFirst() }

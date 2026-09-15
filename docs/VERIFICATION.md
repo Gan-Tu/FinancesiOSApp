@@ -99,3 +99,12 @@ Removed the tracking screens, payment-linking domain code, presentation caches, 
 On iPhone 17 Pro Max / iOS 26.5, all 377 active model/storage tests passed (seven opt-in tests skipped), including a historical-metadata ZIP restore, ordinary transaction edit, database reopen, and receipt-byte comparison. All six register interaction tests passed. The separate receipt-menu UI check verified the retired entry is absent and Add Attachment still opens Choose Files; its XCTest tap targets the visible leading label because the exposed full-width row includes untappable empty space. Results are in `build/TrackingRemovalFinal.xcresult` and `build/TrackingRemovalReceiptUI.xcresult`; the latter is the successful rerun of that UI check. The fixture was corrected to give its second posting the normal list index before comparing an unchanged posting array.
 
 The unsigned iOS Release archive succeeded at `build/TrackingRemoval.xcarchive`. Project/capability and whitespace checks passed. Validation used synthetic data and simulator/fake sync transports; no live journals or CloudKit records were changed.
+
+
+## Unsaved screenshot sharing (September 14, 2026)
+
+- 30 focused simulator tests passed: receipt providers/inbox, incoming draft defaults, foreground delivery, and create-once saves.
+- Native Simulator verification on iPhone 16e / iOS 26.2: Device → Trigger Screenshot → open the unsaved thumbnail → enable Markup and add a mark → Share → Finances → Ready in Finances → Done → close Markup. Finances opened New Transaction with the screenshot attached, Cleared enabled, and Today at 20:16 matching the local clock. Quick Look showed the marked screenshot. The screenshot was not saved to Photos or Files before sharing. Cancel returned to the unchanged two-transaction synthetic journal.
+- A signed Release archive passed. The app and extension provisioning profiles both include `group.dev.gan.FinancesApp.iOS`.
+- Use a signed simulator build for native share QA (`CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-`); unsigned simulator installations cannot access App Group storage. Provider/unit tests use isolated temporary inboxes. `--demo-native-share` routes both processes to a separate demo inbox in Debug only.
+- This verifies the Simulator flow and archive; physical-device/TestFlight delivery is a separate check.

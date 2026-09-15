@@ -47,6 +47,7 @@
 		5371294B3562E6005E607C1A /* FinancesAppIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C62C6E57E1F8CC5DB088A9C /* FinancesAppIntents.swift */; };
 		5801FE3A51D736D8C622739A /* SQLiteWriteTestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4EB1C17FDE952A8B6F910D73 /* SQLiteWriteTestSupport.swift */; };
 		59E732B1F05F91F8CCAD4907 /* PhysicalSyncAcceptanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3F02023F256143383A56756 /* PhysicalSyncAcceptanceTests.swift */; };
+		59F797B37F6396DB3ACA8BD4 /* SharedReceiptInbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B85FD7FA47F57535C951DA5 /* SharedReceiptInbox.swift */; };
 		5AC7DB54D9BC1FB5DDD0B99C /* FinancesMobileApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B106AB2E1A34CB2428A021A /* FinancesMobileApp.swift */; };
 		5D241D3949D95C224F8AAC81 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E2F3511E87504E00AF3ED52 /* Models.swift */; };
 		5E6DD6EDE47AB531A3EC6986 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B5CD3AA6662EAAD3753AF40F /* Assets.xcassets */; };
@@ -58,29 +59,35 @@
 		68A9CF8D91F93391FF8C1E67 /* ReceiptAssistModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE6E8B12AAFBE86F3A310063 /* ReceiptAssistModels.swift */; };
 		68DA50FBF3FFB87F94C6820F /* CloudKitRecurrenceConsistencyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CC17DE372AAEEF3CABB3531 /* CloudKitRecurrenceConsistencyTests.swift */; };
 		692404D6102A4B913D3854D4 /* IncomingCaptureCurrencyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11F684E49866EF7F9D34DC23 /* IncomingCaptureCurrencyTests.swift */; };
+		6C09B14E857D47D8F2585AD1 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = C3FE4DE9349447E40CA9A063 /* PrivacyInfo.xcprivacy */; };
 		6D9A7D460AFD412EAA0FBBA0 /* AsyncRecurrencePersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 600C8341210C80036086F4C1 /* AsyncRecurrencePersistenceTests.swift */; };
 		72112E529D976720A45E9888 /* AmountExpressionEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D2918BF16A82E35047FA336 /* AmountExpressionEvaluator.swift */; };
 		76DD34203ABCAF1EC1F75CC2 /* MobileAsyncPersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDEA9136549517FFF5BB7CD5 /* MobileAsyncPersistenceTests.swift */; };
 		772F654A718A6490F3535A84 /* SplitEditorIntegrityUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6588394D92E93BA825B5734 /* SplitEditorIntegrityUITests.swift */; };
 		77984F88921E1D563B837C5B /* HiddenJournalsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E049D5A25B6E0E4121652A89 /* HiddenJournalsView.swift */; };
+		77E4421279340621856C828F /* SharedReceiptInbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B85FD7FA47F57535C951DA5 /* SharedReceiptInbox.swift */; };
 		7907CF83EEDD0EFD77BFCBA2 /* SQLiteJournalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 646414B7AA5605EC2E6D0932 /* SQLiteJournalStore.swift */; };
 		7950D92F754A06CE3EE55E6D /* RegisterPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 914E2B57753B6A7E96E4D302 /* RegisterPresentation.swift */; };
 		7B77FBA1486E1A2924790348 /* NoopTransactionSaveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74269835F089CC7D03635FB5 /* NoopTransactionSaveTests.swift */; };
 		7BA7A6AD5B83893A2E1C2188 /* HistoricalTextSuggestionCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4A88802F69E49ADB9D2B290 /* HistoricalTextSuggestionCache.swift */; };
 		7CC94BAD347BC7ADD4823BA0 /* JournalVisibilityAndSearchUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7548B898E4141D1151E39251 /* JournalVisibilityAndSearchUITests.swift */; };
 		80E5BD0C9B720E512ADC3743 /* ReceiptImportInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B7DC31F16034F4D250213A7 /* ReceiptImportInteractionTests.swift */; };
+		84312A060DEBFBABF6993569 /* SharedReceiptProviderLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0554736B64DAB8F4C2A1003 /* SharedReceiptProviderLoader.swift */; };
 		87CAD232623A284FA659E5E7 /* MobileAppIconBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 120177F093E73C7D0481DAC2 /* MobileAppIconBadge.swift */; };
 		8C1F4DC2A63ED79025C6C8C4 /* AsyncInteractionLatencyBenchmarks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75D95CF8AF0F4F1544A5FF86 /* AsyncInteractionLatencyBenchmarks.swift */; };
 		8F977A0B4310795829EBD5A5 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 5AFE5B861B06CC23242E7B41 /* ZIPFoundation */; };
 		9527ECB173193231DCBF4951 /* TemplateInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E28F07BC584CD2DDD3519C8B /* TemplateInteractionTests.swift */; };
 		95BA27FC95A9553680156841 /* SQLiteCloudKitSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD57D4F7D32FD381F1F005DC /* SQLiteCloudKitSyncTests.swift */; };
 		98BA9271C60694888714887D /* CloudKitReceiptRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F186776890C6D747654EC41 /* CloudKitReceiptRecoveryTests.swift */; };
+		98D0253E54F5E52239219687 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8885C60EBEBC5C0A6714F69 /* ShareViewController.swift */; };
 		9D8763CD408C677A7AE81A2F /* ReceiptAssistInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4793209158CCE46D49E89DA /* ReceiptAssistInteractionTests.swift */; };
 		9DEB4E32629508EC4554F457 /* IncomingCaptureCurrency.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3D6C28192481A825906CC2A /* IncomingCaptureCurrency.swift */; };
 		9EF442A7D8E1781D105C0181 /* CloudKitReceiptFileTransaction.swift in Sources */ = {isa = PBXBuildFile; fileRef = E856660F3F681796EACC4F13 /* CloudKitReceiptFileTransaction.swift */; };
 		9F31014BB5272FB0FC30CF3B /* CloudKitJournalSyncCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24ED3D7B11C16498B8799B27 /* CloudKitJournalSyncCoordinator.swift */; };
+		9FE4DA7BF66F6095C24E9398 /* SharedReceiptStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = F50689027807EE02F17BF6A3 /* SharedReceiptStorage.swift */; };
 		A0514262A1EB9BF115FA4E62 /* CloudKitLiveVerificationScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25974F9B7E22B3998E791C21 /* CloudKitLiveVerificationScene.swift */; };
 		A21F2EBC03D7A7B4A71FCBF4 /* SharedReceiptEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 509E9E442AB0B75E7E4BAF74 /* SharedReceiptEntry.swift */; };
+		A574942B2736010ABA0A3C20 /* FinancesShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 8A18E6C73D0CD7ED7BA899BE /* FinancesShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A65B8AC46C8C95B59846F2AC /* SystemEntryUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D58450E6135DC39A7EE9E16A /* SystemEntryUITests.swift */; };
 		A6ED9B3721FC8F66A8F162FC /* BackupTransfer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2F6685EDA1D3541AFD7FD6C /* BackupTransfer.swift */; };
 		A7D4CF3C710680ABD22BBC72 /* ReceiptAnalysisClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D3C6FD557E7F5E28CEDBED1 /* ReceiptAnalysisClient.swift */; };
@@ -94,9 +101,11 @@
 		B23435F545F1EC6F9D2B8B23 /* SQLiteCloudKitBatchingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15246DDD0437BC92E0557861 /* SQLiteCloudKitBatchingTests.swift */; };
 		B234E00A059574DD3ED8374E /* StartupTiming.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DA0031D15825CFF57817DEF /* StartupTiming.swift */; };
 		B3CE611D87F5702DCBFA7694 /* ZIPFoundation-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 197799545D52A0EFA0FB98D0 /* ZIPFoundation-LICENSE.txt */; };
+		B519BED1BDBDE42172E9E092 /* SharedReceiptProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1E26CF9F6717D508CE63DB4 /* SharedReceiptProviderTests.swift */; };
 		B7200DC3EF48C81180A477F7 /* RegisterInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A810A2B1087ABD369EDA29D1 /* RegisterInteractionTests.swift */; };
 		B7C96CB7D580B5E0A086FA13 /* SharedReceiptEntryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0DBA75B22E9751DAC2DEAD4 /* SharedReceiptEntryTests.swift */; };
 		B80A45F69FE542E7FBA2808C /* AccountSelectionLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FFF96D5E50240B7D5141358 /* AccountSelectionLabel.swift */; };
+		B8EC2ABB7ACD59194A3DCBB7 /* SharedReceiptStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = F50689027807EE02F17BF6A3 /* SharedReceiptStorage.swift */; };
 		BC2CFEC2B20AEFEC03B23F02 /* BackupArchiveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D5403346BB22199DDE0FB93 /* BackupArchiveTests.swift */; };
 		BF90E29FF5A6F00F664E3265 /* AccountMovePlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19F24D00A92B6D0791D7A981 /* AccountMovePlan.swift */; };
 		C246CDB777BB1CFCA76F34C3 /* SplitTransactionPersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1FE3DE5514FEA9ED9E3E096 /* SplitTransactionPersistenceTests.swift */; };
@@ -108,6 +117,7 @@
 		D12E71819F222A16D4E6212B /* UUIDOrdering.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFF22E2378EFDE6FD5DD2E12 /* UUIDOrdering.swift */; };
 		D2B215C0D218B139A0889E91 /* RecurrenceContinuationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 598381BF3B9CDB3140C13284 /* RecurrenceContinuationTests.swift */; };
 		D378B2778FC3DED9882AB200 /* JournalVisibilityAndSearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 052313D4E1BFC2F0632D22F0 /* JournalVisibilityAndSearchTests.swift */; };
+		D50DDDC2C72DD244D3D9CE18 /* SharedReceiptProviderLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0554736B64DAB8F4C2A1003 /* SharedReceiptProviderLoader.swift */; };
 		D523165B8458E84586A691E8 /* RecurringTransactionEditPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7331FE1CCF089396B76A3CA1 /* RecurringTransactionEditPolicyTests.swift */; };
 		D8D5990EA28E2719501166BE /* AccountFormPickers.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB856976C1FEAE1FDFB3877B /* AccountFormPickers.swift */; };
 		D90285A0D9D1C975DE3DC649 /* FinanceFormLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = D113778288FA0C199C1BF6A0 /* FinanceFormLayout.swift */; };
@@ -135,6 +145,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		05FF87BEDFE1BB20FA025C17 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = DF17D01CCEF767EE88A463FA /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B96996135C920A72BF073F20;
+			remoteInfo = FinancesShareExtension;
+		};
 		A5761FE9C8828396E24BE096 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = DF17D01CCEF767EE88A463FA /* Project object */;
@@ -150,6 +167,20 @@
 			remoteInfo = FinancesiOS;
 		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		D0BB9D34FB9680EFD01F30E1 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				A574942B2736010ABA0A3C20 /* FinancesShareExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		051025E46B7B73A862F5B102 /* FinancesiOSTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = FinancesiOSTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -170,6 +201,7 @@
 		17797728AE53448A820518DB /* CloudKitSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitSyncService.swift; sourceTree = "<group>"; };
 		197799545D52A0EFA0FB98D0 /* ZIPFoundation-LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "ZIPFoundation-LICENSE.txt"; sourceTree = "<group>"; };
 		19F24D00A92B6D0791D7A981 /* AccountMovePlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountMovePlan.swift; sourceTree = "<group>"; };
+		1B85FD7FA47F57535C951DA5 /* SharedReceiptInbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedReceiptInbox.swift; sourceTree = "<group>"; };
 		1DA0031D15825CFF57817DEF /* StartupTiming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupTiming.swift; sourceTree = "<group>"; };
 		21B989D67F448714EB5C9FC8 /* ReceiptAttachmentSaveStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReceiptAttachmentSaveStateTests.swift; sourceTree = "<group>"; };
 		24ED3D7B11C16498B8799B27 /* CloudKitJournalSyncCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitJournalSyncCoordinator.swift; sourceTree = "<group>"; };
@@ -213,6 +245,7 @@
 		8057323718282AD542602493 /* RecurrenceContinuation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecurrenceContinuation.swift; sourceTree = "<group>"; };
 		86319B41F3658D0FEC3491AE /* CaptureSuggestionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureSuggestionTests.swift; sourceTree = "<group>"; };
 		8804DE3E4F09AC40898B7187 /* IncomingCaptureSaveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncomingCaptureSaveTests.swift; sourceTree = "<group>"; };
+		8A18E6C73D0CD7ED7BA899BE /* FinancesShareExtension.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = FinancesShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		8A6B648C527863512ED49DC3 /* RegisterPresentationCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RegisterPresentationCacheTests.swift; sourceTree = "<group>"; };
 		8BD050102B46386BC742EF56 /* MobileAppIconBadgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileAppIconBadgeTests.swift; sourceTree = "<group>"; };
 		8BF5FDC8D25578E85C46179B /* CompanionParityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionParityTests.swift; sourceTree = "<group>"; };
@@ -256,9 +289,11 @@
 		D8062FB2C4A6969B2FA2788C /* AccountBalanceProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountBalanceProjection.swift; sourceTree = "<group>"; };
 		DCDEF59CF1ECC61824DD7109 /* AmountExpressionEvaluatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AmountExpressionEvaluatorTests.swift; sourceTree = "<group>"; };
 		E049D5A25B6E0E4121652A89 /* HiddenJournalsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HiddenJournalsView.swift; sourceTree = "<group>"; };
+		E0554736B64DAB8F4C2A1003 /* SharedReceiptProviderLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedReceiptProviderLoader.swift; sourceTree = "<group>"; };
 		E06C3C3000BC78FFEFC1832F /* DemoData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoData.swift; sourceTree = "<group>"; };
 		E1162C3714D2FFAEDE39A192 /* HomeScreenQuickActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeScreenQuickActions.swift; sourceTree = "<group>"; };
 		E1BB4219C51041FA26DF0701 /* MobilePersistenceSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobilePersistenceSupport.swift; sourceTree = "<group>"; };
+		E1E26CF9F6717D508CE63DB4 /* SharedReceiptProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedReceiptProviderTests.swift; sourceTree = "<group>"; };
 		E28F07BC584CD2DDD3519C8B /* TemplateInteractionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemplateInteractionTests.swift; sourceTree = "<group>"; };
 		E302EC22E12DF6266717D3AD /* NavigationResponsivenessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationResponsivenessTests.swift; sourceTree = "<group>"; };
 		E471E67CBC5110720103E4C6 /* BackupArchive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupArchive.swift; sourceTree = "<group>"; };
@@ -269,11 +304,13 @@
 		F2F6685EDA1D3541AFD7FD6C /* BackupTransfer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupTransfer.swift; sourceTree = "<group>"; };
 		F3F02023F256143383A56756 /* PhysicalSyncAcceptanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhysicalSyncAcceptanceTests.swift; sourceTree = "<group>"; };
 		F479A4FC0F82E7BCD578DB19 /* MobileSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileSupport.swift; sourceTree = "<group>"; };
+		F50689027807EE02F17BF6A3 /* SharedReceiptStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedReceiptStorage.swift; sourceTree = "<group>"; };
 		F514FB414AF5A943BF911F24 /* SQLiteIncrementalWriteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLiteIncrementalWriteTests.swift; sourceTree = "<group>"; };
 		F560DDCB2842B7A051249C4E /* UUIDOrderingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UUIDOrderingTests.swift; sourceTree = "<group>"; };
 		F5F0E557624F3E27C23C49C8 /* HistoricalTextSuggestionIndexTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoricalTextSuggestionIndexTests.swift; sourceTree = "<group>"; };
 		F6A9F2A2ABA7939904002A3F /* ReceiptAssistViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReceiptAssistViews.swift; sourceTree = "<group>"; };
 		F6F4FE5138DED8F860CEC9BF /* MobileNavigationShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileNavigationShell.swift; sourceTree = "<group>"; };
+		F8885C60EBEBC5C0A6714F69 /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
 		FB51F5E0B6F2A9137AF4DD4C /* CloudKitPeerPushVerification.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitPeerPushVerification.swift; sourceTree = "<group>"; };
 		FBEB774D3AC950CDC6B21DD9 /* PostingBalance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostingBalance.swift; sourceTree = "<group>"; };
 		FD57D4F7D32FD381F1F005DC /* SQLiteCloudKitSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLiteCloudKitSyncTests.swift; sourceTree = "<group>"; };
@@ -350,6 +387,14 @@
 			path = App;
 			sourceTree = "<group>";
 		};
+		411EC39A0344405804B9A1A5 /* ShareExtension */ = {
+			isa = PBXGroup;
+			children = (
+				F8885C60EBEBC5C0A6714F69 /* ShareViewController.swift */,
+			);
+			path = ShareExtension;
+			sourceTree = "<group>";
+		};
 		5D66B2A3F248BFE37A2297E7 /* UITests */ = {
 			isa = PBXGroup;
 			children = (
@@ -386,6 +431,7 @@
 				C26FF8CDA5AAF5178BFAA8C2 /* FinancesiOS.app */,
 				051025E46B7B73A862F5B102 /* FinancesiOSTests.xctest */,
 				698576CA66FD282D25C41EFF /* FinancesiOSUITests.xctest */,
+				8A18E6C73D0CD7ED7BA899BE /* FinancesShareExtension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -425,6 +471,7 @@
 				7331FE1CCF089396B76A3CA1 /* RecurringTransactionEditPolicyTests.swift */,
 				8A6B648C527863512ED49DC3 /* RegisterPresentationCacheTests.swift */,
 				D0DBA75B22E9751DAC2DEAD4 /* SharedReceiptEntryTests.swift */,
+				E1E26CF9F6717D508CE63DB4 /* SharedReceiptProviderTests.swift */,
 				C1FE3DE5514FEA9ED9E3E096 /* SplitTransactionPersistenceTests.swift */,
 				15246DDD0437BC92E0557861 /* SQLiteCloudKitBatchingTests.swift */,
 				FD57D4F7D32FD381F1F005DC /* SQLiteCloudKitSyncTests.swift */,
@@ -445,6 +492,8 @@
 			children = (
 				3432D4E683AD6F859CDBFE89 /* App */,
 				ECF1A4C24CC282CE941C8C2D /* Core */,
+				F84E81BCB9DC8DAC3DFC45B6 /* SharedReceipts */,
+				411EC39A0344405804B9A1A5 /* ShareExtension */,
 				B0B77B160FEDB164E9CD1086 /* Tests */,
 				5D66B2A3F248BFE37A2297E7 /* UITests */,
 				8E26E3E1CB459FC92B65051C /* Frameworks */,
@@ -480,6 +529,16 @@
 				CFF22E2378EFDE6FD5DD2E12 /* UUIDOrdering.swift */,
 			);
 			path = Core;
+			sourceTree = "<group>";
+		};
+		F84E81BCB9DC8DAC3DFC45B6 /* SharedReceipts */ = {
+			isa = PBXGroup;
+			children = (
+				1B85FD7FA47F57535C951DA5 /* SharedReceiptInbox.swift */,
+				E0554736B64DAB8F4C2A1003 /* SharedReceiptProviderLoader.swift */,
+				F50689027807EE02F17BF6A3 /* SharedReceiptStorage.swift */,
+			);
+			path = SharedReceipts;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -523,6 +582,24 @@
 			productReference = 051025E46B7B73A862F5B102 /* FinancesiOSTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		B96996135C920A72BF073F20 /* FinancesShareExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 64B5B43399914FB41F7F2F7E /* Build configuration list for PBXNativeTarget "FinancesShareExtension" */;
+			buildPhases = (
+				888124FBD8B3B7CE305055E5 /* Sources */,
+				F7062A0E95F2262447A526A4 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = FinancesShareExtension;
+			packageProductDependencies = (
+			);
+			productName = FinancesShareExtension;
+			productReference = 8A18E6C73D0CD7ED7BA899BE /* FinancesShareExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		F1526F9D9F82E012EAB584D8 /* FinancesiOS */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 109B9241C56E471E820719B7 /* Build configuration list for PBXNativeTarget "FinancesiOS" */;
@@ -530,10 +607,12 @@
 				EB1BB983A1BCD93479948A4F /* Sources */,
 				09C106786CF91D6A9CDD3087 /* Resources */,
 				EA812CDE746932DADF1CFB32 /* Frameworks */,
+				D0BB9D34FB9680EFD01F30E1 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				5E101878BE925DD2D5D0EEF7 /* PBXTargetDependency */,
 			);
 			name = FinancesiOS;
 			packageProductDependencies = (
@@ -561,10 +640,22 @@
 						DevelopmentTeam = K3URZZFDQP;
 						ProvisioningStyle = Automatic;
 					};
+					B96996135C920A72BF073F20 = {
+						DevelopmentTeam = K3URZZFDQP;
+						ProvisioningStyle = Automatic;
+						SystemCapabilities = {
+							com.apple.ApplicationGroups.iOS = {
+								enabled = 1;
+							};
+						};
+					};
 					F1526F9D9F82E012EAB584D8 = {
 						DevelopmentTeam = K3URZZFDQP;
 						ProvisioningStyle = Automatic;
 						SystemCapabilities = {
+							com.apple.ApplicationGroups.iOS = {
+								enabled = 1;
+							};
 							com.apple.BackgroundModes = {
 								enabled = 1;
 							};
@@ -599,6 +690,7 @@
 			projectRoot = "";
 			targets = (
 				F1526F9D9F82E012EAB584D8 /* FinancesiOS */,
+				B96996135C920A72BF073F20 /* FinancesShareExtension */,
 				54CF1C406DAAFD2B452E9193 /* FinancesiOSTests */,
 				3D77B9171A903EB9D4F80899 /* FinancesiOSUITests */,
 			);
@@ -613,6 +705,14 @@
 				5E6DD6EDE47AB531A3EC6986 /* Assets.xcassets in Resources */,
 				CDFC63A70AD0F8531788681F /* PrivacyInfo.xcprivacy in Resources */,
 				B3CE611D87F5702DCBFA7694 /* ZIPFoundation-LICENSE.txt in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F7062A0E95F2262447A526A4 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6C09B14E857D47D8F2585AD1 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -684,9 +784,21 @@
 				DE83C871AD5C4C70ECF0DC58 /* SQLiteWriteBenchmarks.swift in Sources */,
 				5801FE3A51D736D8C622739A /* SQLiteWriteTestSupport.swift in Sources */,
 				B7C96CB7D580B5E0A086FA13 /* SharedReceiptEntryTests.swift in Sources */,
+				B519BED1BDBDE42172E9E092 /* SharedReceiptProviderTests.swift in Sources */,
 				C246CDB777BB1CFCA76F34C3 /* SplitTransactionPersistenceTests.swift in Sources */,
 				3E8D07BF4411549E6BAD758B /* TemplateAndNavigationPerformanceTests.swift in Sources */,
 				3D008210DD2A2256D9AC6DBC /* UUIDOrderingTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		888124FBD8B3B7CE305055E5 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				98D0253E54F5E52239219687 /* ShareViewController.swift in Sources */,
+				77E4421279340621856C828F /* SharedReceiptInbox.swift in Sources */,
+				84312A060DEBFBABF6993569 /* SharedReceiptProviderLoader.swift in Sources */,
+				B8EC2ABB7ACD59194A3DCBB7 /* SharedReceiptStorage.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -749,6 +861,9 @@
 				7907CF83EEDD0EFD77BFCBA2 /* SQLiteJournalStore.swift in Sources */,
 				13EA8A72F52A9E6777F855D7 /* SettingsView.swift in Sources */,
 				A21F2EBC03D7A7B4A71FCBF4 /* SharedReceiptEntry.swift in Sources */,
+				59F797B37F6396DB3ACA8BD4 /* SharedReceiptInbox.swift in Sources */,
+				D50DDDC2C72DD244D3D9CE18 /* SharedReceiptProviderLoader.swift in Sources */,
+				9FE4DA7BF66F6095C24E9398 /* SharedReceiptStorage.swift in Sources */,
 				B234E00A059574DD3ED8374E /* StartupTiming.swift in Sources */,
 				A87C3018A559E1EA59BC1818 /* SystemEntryRouter.swift in Sources */,
 				61A99AAC743BF4CC9D75930B /* TransactionDeletion.swift in Sources */,
@@ -761,6 +876,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		5E101878BE925DD2D5D0EEF7 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = B96996135C920A72BF073F20 /* FinancesShareExtension */;
+			targetProxy = 05FF87BEDFE1BB20FA025C17 /* PBXContainerItemProxy */;
+		};
 		D79856876E9F347FBB204DF7 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = F1526F9D9F82E012EAB584D8 /* FinancesiOS */;
@@ -835,6 +955,26 @@
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		08F894E0B25F876B60F988B9 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = ShareExtension/FinancesShare.entitlements;
+				INFOPLIST_FILE = ShareExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.gan.FinancesApp.iOS.Share;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};
@@ -962,6 +1102,26 @@
 			};
 			name = Debug;
 		};
+		5BE19F8B60B8FE3474B5FD0F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = ShareExtension/FinancesShare.entitlements;
+				INFOPLIST_FILE = ShareExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.gan.FinancesApp.iOS.Share;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
 		6DA7DC49427333BB59521CB2 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1042,6 +1202,15 @@
 			buildConfigurations = (
 				457682319EB36DD11A4F3889 /* Debug */,
 				01050A5B89B4EA44645E980C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		64B5B43399914FB41F7F2F7E /* Build configuration list for PBXNativeTarget "FinancesShareExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5BE19F8B60B8FE3474B5FD0F /* Debug */,
+				08F894E0B25F876B60F988B9 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

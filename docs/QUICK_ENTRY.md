@@ -21,16 +21,17 @@ The open actions can be assigned using the system's Shortcuts Action button and 
 ## Receipt sharing
 
 1. Open an image in Photos or a PDF in Files, tap Share, and choose Finances. Look under More if it is not visible in the app row.
-2. In New Transaction, choose the journal and accounts, then enter the amount, notes and payee.
+2. In New Transaction, choose the journal and accounts, then enter the amount, notes and payee. Shared receipts default to Cleared and the current local date and time when the draft opens.
 3. Tap an attachment's name to preview the image or PDF without leaving the editor. Close the preview to continue editing.
 4. Tap Save to record the transaction and its attachments, or Cancel to discard the new draft. Sharing alone does not record a transaction.
 
-If sharing directly from the screenshot preview does not offer Finances or does not open a draft, save the screenshot to Photos and share it from there. Another option is a receipt Shortcut:
+### Unsaved screenshots and Markup
 
-1. In Shortcuts, create a shortcut and add the Finances action New Transaction with Receipts.
-2. Set Receipts to Shortcut Input.
-3. Enable Show in Share Sheet in the shortcut's details, accepting images and PDFs.
-4. Share the screenshot or PDF and choose your shortcut in the action list. It opens the same editable transaction flow.
+Immediately after taking a screenshot, open its preview, crop or annotate it, then tap Share and choose **Finances** (under More if needed; some share sheets label the extension **Add to Finances**). This native share extension accepts the edited image directly; saving to Photos or Files first is unnecessary.
+
+Wait for **Ready in Finances**, tap Done, then open Finances to review the new transaction. iOS keeps the share extension in the screenshot editor; the receipt waits safely until Finances is opened. An already-open Finances app also checks for new receipts when it returns to the foreground. Sharing images/PDFs from other apps supports the same extension, while the existing **Finances** Open In action continues to open file-backed receipts directly.
+
+The **New Transaction with Receipts** Shortcuts action also remains available for a custom receipt shortcut.
 
 The app copies shared files into a pending local batch. If another editor or the app lock is active, that batch waits without replacing the unfinished editor. Cancel removes the batch; pending batches survive an interrupted launch. After a successful save, their stable identity prevents another copy if the app exits before cleanup.
 

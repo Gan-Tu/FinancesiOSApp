@@ -33,6 +33,9 @@ private final class FinancesMobileLaunchState: ObservableObject {
     init(liveVerification: Bool) {
         self.liveVerification = liveVerification
         #if DEBUG
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
+            SharedReceiptStorage.usesDemoInbox = CommandLine.arguments.contains("--demo") && CommandLine.arguments.contains("--demo-native-share")
+        }
         if CommandLine.arguments.contains("--demo"), CommandLine.arguments.contains("--reset-demo") {
             try? FileManager.default.removeItem(at: SystemIntegrationStorage.directory)
         }

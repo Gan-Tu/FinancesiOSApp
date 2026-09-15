@@ -6,7 +6,7 @@ import XCTest
 final class NativeShareUITests: XCTestCase {
     func testPhotoShareOpensEditableDraftAndCancelDoesNotPost() throws {
         let app = try launch()
-        sharePhoto()
+        sharePhoto(returnTo: app)
         assertReceipt(in: app, extension: ".PNG")
         cancelAndCheckBaseline(app)
     }
@@ -32,6 +32,7 @@ final class NativeShareUITests: XCTestCase {
         capture(files, "Files PDF share sheet")
         let finances = shareCell(in: files)
         XCTAssertTrue(finances.waitForExistence(timeout: 5)); finances.tap()
+        completeExtensionShare(in: files, returnTo: app)
         assertReceipt(in: app, extension: ".pdf")
         cancelAndCheckBaseline(app)
     }
@@ -40,7 +41,7 @@ final class NativeShareUITests: XCTestCase {
         let app = try launch(wallet: true)
         let payee = app.textFields["Payee"]
         XCTAssertEqual(payee.value as? String, "SYNTHETIC Wallet Store")
-        sharePhoto()
+        sharePhoto(returnTo: app)
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
         XCTAssertEqual(payee.value as? String, "SYNTHETIC Wallet Store", "An incoming share must preserve the existing draft")
         XCTAssertFalse(receipt(in: app, extension: ".PNG").exists)
@@ -56,7 +57,7 @@ final class NativeShareUITests: XCTestCase {
         }
         continueAfterFailure = false
         let app = XCUIApplication()
-        app.launchArguments = ["--demo", "--demo-system-entry", "--reset-demo"] + (wallet ? ["--demo-wallet-draft"] : [])
+        app.launchArguments = ["--demo", "--demo-system-entry", "--demo-native-share", "--reset-demo"] + (wallet ? ["--demo-wallet-draft"] : [])
         app.launch()
         XCTAssertTrue(app.navigationBars[wallet ? "New Transaction" : "Journals"].waitForExistence(timeout: 10))
         return app
@@ -66,7 +67,7 @@ final class NativeShareUITests: XCTestCase {
         app.cells.matching(NSPredicate(format: "identifier == %@ AND label == %@", "shareCell", "Finances")).firstMatch
     }
 
-    private func sharePhoto() {
+    private func sharePhoto(returnTo app: XCUIApplication) {
         let photos = XCUIApplication(bundleIdentifier: "com.apple.mobileslideshow")
         photos.activate()
         XCTAssertTrue(photos.wait(for: .runningForeground, timeout: 5))
@@ -87,6 +88,15 @@ final class NativeShareUITests: XCTestCase {
         capture(photos, "Photos native Finances share cell")
         let finances = shareCell(in: photos)
         XCTAssertTrue(finances.waitForExistence(timeout: 5)); finances.tap()
+        completeExtensionShare(in: photos, returnTo: app)
+    }
+
+    private func completeExtensionShare(in host: XCUIApplication, returnTo app: XCUIApplication) {
+        if host.staticTexts["Ready in Finances"].waitForExistence(timeout: 10) {
+            host.buttons["receipt-share-done"].tap()
+            app.activate()
+        }
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
     }
 
     private func receipt(in app: XCUIApplication, extension suffix: String) -> XCUIElement {
@@ -104,6 +114,7 @@ final class NativeShareUITests: XCTestCase {
         XCTAssertTrue(attachment.waitForExistence(timeout: 10))
         XCTAssertEqual(app.buttons["receipt-import-picker"].value as? String, "Ready")
         XCTAssertFalse(app.navigationBars["New Transaction"].buttons["Save"].isEnabled)
+        XCTAssertEqual(app.switches["Cleared"].value as? String, "1")
         attachment.tap()
         let previewDone = app.buttons["editor-receipt-preview-done"]
         XCTAssertTrue(previewDone.waitForExistence(timeout: 5), "Shared images and PDFs must open the attachment preview")

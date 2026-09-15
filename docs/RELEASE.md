@@ -22,6 +22,8 @@ GitHub Actions independently builds and tests pushes and pull requests. Xcode Cl
 
 Both released apps use the user's private `iCloud.dev.gan.FinanceApp` container, Production environment and `FinancesJournal_v1` zone. Debug builds use Development and a separate local store. Use the production **Finances.app** on Mac when comparing with TestFlight; isolated QA apps intentionally have different data. Read-only Production data comparison passed; see `production-sync-verification.json`.
 
+The app and embedded `dev.gan.FinancesApp.iOS.Share` extension both require the App Group `group.dev.gan.FinancesApp.iOS`. Their signing profiles must include that group. Automatic signing registered both identifiers with the group and the signed Release archive passed on September 14, 2026. `scripts/check_project.py` verifies that the share extension is embedded and its group matches the app.
+
 The project includes CloudKit/APNs entitlements, background notifications, privacy manifest, usage descriptions, an opaque app icon and a shared test/archive scheme. Apple-managed signing and App Store IPA export have passed. No private signing key is stored in this repository.
 
 ## Local archive

@@ -125,7 +125,10 @@ struct AppShellView: View {
             if scenePhase != .active { store.lockApp() }
             else {
                 handleSystemEntry()
-                Task { await systemEntries.reloadSuggestions(store: store) }
+                Task {
+                    await systemEntries.restoreSharedReceipts(store: store)
+                    await systemEntries.reloadSuggestions(store: store)
+                }
             }
         }
         .onChange(of: systemEntries.requests.map(\.id)) { handleSystemEntry() }

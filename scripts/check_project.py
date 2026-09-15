@@ -18,6 +18,14 @@ assert info['FinancesCloudKitContainerIdentifier'] == 'iCloud.dev.gan.FinanceApp
 assert entitlements['com.apple.developer.icloud-container-identifiers'] == ['iCloud.dev.gan.FinanceApp']
 assert 'remote-notification' in info['UIBackgroundModes']
 assert info['ITSAppUsesNonExemptEncryption'] is False
+share_info = plistlib.loads((root / 'ShareExtension/Info.plist').read_bytes())
+share_entitlements = plistlib.loads((root / 'ShareExtension/FinancesShare.entitlements').read_bytes())
+group = ['group.dev.gan.FinancesApp.iOS']
+assert entitlements['com.apple.security.application-groups'] == group
+assert share_entitlements['com.apple.security.application-groups'] == group
+assert share_info['NSExtension']['NSExtensionPointIdentifier'] == 'com.apple.share-services'
+assert 'public.image' in share_info['NSExtension']['NSExtensionAttributes']['NSExtensionActivationRule']
+assert 'FinancesShareExtension.appex in Embed Foundation Extensions' in project
 for key in ['NSCameraUsageDescription', 'NSPhotoLibraryUsageDescription']:
     assert info.get(key)
 assert (root / 'App/PrivacyInfo.xcprivacy').is_file()

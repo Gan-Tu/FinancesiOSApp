@@ -114,6 +114,8 @@ def validate(raw: bytes, project_root: Path) -> list[str]:
             settings = objects[identifier].get("buildSettings", {})
             entitlements = referenced_plist(project_root, settings.get("CODE_SIGN_ENTITLEMENTS"))
             info = referenced_plist(project_root, settings.get("INFOPLIST_FILE"))
+            if entitlements.get("com.apple.security.application-groups"):
+                needed.add("com.apple.ApplicationGroups.iOS")
             if "CloudKit" in entitlements.get("com.apple.developer.icloud-services", []):
                 needed.add("com.apple.iCloud")
             if "aps-environment" in entitlements or "com.apple.developer.aps-environment" in entitlements:

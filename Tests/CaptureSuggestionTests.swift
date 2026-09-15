@@ -100,6 +100,51 @@ final class CaptureSuggestionTests: XCTestCase {
         try await store.flushLocalChangesAsync()
     }
 
+    func testSharedReceiptsDefaultToClearedAndCurrentLocalTimestampOnEachForeground() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        storeDirectories.append(directory)
+        let dependencies = CloudKitSyncDependencies(configuration: { nil }, makeClient: { _ in
+            throw ValidationError(message: "Synthetic shares never connect to CloudKit.")
+        }, automaticTriggersEnabled: false)
+        let store = MobileLedgerStore(supportDirectory: directory, initialData: DemoData.fixture(), cloudKitSyncDependencies: dependencies)
+        stores.append(store)
+        let original = store.data.transactions
+        let inbox = SharedReceiptInbox(directory: directory.appendingPathComponent("shared"))
+        let local = SharedReceiptInbox(directory: directory.appendingPathComponent("local"))
+        let router = SystemEntryRouter(receiptInbox: local, extensionReceiptInbox: inbox)
+        await router.restoreSharedReceipts(store: store)
+        XCTAssertNil(router.takeNext())
+
+        let source = directory.appendingPathComponent("Edited Screenshot.png")
+        try Data([137, 80, 78, 71]).write(to: source)
+        let entry = try await inbox.stage([source])
+        await router.restoreSharedReceipts(store: store)
+        guard case .incoming(let request) = router.takeNext()?.destination else { return XCTFail("Foreground must discover a new extension receipt") }
+        let before = Date()
+        let draft = IncomingTransactionDraftFactory.make(request: request, store: store)
+        let after = Date()
+        XCTAssertTrue(draft.cleared)
+        XCTAssertGreaterThanOrEqual(draft.date, before)
+        XCTAssertLessThanOrEqual(draft.date, after)
+        XCTAssertEqual(Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: draft.date),
+                       Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: before))
+        XCTAssertEqual(draft.saveOperationID, entry.id)
+        XCTAssertEqual(request.sharedReceiptID, entry.id)
+        XCTAssertEqual(request.receiptURLs.count, 1)
+        XCTAssertEqual(store.data.transactions, original)
+        await router.restoreSharedReceipts(store: store)
+        XCTAssertNil(router.takeNext(), "Foregrounding again must not replace or duplicate an open draft")
+        router.finishSharedReceipt(entry.id)
+        // The cleanup task is asynchronous; let it complete before asserting.
+        for _ in 0..<100 {
+            if try await inbox.pendingEntries().isEmpty { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let remaining = try await inbox.pendingEntries()
+        XCTAssertTrue(remaining.isEmpty, "Cancel must discard the extension batch, not the local inbox")
+        try await store.flushLocalChangesAsync()
+    }
+
     @MainActor
     func testRouterRetainsSeparateIncomingActionsUntilConsumed() {
         let router = SystemEntryRouter()

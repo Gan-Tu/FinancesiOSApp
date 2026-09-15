@@ -24,7 +24,7 @@ enum IncomingTransactionDraftFactory {
         draft.date = request.suggestion?.date ?? Date()
         draft.payee = request.suggestion?.merchant ?? ""
         draft.note = request.suggestion?.note ?? ""
-        draft.cleared = false
+        draft.cleared = request.suggestion == nil
         draft.postings = [PostingDraft(accountID: account?.id, amount: amount.map { decimalInputString(-$0) } ?? "-", commodityID: currency?.id),
             PostingDraft(accountID: expense?.id, amount: amount.map(decimalInputString) ?? "", commodityID: currency?.id)]
         return draft
