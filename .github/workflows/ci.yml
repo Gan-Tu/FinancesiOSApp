@@ -12,14 +12,21 @@ concurrency:
 jobs:
   test:
     runs-on: macos-26
-    # Cold hosted runners compile from scratch and run the complete UI audit.
-    timeout-minutes: 60
+    # Allow runtime installation plus the cold build and complete UI audit.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - name: Select Xcode
         run: |
           sudo xcode-select -s /Applications/Xcode_26.6.app
           xcodebuild -version
+          sudo xcodebuild -runFirstLaunch
+      - name: Prepare iPhone Simulator
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_prepare_simulator.py'
+          destination="$(python3 scripts/prepare_simulator.py --install-runtime)"
+          xcrun simctl bootstatus "${destination##*id=}" -b
+          echo "SIMULATOR_DESTINATION=$destination" >> "$GITHUB_ENV"
       - name: Build and test on iPhone
         run: scripts/test.sh
       - name: Preserve test reports

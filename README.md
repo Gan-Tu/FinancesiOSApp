@@ -34,7 +34,7 @@ scripts/test.sh
 scripts/archive.sh CODE_SIGNING_ALLOWED=NO
 ```
 
-The second command verifies a Release archive without uploading or producing a distributable signature. Build/test outputs stay in ignored `build/`. Set `SIMULATOR_DESTINATION` to override the default iPhone 17 Pro Max.
+The second command verifies a Release archive without uploading or producing a distributable signature. Build/test outputs stay in ignored `build/`. Tests select an available iPhone by UDID, preferring iPhone 17 Pro Max on an installed iOS runtime. Set `SIMULATOR_DESTINATION` to override that selection. Simulator tests use ad hoc signing so Keychain and App Group access work without a developer certificate.
 
 For a local demonstration, add `--demo --reset-demo` to the scheme’s launch arguments. This creates synthetic data in a separate temporary directory and blocks CloudKit. Remove both arguments for normal use. The demo code is excluded from Release.
 
