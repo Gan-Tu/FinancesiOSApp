@@ -9,27 +9,13 @@ extension SharedTransactionCatalog {
                   accounts: data.accounts.filter { ids.contains($0.ledgerID) && !$0.isGroup && !parentIDs.contains($0.id) }
                     .sorted { $0.listIndex < $1.listIndex }
                     .map { account in .init(id: account.id, journalID: account.ledgerID, name: account.name, kind: account.kind.rawValue,
-                                 currencyID: account.commodityID ?? data.commodities.first { $0.ledgerID == account.ledgerID }?.id) },
+                                 currencyID: account.commodityID ?? data.commodities.first { $0.ledgerID == account.ledgerID }?.id,
+                                 parentID: account.parentID, colorName: account.colorName) },
                   currencies: data.commodities.filter { ids.contains($0.ledgerID) }
-                    .map { .init(id: $0.id, journalID: $0.ledgerID, symbol: $0.symbol) },
+                    .map { .init(id: $0.id, journalID: $0.ledgerID, symbol: $0.symbol, name: $0.name) },
                   selectedJournalID: data.selectedLedgerID, locked: data.security.passwordLockEnabled)
         // Password protected journals must not expose their catalog in a host app.
         if locked { journals = []; accounts = []; currencies = [] }
-    }
-}
-
-extension SharedTransaction {
-    func draft(operationID: UUID) -> TransactionDraft {
-        var result = TransactionDraft(ledgerID: journalID)
-        result.saveOperationID = operationID
-        result.incomingEditorSessionID = UUID()
-        result.date = date
-        result.payee = payee
-        result.note = note
-        result.number = number
-        result.cleared = cleared
-        result.postings = postings.map { .init(id: $0.id, accountID: $0.accountID, amount: $0.amount, commodityID: $0.currencyID) }
-        return result
     }
 }
 

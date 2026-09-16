@@ -11,7 +11,7 @@ Open **FinancesiOS.xcodeproj** and select **FinancesiOS**. Choose a simulator an
 - Expenses, income, transfers, split postings, arithmetic amount entry, cleared status, transaction duplication and reusable templates.
 - Repeating schedules, occurrence/future edit scopes, attachments, searchable account selection and journal-specific currencies.
 - Receipt file/photo import, on-device receipt scanning, inline thumbnails and Quick Look previews.
-- Screenshot sharing opens a transaction editor directly in the share sheet. Save keeps the edited transaction and receipt together; the app imports it once and syncs when next opened. Cancel discards the unsaved share. Open Finances once after updating to populate the share editor's journal/account choices.
+- Screenshot sharing opens a transaction editor directly in the share sheet, with compact account/amount/currency rows, receipt AI autofill, and repeat controls matching the app. Save keeps the edited transaction and receipt together; the app imports it once and syncs when next opened. Cancel discards the unsaved share. Open Finances once after updating to refresh the share editor's journal/account choices and receipt AI settings.
 - Local SQLite persistence, ZIP backup/restore with receipt files, native sharing, display preferences and password lock.
 - Shared CloudKit private database, receipt assets, offline changes, explicit conflicts, account-change handling and automatic foreground/push sync.
 - Configurable Home Screen template actions, Siri/App Shortcuts, receipt Open In, and a local Apple Pay Suggestions inbox with editable drafts.

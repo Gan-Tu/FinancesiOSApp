@@ -139,7 +139,18 @@ final class SystemEntryRouter: ObservableObject {
     func takeNext() -> Request? { requests.isEmpty || !editorIDs.isEmpty ? nil : requests.removeFirst() }
 
     func updateCatalog(data: JournalData, hiddenLedgerIDs: Set<UUID>) {
-        let nextShared = SharedTransactionCatalog(data: data, hiddenLedgerIDs: hiddenLedgerIDs)
+        var nextShared = SharedTransactionCatalog(data: data, hiddenLedgerIDs: hiddenLedgerIDs)
+        if !nextShared.locked {
+            let preferences = ReceiptPreferencesStore.shared
+            let metadata = PaymentMetadataStore.shared
+            let visibleIDs = Set(nextShared.accounts.map(\.id))
+            let reason: String? = !preferences.conflicts.isEmpty || !metadata.conflicts.isEmpty
+                ? "Resolve Receipt AI settings or card conflicts in Finances first."
+                : (!preferences.ready || metadata.scope.isEmpty ? "Open Finances once to load Receipt AI settings." : nil)
+            nextShared.receiptAI = .init(settings: preferences.settings,
+                metadata: metadata.metadata.filter { visibleIDs.contains($0.key) }, accountScope: metadata.scope,
+                unavailableReason: reason)
+        }
         if let extensionReceiptInbox, nextShared != sharedCatalog {
             sharedCatalog = nextShared
             let previous = sharedCatalogWrite

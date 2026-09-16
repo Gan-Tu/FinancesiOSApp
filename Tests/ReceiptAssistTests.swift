@@ -240,6 +240,20 @@ extension ReceiptAssistTests {
         try client.restoreSession(endpoint: "https://finances.tugan.app")
         XCTAssertTrue(client.authenticated)
     }
+    func testCachedClientObservesSessionRemovedByAnotherProcess() throws {
+        let store = MemoryReceiptCredentials()
+        let endpoint = "https://finances.tugan.app"
+        try store.save(syntheticSession(), endpoint: endpoint)
+        let client = ReceiptAnalysisClient(credentialStore: store)
+        try client.restoreSession(endpoint: endpoint)
+        XCTAssertTrue(client.authenticated)
+        try store.remove(endpoint: endpoint)
+        try client.restoreSession(endpoint: endpoint)
+        XCTAssertFalse(client.authenticated)
+        try store.save(syntheticSession(), endpoint: endpoint)
+        try client.restoreSession(endpoint: endpoint)
+        XCTAssertTrue(client.authenticated)
+    }
     func testExpiredReceiptSessionIsRemovedInsteadOfRestored() throws {
         let store = MemoryReceiptCredentials()
         var value = try syntheticSession()

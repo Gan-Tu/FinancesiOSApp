@@ -13,17 +13,28 @@ struct SharedTransactionCatalog: Codable, Equatable, Sendable {
         var name: String
         var kind: Int
         var currencyID: UUID?
+        var parentID: UUID? = nil
+        var colorName: String? = nil
     }
     struct Currency: Codable, Equatable, Identifiable, Sendable {
         var id: UUID
         var journalID: UUID
         var symbol: String
+        var name: String? = nil
     }
     var journals: [Journal]
     var accounts: [Account]
     var currencies: [Currency]
     var selectedJournalID: UUID?
     var locked = false
+    var receiptAI: SharedReceiptAIContext? = nil
+}
+
+struct SharedReceiptAIContext: Codable, Equatable, Sendable {
+    var settings: ReceiptAISettings
+    var metadata: [UUID: PaymentAccountMetadata] = [:]
+    var accountScope: String = ""
+    var unavailableReason: String? = nil
 }
 
 /// Save publishes the user's complete transaction together with its receipts.
@@ -41,6 +52,7 @@ struct SharedTransaction: Codable, Equatable, Sendable {
     var note = ""
     var number = ""
     var cleared = true
+    var recurrence: RecurrenceRule? = nil
     var postings: [Posting] = []
 
     init(catalog: SharedTransactionCatalog, now: Date = Date()) {
@@ -59,9 +71,12 @@ struct SharedTransaction: Codable, Equatable, Sendable {
                     .init(accountID: expense?.id, currencyID: currency)]
     }
 
-    mutating func setAmount(_ text: String, at index: Int) {
+    mutating func setAmount(_ text: String, at index: Int, catalog: SharedTransactionCatalog? = nil) {
+        guard postings.indices.contains(index) else { return }
         postings[index].amount = text
-        if postings.count == 2, postings[0].currencyID == postings[1].currencyID,
+        if postings.count == 2,
+           let currency = catalog?.currencyID(for: postings[0], journalID: journalID) ?? postings[0].currencyID,
+           currency == (catalog?.currencyID(for: postings[1], journalID: journalID) ?? postings[1].currencyID),
            let value = AmountExpressionEvaluator.evaluate(text) {
             postings[1 - index].amount = NSDecimalNumber(decimal: -value).stringValue
         }
@@ -79,11 +94,19 @@ struct SharedTransaction: Codable, Equatable, Sendable {
               payee.utf8.count <= 8_000, note.utf8.count <= 128_000, number.utf8.count <= 4_000 else {
             throw SharedReceiptError(message: "Add at least two valid postings.")
         }
+        if let recurrence {
+            guard [.daily, .weekly, .monthly, .yearly].contains(recurrence.frequency),
+                  (1...99).contains(recurrence.intervalValue),
+                  recurrence.occurrenceCount.map({ $0 >= 1 }) ?? true,
+                  recurrence.endDate.map({ $0.timeIntervalSinceReferenceDate.isFinite && $0 >= date }) ?? true else {
+                throw SharedReceiptError(message: "Check the repeat interval and end date.")
+            }
+        }
         var total: [UUID: Decimal] = [:]
         var hasAmount = false
         for posting in postings {
             guard catalog.accounts.contains(where: { $0.id == posting.accountID && $0.journalID == journalID }),
-                  let currency = posting.currencyID,
+                  let currency = catalog.currencyID(for: posting, journalID: journalID),
                   catalog.currencies.contains(where: { $0.id == currency && $0.journalID == journalID }),
                   posting.amount.utf8.count <= 512,
                   let amount = AmountExpressionEvaluator.evaluate(posting.amount), !amount.isNaN else {
@@ -95,5 +118,12 @@ struct SharedTransaction: Codable, Equatable, Sendable {
         guard hasAmount, total.values.allSatisfy({ $0 == 0 }) else {
             throw SharedReceiptError(message: "Enter an amount and balance the postings in each currency.")
         }
+    }
+}
+
+extension SharedTransactionCatalog {
+    func currencyID(for posting: SharedTransaction.Posting, journalID: UUID?) -> UUID? {
+        posting.currencyID ?? accounts.first { $0.id == posting.accountID && $0.journalID == journalID }?.currencyID
+            ?? currencies.first { $0.journalID == journalID }?.id
     }
 }

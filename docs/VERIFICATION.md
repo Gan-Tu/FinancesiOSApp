@@ -1,5 +1,13 @@
 # Verification — September 6, 2026
 
+## Share editor parity and receipt AI (September 16, 2026)
+
+- The popup uses the main editor's form components, account colors, date presentation, repeat controls, and compact account/amount/currency layout. Currency is a secondary text menu on the same row. Amount entry keeps its minus seed, arithmetic keyboard controls, and Dynamic Type sizing.
+- Receipt analysis uses the same client, response validation, and field protection policy as the full editor. Untouched fields autofill; edited fields require explicit replacement. Changes while analysis runs are preserved. Save waits for analysis to finish. The popup uses the app's latest published model, effort, custom instructions, and card metadata, and verifies the iCloud account scope before submitting them.
+- Receipt credentials migrate into the existing shared Keychain group. Both targets have the same CloudKit container capability. Synthetic UI fixtures verified that the actual extension can read the app's shared session without exposing it in catalog files.
+- The 30 focused authentication, metadata, autofill, compatibility, and shared-save unit tests passed, including shared-session renewal/removal. Native iOS 27 checks covered single-row alignment, AI error/retry availability, autofill with edited-note protection, and saving once. The corrected autofill check passed through the actual extension using a synthetic response; this does not claim a production model call or physical-device UI test.
+- The 13-test cloud smoke selection remains unchanged and passed. Signed Release archive and App Store IPA export validation passed. Existing pending-share import, cancel behavior, current local date/time, and Cleared defaults remain in place. Shared saves still enter the journal and sync when Finances next opens.
+
 ## Direct screenshot transaction editor (September 15, 2026)
 
 - Journals uses an explicit inline navigation title. The iOS 27 native UI check verifies visible title text and a compact navigation bar; its screenshot was inspected.

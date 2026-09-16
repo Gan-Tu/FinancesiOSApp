@@ -174,10 +174,20 @@ targets:
     - path: SharedReceipts
     - path: App/PrivacyInfo.xcprivacy
     - path: Core/AmountExpressionEvaluator.swift
+    - path: Core/Models.swift
+    - path: Core/RecurrenceContinuationModel.swift
+    - path: Core/CloudKitSyncConfiguration.swift
+    - path: Core/ReceiptAssistModels.swift
+    - path: Core/ReceiptAnalysisClient.swift
+    - path: App/TransactionScheduleEditors.swift
     info:
       path: ShareExtension/Info.plist
       properties:
         CFBundleDisplayName: Add to Finances
+        FinancesCloudKitEnabled: true
+        FinancesCloudKitContainerIdentifier: iCloud.dev.gan.FinanceApp
+        FinancesCloudKitEnvironment: $(FINANCES_CLOUDKIT_ENVIRONMENT)
+        FinancesCloudKitTeamIdentifier: $(DEVELOPMENT_TEAM)
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSExtension:
@@ -190,9 +200,16 @@ targets:
       properties:
         com.apple.security.application-groups:
         - group.dev.gan.FinancesApp.iOS
+        com.apple.developer.icloud-container-identifiers:
+        - iCloud.dev.gan.FinanceApp
+        com.apple.developer.icloud-services:
+        - CloudKit
+        com.apple.developer.icloud-container-environment: $(FINANCES_CLOUDKIT_ENVIRONMENT)
     attributes:
       SystemCapabilities:
         com.apple.ApplicationGroups.iOS:
+          enabled: 1
+        com.apple.iCloud:
           enabled: 1
     settings:
       base:

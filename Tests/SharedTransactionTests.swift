@@ -131,4 +131,17 @@ final class SharedTransactionTests: XCTestCase {
         let pending = try await inbox.pendingEntries()
         XCTAssertEqual(pending.first?.transaction, draft)
     }
+
+    func testSharedRepeatControlsSurviveImportIntoTheJournal() async throws {
+        let (store, inbox, entry, catalog) = try await fixture()
+        var draft = SharedTransaction(catalog: catalog)
+        draft.setAmount("-15", at: 0)
+        draft.recurrence = RecurrenceRule(frequency: .monthly, intervalValue: 2, occurrenceCount: 3, onWorkdays: true)
+        try await inbox.saveTransaction(draft, for: entry)
+        let saved = try await inbox.pendingEntries()
+        try await SharedTransactionImport.save(XCTUnwrap(saved.first), inbox: inbox, store: store)
+        let rule = try XCTUnwrap(store.transaction(entry.id)?.recurrenceRule)
+        XCTAssertEqual(rule.frequency, .monthly); XCTAssertEqual(rule.intervalValue, 2)
+        XCTAssertEqual(rule.occurrenceCount, 3); XCTAssertTrue(rule.onWorkdays)
+    }
 }

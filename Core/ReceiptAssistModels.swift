@@ -76,7 +76,8 @@ enum AssistError: LocalizedError {
         }
     }
 }
-struct ReceiptAISettings: Codable, Equatable {
+struct ReceiptAISettings: Codable, Equatable, Sendable {
+    static let changeNotification = Notification.Name("FinancesReceiptAISettingsChanged")
     #if DEBUG
         var endpoint = "http://127.0.0.1:5176"
     #else
@@ -98,6 +99,7 @@ struct ReceiptAISettings: Codable, Equatable {
     func save() {
         if let data = try? JSONEncoder().encode(self) {
             UserDefaults.standard.set(data, forKey: "receipt-ai-settings-v1")
+            NotificationCenter.default.post(name: Self.changeNotification, object: nil)
         }
     }
 }

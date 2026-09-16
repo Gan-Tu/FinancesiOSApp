@@ -47,7 +47,17 @@ final class ShareViewController: UIViewController {
                 guard !finished, !Task.isCancelled else { try await inbox.discard(entry.id); return }
                 let urls = try await inbox.fileURLs(for: entry)
                 guard !finished, !Task.isCancelled else { try await inbox.discard(entry.id); return }
-                let editor = SharedTransactionEditor(catalog: catalog, receipts: urls, save: { [weak self] transaction in
+                let analyzer: SharedReceiptAnalyzer
+                #if DEBUG
+                if SharedReceiptStorage.usesDemoInbox {
+                    analyzer = { try await SharedReceiptAnalysis.synthetic($0, $1, $2) }
+                } else {
+                    analyzer = { try await SharedReceiptAnalysis.analyze($0, catalog: $1, receipts: $2) }
+                }
+                #else
+                analyzer = { try await SharedReceiptAnalysis.analyze($0, catalog: $1, receipts: $2) }
+                #endif
+                let editor = SharedTransactionEditor(catalog: catalog, receipts: urls, analyzeReceipt: analyzer, save: { [weak self] transaction in
                     guard let self, !self.finished, !self.saving else { throw CancellationError() }
                     self.saving = true
                     do { try await inbox.saveTransaction(transaction, for: entry) }

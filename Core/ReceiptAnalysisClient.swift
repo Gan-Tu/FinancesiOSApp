@@ -1,6 +1,7 @@
 import AuthenticationServices
 import CloudKit
 import Combine
+import CryptoKit
 import Foundation
 import PDFKit
 import Security
@@ -43,13 +44,27 @@ struct ReceiptSessionCredential: Codable {
     func remove(endpoint: String) throws
 }
 @MainActor final class ReceiptKeychainStore: ReceiptCredentialStore {
-    private let service = (Bundle.main.bundleIdentifier ?? "Finances") + ".receipt-session.v1"
-    private func query(_ endpoint: String) -> [String: Any] {
-        [
+    #if os(iOS)
+    static let defaultAccessGroup: String? = "group.dev.gan.FinancesApp.iOS"
+    private static let defaultService = "dev.gan.FinancesApp.iOS.receipt-session.v1"
+    #else
+    static let defaultAccessGroup: String? = nil
+    private static let defaultService = (Bundle.main.bundleIdentifier ?? "Finances") + ".receipt-session.v1"
+    #endif
+    private let service: String
+    private let accessGroup: String?
+    init(service: String? = nil, accessGroup: String? = ReceiptKeychainStore.defaultAccessGroup) {
+        self.service = service ?? Self.defaultService
+        self.accessGroup = accessGroup
+    }
+    private func query(_ endpoint: String, scoped: Bool = true) -> [String: Any] {
+        var value: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service, kSecAttrAccount as String: endpoint,
             kSecUseDataProtectionKeychain as String: true,
         ]
+        if scoped, let accessGroup { value[kSecAttrAccessGroup as String] = accessGroup }
+        return value
     }
     private func check(_ status: OSStatus) throws {
         guard status == errSecSuccess else {
@@ -59,15 +74,32 @@ struct ReceiptSessionCredential: Codable {
         }
     }
     func load(endpoint: String) throws -> ReceiptSessionCredential? {
-        var request = query(endpoint)
+        if let stored = try read(endpoint: endpoint, scoped: true) { return stored.value }
+        // Existing installs used the containing app's default Keychain group.
+        // Migrate only after the shared write succeeds, keeping the same device-
+        // unlocked protection and leaving credentials out of the receipt files.
+        guard accessGroup != nil, Bundle.main.bundleURL.pathExtension != "appex",
+              let legacy = try read(endpoint: endpoint, scoped: false) else { return nil }
+        try save(legacy.value, endpoint: endpoint)
+        if let group = legacy.group, group != accessGroup {
+            var old = query(endpoint, scoped: false)
+            old[kSecAttrAccessGroup as String] = group
+            let status = SecItemDelete(old as CFDictionary)
+            if status != errSecItemNotFound { try check(status) }
+        }
+        return legacy.value
+    }
+    private func read(endpoint: String, scoped: Bool) throws -> (value: ReceiptSessionCredential, group: String?)? {
+        var request = query(endpoint, scoped: scoped)
         request[kSecReturnData as String] = true
+        request[kSecReturnAttributes as String] = true
         request[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
         let status = SecItemCopyMatching(request as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
         try check(status)
-        guard let data = result as? Data else { return nil }
-        return try JSONDecoder().decode(ReceiptSessionCredential.self, from: data)
+        guard let attributes = result as? [String: Any], let data = attributes[kSecValueData as String] as? Data else { return nil }
+        return (try JSONDecoder().decode(ReceiptSessionCredential.self, from: data), attributes[kSecAttrAccessGroup as String] as? String)
     }
     func save(_ value: ReceiptSessionCredential, endpoint: String) throws {
         let data = try JSONEncoder().encode(value)
@@ -83,7 +115,7 @@ struct ReceiptSessionCredential: Codable {
         }
     }
     func remove(endpoint: String) throws {
-        let status = SecItemDelete(query(endpoint) as CFDictionary)
+        let status = SecItemDelete(query(endpoint, scoped: false) as CFDictionary)
         if status != errSecItemNotFound { try check(status) }
     }
 }
@@ -138,7 +170,8 @@ private final class ReceiptSessionObservers {
             token = ""
             authenticated = false
         }
-        if credential == nil { credential = try credentialStore.load(endpoint: endpoint) }
+        // The app and share extension can renew or remove this session independently.
+        credential = try credentialStore.load(endpoint: endpoint)
         if let credential, credential.expiresAt > Date().addingTimeInterval(60) {
             token = credential.token
             authenticated = true
@@ -183,6 +216,19 @@ private final class ReceiptSessionObservers {
             let state = try await ASAuthorizationAppleIDProvider().credentialState(forUserID: user)
             guard generation == stamp else { throw CancellationError() }
             if state == .revoked || state == .notFound { invalidateSession() }
+        }
+    }
+    func validateSharedAccountScope(_ expected: String) async throws {
+        guard !expected.isEmpty else { return }
+        guard let config = CloudKitSyncConfiguration.availableConfiguration() else {
+            throw AssistError.message("Receipt AI needs the signed Finances build with iCloud enabled.")
+        }
+        let user = try await CKContainer(identifier: config.containerIdentifier).userRecordID()
+        try Task.checkCancellation()
+        let key = "\(config.containerIdentifier):\(config.environment):\(user.recordName)"
+        let actual = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
+        guard actual == expected else {
+            throw AssistError.message("Your iCloud account changed. Open Finances to refresh its accounts before analyzing receipts.")
         }
     }
     private func connectCloudKit(endpoint: String) async throws -> Bool {

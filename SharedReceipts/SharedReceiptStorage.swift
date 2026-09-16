@@ -17,5 +17,9 @@ enum SharedReceiptStorage {
         get { UserDefaults(suiteName: groupIdentifier)?.bool(forKey: "nativeShareDemo") ?? false }
         set { UserDefaults(suiteName: groupIdentifier)?.set(newValue, forKey: "nativeShareDemo") }
     }
+    static var demoAIBehavior: String {
+        get { UserDefaults(suiteName: groupIdentifier)?.string(forKey: "nativeShareAIBehavior") ?? "disabled" }
+        set { UserDefaults(suiteName: groupIdentifier)?.set(newValue, forKey: "nativeShareAIBehavior") }
+    }
     #endif
 }

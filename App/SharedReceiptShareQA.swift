@@ -16,10 +16,16 @@ struct SharedReceiptShareQA: View {
         .padding().background(.regularMaterial)
         .task {
             await SystemEntryRouter.shared.waitForCatalogUpdates()
+            if SharedReceiptStorage.demoAIBehavior != "disabled" {
+                try? ReceiptKeychainStore().save(SharedReceiptAnalysis.syntheticCredential(), endpoint: SharedReceiptAnalysis.syntheticEndpoint)
+            }
             ready = true
         }
         .sheet(isPresented: $sharing, onDismiss: {
-            Task { await SystemEntryRouter.shared.restoreSharedReceipts(store: store) }
+            Task {
+                await SystemEntryRouter.shared.restoreSharedReceipts(store: store)
+                try? ReceiptKeychainStore().remove(endpoint: SharedReceiptAnalysis.syntheticEndpoint)
+            }
         }) { InMemoryReceiptShare() }
     }
 }

@@ -24,6 +24,10 @@ share_entitlements = plistlib.loads((root / 'ShareExtension/FinancesShare.entitl
 group = ['group.dev.gan.FinancesApp.iOS']
 assert entitlements['com.apple.security.application-groups'] == group
 assert share_entitlements['com.apple.security.application-groups'] == group
+assert share_entitlements['com.apple.developer.icloud-container-identifiers'] == entitlements['com.apple.developer.icloud-container-identifiers']
+assert share_entitlements['com.apple.developer.icloud-services'] == ['CloudKit']
+assert share_info['FinancesCloudKitEnabled'] is True
+assert share_info['FinancesCloudKitContainerIdentifier'] == info['FinancesCloudKitContainerIdentifier']
 assert share_info['NSExtension']['NSExtensionPointIdentifier'] == 'com.apple.share-services'
 assert 'public.image' in share_info['NSExtension']['NSExtensionAttributes']['NSExtensionActivationRule']
 assert 'FinancesShareExtension.appex in Embed Foundation Extensions' in project
@@ -58,7 +62,7 @@ assert all(item.get('skipped') == 'NO' and item.find('SelectedTests') is None an
 for key in ['NSCameraUsageDescription', 'NSPhotoLibraryUsageDescription']:
     assert info.get(key)
 assert (root / 'App/PrivacyInfo.xcprivacy').is_file()
-assert 'FinancesJournal_v1' in (root / 'Core/CloudKitSyncService.swift').read_text()
+assert 'FinancesJournal_v1' in (root / 'Core/CloudKitSyncConfiguration.swift').read_text()
 for file in root.rglob('*'):
     if any(part in {'.git', 'build', 'DerivedData', '.build'} for part in file.parts) or not file.is_file():
         continue

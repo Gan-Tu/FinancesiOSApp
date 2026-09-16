@@ -35,6 +35,8 @@ private final class FinancesMobileLaunchState: ObservableObject {
         #if DEBUG
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
             SharedReceiptStorage.usesDemoInbox = CommandLine.arguments.contains("--demo") && CommandLine.arguments.contains("--demo-native-share")
+            SharedReceiptStorage.demoAIBehavior = SharedReceiptStorage.usesDemoInbox && CommandLine.arguments.contains("--demo-share-ai")
+                ? (CommandLine.arguments.contains("--demo-share-ai-failure") ? "failure" : "success") : "disabled"
         }
         if CommandLine.arguments.contains("--demo"), CommandLine.arguments.contains("--reset-demo") {
             try? FileManager.default.removeItem(at: SystemIntegrationStorage.directory)
@@ -74,8 +76,30 @@ private struct FinancesMobileNormalContent: View {
             .task {
                 await store.prepareAfterInitialRender()
                 await SystemEntryRouter.shared.restoreSharedReceipts(store: store)
+                if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil,
+                   !CommandLine.arguments.contains("--demo"), !CommandLine.arguments.contains(where: { $0.hasPrefix("--qa-data-directory") }) {
+                    try? ReceiptAnalysisClient.shared.restoreSession(endpoint: ReceiptAISettings.load().endpoint)
+                    await ReceiptPreferencesStore.shared.refresh()
+                    await PaymentMetadataStore.shared.refresh()
+                    store.refreshSystemIntegrations()
+                }
+            }
+            .onReceive(ReceiptPreferencesStore.shared.$value) { _ in
+                Task { @MainActor in store.refreshSystemIntegrations() }
+            }
+            .onReceive(ReceiptPreferencesStore.shared.$conflicts) { _ in
+                Task { @MainActor in store.refreshSystemIntegrations() }
+            }
+            .onReceive(PaymentMetadataStore.shared.$metadata) { _ in
+                Task { @MainActor in store.refreshSystemIntegrations() }
+            }
+            .onReceive(PaymentMetadataStore.shared.$conflicts) { _ in
+                Task { @MainActor in store.refreshSystemIntegrations() }
             }
             .onChange(of: hiddenJournalIDs) { store.refreshSystemIntegrations() }
+            .onReceive(NotificationCenter.default.publisher(for: ReceiptAISettings.changeNotification)) { _ in
+                store.refreshSystemIntegrations()
+            }
             .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
                 store.refreshAppIconBadge()
                 store.refreshDailyBalancesIfNeeded()

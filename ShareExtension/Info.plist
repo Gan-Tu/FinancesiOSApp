@@ -20,6 +20,14 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>FinancesCloudKitContainerIdentifier</key>
+	<string>iCloud.dev.gan.FinanceApp</string>
+	<key>FinancesCloudKitEnabled</key>
+	<true/>
+	<key>FinancesCloudKitEnvironment</key>
+	<string>$(FINANCES_CLOUDKIT_ENVIRONMENT)</string>
+	<key>FinancesCloudKitTeamIdentifier</key>
+	<string>$(DEVELOPMENT_TEAM)</string>
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionAttributes</key>
