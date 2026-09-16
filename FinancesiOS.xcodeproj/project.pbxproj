@@ -144,6 +144,7 @@
 		F8D0AA09C658F35D062219D1 /* NavigationResponsivenessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E302EC22E12DF6266717D3AD /* NavigationResponsivenessTests.swift */; };
 		F9CCF306FA300658BB68C985 /* AccountBalanceAndImportedEditTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 988910F6DE7BDDC34DBE79AF /* AccountBalanceAndImportedEditTests.swift */; };
 		FEA6EBE300DF099E80F3FD4F /* MobileAppIconBadgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BD050102B46386BC742EF56 /* MobileAppIconBadgeTests.swift */; };
+		FECF234AF552F734A9DE995C /* NativeUIAssertions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50C3677039E1727CB931A78D /* NativeUIAssertions.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -223,6 +224,7 @@
 		4EB1C17FDE952A8B6F910D73 /* SQLiteWriteTestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLiteWriteTestSupport.swift; sourceTree = "<group>"; };
 		5018D37072200F5B7461FD36 /* LargeJournalInteractionBenchmarks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LargeJournalInteractionBenchmarks.swift; sourceTree = "<group>"; };
 		509E9E442AB0B75E7E4BAF74 /* SharedReceiptEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedReceiptEntry.swift; sourceTree = "<group>"; };
+		50C3677039E1727CB931A78D /* NativeUIAssertions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeUIAssertions.swift; sourceTree = "<group>"; };
 		533FBA322CFD436D522E8F21 /* ReceiptImportAndThumbnailTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReceiptImportAndThumbnailTests.swift; sourceTree = "<group>"; };
 		598381BF3B9CDB3140C13284 /* RecurrenceContinuationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecurrenceContinuationTests.swift; sourceTree = "<group>"; };
 		5E15976A76173D589BD92A69 /* NativeShareUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeShareUITests.swift; sourceTree = "<group>"; };
@@ -407,6 +409,7 @@
 				5018D37072200F5B7461FD36 /* LargeJournalInteractionBenchmarks.swift */,
 				CCBDFF5A7BA12D148161FF03 /* LayoutAuditTests.swift */,
 				5E15976A76173D589BD92A69 /* NativeShareUITests.swift */,
+				50C3677039E1727CB931A78D /* NativeUIAssertions.swift */,
 				E302EC22E12DF6266717D3AD /* NavigationResponsivenessTests.swift */,
 				F3F02023F256143383A56756 /* PhysicalSyncAcceptanceTests.swift */,
 				D4793209158CCE46D49E89DA /* ReceiptAssistInteractionTests.swift */,
@@ -733,6 +736,7 @@
 				15816CBF8157A84732B317CE /* LargeJournalInteractionBenchmarks.swift in Sources */,
 				36A1CBF3A99B7A6D1A5BAB86 /* LayoutAuditTests.swift in Sources */,
 				66B7B03AFAE6098BA3C33677 /* NativeShareUITests.swift in Sources */,
+				FECF234AF552F734A9DE995C /* NativeUIAssertions.swift in Sources */,
 				F8D0AA09C658F35D062219D1 /* NavigationResponsivenessTests.swift in Sources */,
 				59E732B1F05F91F8CCAD4907 /* PhysicalSyncAcceptanceTests.swift in Sources */,
 				9D8763CD408C677A7AE81A2F /* ReceiptAssistInteractionTests.swift in Sources */,

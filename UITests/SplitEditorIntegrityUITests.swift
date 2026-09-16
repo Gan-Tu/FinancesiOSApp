@@ -33,7 +33,12 @@ final class SplitEditorIntegrityUITests: XCTestCase {
     }
     private func open(_ app: XCUIApplication, row: XCUIElement) {
         for _ in 0..<6 where !row.isHittable { app.swipeUp() }
-        XCTAssertTrue(row.waitForExistence(timeout: 5)); XCTAssertTrue(row.isHittable); row.tap()
+        XCTAssertTrue(row.waitForExistence(timeout: 5)); XCTAssertTrue(row.isHittable)
+        // Tap the visible note, not the geometric center of a partially
+        // clipped row near the register toolbar.
+        let note = row.staticTexts["transaction-title"]
+        if note.isHittable { note.tap() }
+        else { row.coordinate(withNormalizedOffset: CGVector(dx: 0.18, dy: 0.3)).tap() }
         XCTAssertTrue(app.navigationBars["Details"].waitForExistence(timeout: 5))
         app.navigationBars["Details"].buttons["Edit"].tap()
         XCTAssertTrue(app.navigationBars["Edit Transaction"].waitForExistence(timeout: 5))

@@ -108,3 +108,12 @@ The unsigned iOS Release archive succeeded at `build/TrackingRemoval.xcarchive`.
 - A signed Release archive passed. The app and extension provisioning profiles both include `group.dev.gan.FinancesApp.iOS`.
 - Use a signed simulator build for native share QA (`CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-`); unsigned simulator installations cannot access App Group storage. Provider/unit tests use isolated temporary inboxes. `--demo-native-share` routes both processes to a separate demo inbox in Debug only.
 - This verifies the Simulator flow and archive; physical-device/TestFlight delivery is a separate check.
+
+
+## iOS 27 UI-test compatibility (September 15, 2026)
+
+The nine UI tests reported by Xcode Cloud for `f23eba6` passed unchanged on iOS 26.5; six of those failures reproduced on iOS 27.0 (24A434), using an iPhone 17 Pro Max simulator. The corrected nine-test group passed on iOS 27 with zero failures before push. The chart-persistence and journal-cancellation regressions also passed on iOS 26.5; neither run skipped any tests.
+
+Confirmation tests now use a visible Cancel action or the system popover-dismissal region. Duplicate counts come from the journal's complete transaction count; search assertions use the result total and visit lazily created rows. Chart checks wait for the visible Show/Hide label (iOS 27 does not expose the custom toolbar accessibility value) and still check the chart and its preference after relaunch. Split-edit checks tap the visible row title and retain all exact posting, currency, amount, and identity assertions.
+
+`AGENTS.md` requires failed tests and related regressions to pass before pushing, with unavailable validation reported as a blocker rather than treated as success.

@@ -57,7 +57,8 @@ final class RegisterInteractionTests: XCTestCase {
         app.buttons["All"].tap()
         let originals = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Weekly groceries"))
         XCTAssertTrue(originals.firstMatch.waitForExistence(timeout: 5))
-        let originalCount = originals.count
+        let originalCount = try journalTransactionCountReturningToRegister(app)
+        XCTAssertTrue(originals.firstMatch.waitForExistence(timeout: 5))
         originals.firstMatch.swipeLeft(); app.buttons["Duplicate"].tap()
         let chooser = app.alerts.firstMatch
         XCTAssertTrue(chooser.waitForExistence(timeout: 5))
@@ -67,7 +68,8 @@ final class RegisterInteractionTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["New Transaction"].waitForExistence(timeout: 5))
         XCTAssertTrue((app.buttons["transaction-date-toggle"].value as? String)?.contains("Today") == true)
         app.navigationBars["New Transaction"].buttons["Cancel"].tap()
-        XCTAssertEqual(originals.count, originalCount, "Cancel must leave the original without creating a copy")
+        XCTAssertEqual(try journalTransactionCountReturningToRegister(app), originalCount, "Cancel must leave the journal without creating a copy")
+        XCTAssertTrue(originals.firstMatch.waitForExistence(timeout: 5))
         originals.firstMatch.tap()
         XCTAssertTrue(app.navigationBars["Details"].waitForExistence(timeout: 5))
         app.buttons["Transaction Actions"].tap(); app.buttons["Duplicate"].tap()
@@ -84,7 +86,7 @@ final class RegisterInteractionTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Weekly groceries"].exists, "The original stays unchanged")
         app.navigationBars["Details"].buttons.element(boundBy: 0).tap()
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Weekly groceries edited copy")).firstMatch.waitForExistence(timeout: 5))
-        XCTAssertEqual(originals.count, originalCount + 1)
+        XCTAssertEqual(try journalTransactionCountReturningToRegister(app), originalCount + 1, "Saving a duplicate must add exactly one transaction")
     }
 
     func testRecurringDeletionOffersSingleAndFutureChoices() throws {
@@ -98,7 +100,7 @@ final class RegisterInteractionTests: XCTestCase {
         XCTAssertTrue(app.buttons["Delete All Future Transactions"].exists)
         XCTAssertTrue(row.exists, "Swipe Delete must not remove the row before confirmation")
         XCTAssertGreaterThan(row.frame.height, 0)
-        app.sheets.buttons["Cancel"].tap()
+        dismissFinanceConfirmation(in: app, action: "Delete Only This Transaction")
         XCTAssertEqual(rows.count, 3, "Cancelling must preserve the complete series")
         row.swipeLeft(); app.buttons["Delete"].tap()
         capture(app, "Recurring deletion choices")
@@ -122,7 +124,7 @@ final class RegisterInteractionTests: XCTestCase {
         XCTAssertTrue(app.sheets.buttons["Delete Only This Transaction"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons[rowID].exists)
         XCTAssertGreaterThan(app.buttons[rowID].frame.height, 0)
-        app.sheets.buttons["Cancel"].tap()
+        dismissFinanceConfirmation(in: app, action: "Delete Only This Transaction")
         XCTAssertTrue(app.buttons[rowID].isHittable)
         app.buttons[rowID].swipeLeft(); app.buttons["Delete"].tap()
         app.sheets.buttons["Delete Only This Transaction"].tap()
@@ -153,7 +155,7 @@ final class RegisterInteractionTests: XCTestCase {
         XCTAssertTrue(delete.waitForExistence(timeout: 5))
         delete.tap()
         XCTAssertTrue(app.sheets.buttons["Delete Travel"].waitForExistence(timeout: 5))
-        app.sheets.buttons["Cancel"].tap()
+        dismissFinanceConfirmation(in: app, action: "Delete Travel")
         XCTAssertTrue(delete.exists, "Cancel must leave the journal in the editable list")
         delete.tap(); app.sheets.buttons["Delete Travel"].tap()
         let removed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: delete)
@@ -177,6 +179,23 @@ final class RegisterInteractionTests: XCTestCase {
         XCTAssertEqual(app.buttons["Delete Transaction"].frame.midX, app.frame.midX, accuracy: 2)
         XCTAssertTrue(app.buttons["Transaction Actions"].exists)
         capture(app, "Reference-aligned Details and receipt")
+    }
+
+    private func journalTransactionCountReturningToRegister(_ app: XCUIApplication) throws -> Int {
+        app.navigationBars["All"].buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.navigationBars["Personal"].waitForExistence(timeout: 5))
+        app.navigationBars["Personal"].buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.navigationBars["Journals"].waitForExistence(timeout: 5))
+        let journal = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Personal,")).firstMatch
+        XCTAssertTrue(journal.waitForExistence(timeout: 5))
+        let label = journal.label
+        let pattern = try NSRegularExpression(pattern: "([0-9,]+) Transactions")
+        let match = try XCTUnwrap(pattern.firstMatch(in: label, range: NSRange(label.startIndex..., in: label)))
+        let range = try XCTUnwrap(Range(match.range(at: 1), in: label))
+        let count = try XCTUnwrap(Int(label[range].replacingOccurrences(of: ",", with: "")))
+        journal.tap(); app.buttons["All"].tap()
+        XCTAssertTrue(app.navigationBars["All"].waitForExistence(timeout: 5))
+        return count
     }
 
     private func capture(_ app: XCUIApplication, _ name: String) {

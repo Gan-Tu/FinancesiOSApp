@@ -94,7 +94,7 @@ final class JournalVisibilityAndSearchUITests: XCTestCase {
         let earliestID = earliest.identifier
         earliest.swipeLeft(); app.buttons["Delete"].tap()
         XCTAssertTrue(app.sheets.buttons["Delete Only This Transaction"].waitForExistence(timeout: 5))
-        app.sheets.buttons["Cancel"].tap()
+        dismissFinanceConfirmation(in: app, action: "Delete Only This Transaction")
         XCTAssertEqual(rows.count, 3)
         app.buttons[earliestID].swipeLeft(); app.buttons["Delete"].tap()
         app.sheets.buttons["Delete Only This Transaction"].tap()
@@ -212,7 +212,9 @@ final class JournalVisibilityAndSearchUITests: XCTestCase {
         let toggle = app.buttons["search-accounts-toggle"]
         XCTAssertTrue(app.buttons["Show All 5 Accounts"].waitForExistence(timeout: 5))
         XCTAssertEqual(accounts.count, 3)
-        XCTAssertEqual(previews.count, 3)
+        let resultCount = app.staticTexts["quick-search-result-count"]
+        let threeResults = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "3 results"), object: resultCount)
+        XCTAssertEqual(XCTWaiter.wait(for: [threeResults], timeout: 5), .completed)
         XCTAssertTrue(previews.firstMatch.isHittable, "Collapsed accounts should leave room for transactions")
         XCTAssertFalse(previews.matching(NSPredicate(format: "label CONTAINS %@", "Unrelated entry")).firstMatch.exists)
         let image = XCTAttachment(screenshot: app.screenshot()); image.name = "Three account matches and relevant transactions"; image.lifetime = .keepAlways; add(image)
@@ -234,9 +236,10 @@ final class JournalVisibilityAndSearchUITests: XCTestCase {
         app.buttons["search-filter-anywhere"].tap()
         XCTAssertTrue(app.navigationBars["Search: son"].waitForExistence(timeout: 5))
         let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "register-row-"))
-        let matched = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 3"), object: rows)
-        XCTAssertEqual(XCTWaiter.wait(for: [matched], timeout: 5), .completed)
-        XCTAssertFalse(rows.matching(NSPredicate(format: "label CONTAINS %@", "Unrelated entry")).firstMatch.exists)
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5))
+        let matches = collectFinanceRegisterRows(in: app)
+        XCTAssertEqual(matches.count, 3)
+        XCTAssertFalse(matches.values.contains { $0.contains("Unrelated entry") })
     }
 
 }
