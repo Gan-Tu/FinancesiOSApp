@@ -118,7 +118,10 @@ final class CaptureSuggestionTests: XCTestCase {
         let source = directory.appendingPathComponent("Edited Screenshot.png")
         try Data([137, 80, 78, 71]).write(to: source)
         let entry = try await inbox.stage([source])
+        let handoff = try SharedReceiptHandoff(receiptID: entry.id).write(in: directory.appendingPathComponent("handoff"))
         await router.restoreSharedReceipts(store: store)
+        try await router.openReceiptHandoff(handoff)
+        try await router.openReceiptHandoff(handoff)
         guard case .incoming(let request) = router.takeNext()?.destination else { return XCTFail("Foreground must discover a new extension receipt") }
         let before = Date()
         let draft = IncomingTransactionDraftFactory.make(request: request, store: store)
@@ -142,6 +145,8 @@ final class CaptureSuggestionTests: XCTestCase {
         }
         let remaining = try await inbox.pendingEntries()
         XCTAssertTrue(remaining.isEmpty, "Cancel must discard the extension batch, not the local inbox")
+        try await router.openReceiptHandoff(handoff)
+        XCTAssertNil(router.takeNext(), "A late Open In callback must not reopen a finished share")
         try await store.flushLocalChangesAsync()
     }
 

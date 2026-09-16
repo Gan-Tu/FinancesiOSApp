@@ -29,11 +29,13 @@ The open actions can be assigned using the system's Shortcuts Action button and 
 
 Immediately after taking a screenshot, open its preview, crop or annotate it, then tap Share and choose **Finances** (under More if needed; some share sheets label the extension **Add to Finances**). This native share extension accepts the edited image directly; saving to Photos or Files first is unnecessary.
 
-Wait for **Ready in Finances**, tap Done, then open Finances to review the new transaction. iOS keeps the share extension in the screenshot editor; the receipt waits safely until Finances is opened. An already-open Finances app also checks for new receipts when it returns to the foreground. Sharing images/PDFs from other apps supports the same extension, while the existing **Finances** Open In action continues to open file-backed receipts directly.
+The extension displays the receipt in an overlay and offers the system's **Open In** menu. Choose **Finances** to continue in its transaction editor. If you close that menu to inspect the screenshot, tap **Open Finances** in the preview to show it again. **Cancel** discards the share without creating a transaction. You can discard the original screenshot after sharing; the transaction's attachment has its own copy.
+
+The handoff keeps the same receipt identity when Finances opens, so foreground recovery and Open In cannot create two drafts. Sharing images/PDFs from other apps supports the same extension, while the existing **Finances** Open In action continues to open file-backed receipts directly.
 
 The **New Transaction with Receipts** Shortcuts action also remains available for a custom receipt shortcut.
 
-The app copies shared files into a pending local batch. If another editor or the app lock is active, that batch waits without replacing the unfinished editor. Cancel removes the batch; pending batches survive an interrupted launch. After a successful save, their stable identity prevents another copy if the app exits before cleanup.
+The app copies shared files into a local batch. Share-extension previews become pending transactions only after Open In delivers the handoff. If another editor or the app lock is active, that batch waits without replacing the unfinished editor. Cancel removes the batch; pending batches survive an interrupted launch. After a successful save, their stable identity prevents another copy if the app exits before cleanup.
 
 ## Apple Pay Suggestions
 

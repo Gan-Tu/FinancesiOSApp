@@ -76,6 +76,7 @@
 		87CAD232623A284FA659E5E7 /* MobileAppIconBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 120177F093E73C7D0481DAC2 /* MobileAppIconBadge.swift */; };
 		8C1F4DC2A63ED79025C6C8C4 /* AsyncInteractionLatencyBenchmarks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75D95CF8AF0F4F1544A5FF86 /* AsyncInteractionLatencyBenchmarks.swift */; };
 		8F977A0B4310795829EBD5A5 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 5AFE5B861B06CC23242E7B41 /* ZIPFoundation */; };
+		92B860EC44A334A864FF9546 /* SharedReceiptHandoff.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02C18AA6F4DD1210C5FF2880 /* SharedReceiptHandoff.swift */; };
 		9527ECB173193231DCBF4951 /* TemplateInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E28F07BC584CD2DDD3519C8B /* TemplateInteractionTests.swift */; };
 		95BA27FC95A9553680156841 /* SQLiteCloudKitSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD57D4F7D32FD381F1F005DC /* SQLiteCloudKitSyncTests.swift */; };
 		98BA9271C60694888714887D /* CloudKitReceiptRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F186776890C6D747654EC41 /* CloudKitReceiptRecoveryTests.swift */; };
@@ -114,6 +115,7 @@
 		C9D53A33CB74648F452FE833 /* HistoricalTextSuggestionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC2E67AF8B95C25562C34B4C /* HistoricalTextSuggestionUITests.swift */; };
 		CDB2D0623B24482BE4F1F85C /* RegisterPresentationCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A6B648C527863512ED49DC3 /* RegisterPresentationCacheTests.swift */; };
 		CDFC63A70AD0F8531788681F /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = C3FE4DE9349447E40CA9A063 /* PrivacyInfo.xcprivacy */; };
+		CF0373090D44D093FDF9A41B /* SharedReceiptHandoff.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02C18AA6F4DD1210C5FF2880 /* SharedReceiptHandoff.swift */; };
 		D12E71819F222A16D4E6212B /* UUIDOrdering.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFF22E2378EFDE6FD5DD2E12 /* UUIDOrdering.swift */; };
 		D2B215C0D218B139A0889E91 /* RecurrenceContinuationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 598381BF3B9CDB3140C13284 /* RecurrenceContinuationTests.swift */; };
 		D378B2778FC3DED9882AB200 /* JournalVisibilityAndSearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 052313D4E1BFC2F0632D22F0 /* JournalVisibilityAndSearchTests.swift */; };
@@ -183,6 +185,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		02C18AA6F4DD1210C5FF2880 /* SharedReceiptHandoff.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedReceiptHandoff.swift; sourceTree = "<group>"; };
 		051025E46B7B73A862F5B102 /* FinancesiOSTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = FinancesiOSTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		052313D4E1BFC2F0632D22F0 /* JournalVisibilityAndSearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JournalVisibilityAndSearchTests.swift; sourceTree = "<group>"; };
 		08BF3F396D78651E71F52BE0 /* CloudKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CloudKit.framework; path = System/Library/Frameworks/CloudKit.framework; sourceTree = SDKROOT; };
@@ -534,6 +537,7 @@
 		F84E81BCB9DC8DAC3DFC45B6 /* SharedReceipts */ = {
 			isa = PBXGroup;
 			children = (
+				02C18AA6F4DD1210C5FF2880 /* SharedReceiptHandoff.swift */,
 				1B85FD7FA47F57535C951DA5 /* SharedReceiptInbox.swift */,
 				E0554736B64DAB8F4C2A1003 /* SharedReceiptProviderLoader.swift */,
 				F50689027807EE02F17BF6A3 /* SharedReceiptStorage.swift */,
@@ -796,6 +800,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				98D0253E54F5E52239219687 /* ShareViewController.swift in Sources */,
+				92B860EC44A334A864FF9546 /* SharedReceiptHandoff.swift in Sources */,
 				77E4421279340621856C828F /* SharedReceiptInbox.swift in Sources */,
 				84312A060DEBFBABF6993569 /* SharedReceiptProviderLoader.swift in Sources */,
 				B8EC2ABB7ACD59194A3DCBB7 /* SharedReceiptStorage.swift in Sources */,
@@ -861,6 +866,7 @@
 				7907CF83EEDD0EFD77BFCBA2 /* SQLiteJournalStore.swift in Sources */,
 				13EA8A72F52A9E6777F855D7 /* SettingsView.swift in Sources */,
 				A21F2EBC03D7A7B4A71FCBF4 /* SharedReceiptEntry.swift in Sources */,
+				CF0373090D44D093FDF9A41B /* SharedReceiptHandoff.swift in Sources */,
 				59F797B37F6396DB3ACA8BD4 /* SharedReceiptInbox.swift in Sources */,
 				D50DDDC2C72DD244D3D9CE18 /* SharedReceiptProviderLoader.swift in Sources */,
 				9FE4DA7BF66F6095C24E9398 /* SharedReceiptStorage.swift in Sources */,

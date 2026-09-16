@@ -59,9 +59,25 @@ final class SystemEntryRouter: ObservableObject {
     }
     func openReceipts(_ urls: [URL]) {
         Task {
-            do { try await openSharedReceipt(receiptInbox.stage(urls)) }
+            do {
+                for url in urls where SharedReceiptHandoff.recognizes(url) {
+                    try await openReceiptHandoff(url)
+                }
+                let receipts = urls.filter { !SharedReceiptHandoff.recognizes($0) }
+                if !receipts.isEmpty { try await openSharedReceipt(receiptInbox.stage(receipts)) }
+            }
             catch { self.error = ValidationError(message: "Could not open receipt: \(error.localizedDescription)") }
         }
+    }
+
+    func openReceiptHandoff(_ url: URL) async throws {
+        guard let inbox = extensionReceiptInbox else {
+            throw SharedReceiptError(message: "Shared receipts are unavailable. Share the screenshot again.")
+        }
+        guard let entry = try await inbox.entry(fromHandoff: url, ignoring: queuedReceiptIDs) else { return }
+        // Foreground recovery and Open In can both deliver the same batch.
+        // They must converge on one editor and one save identity.
+        try await openSharedReceipt(entry, from: inbox)
     }
     func openSharedReceipt(_ entry: SharedReceiptEntry, from source: SharedReceiptInbox? = nil) async throws {
         guard queuedReceiptIDs.insert(entry.id).inserted else { return }

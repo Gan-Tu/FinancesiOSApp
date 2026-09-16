@@ -65,6 +65,11 @@ targets:
           LSItemContentTypes:
           - public.image
           - com.adobe.pdf
+        - CFBundleTypeName: Finances Receipt
+          CFBundleTypeRole: Editor
+          LSHandlerRank: Owner
+          LSItemContentTypes:
+          - dev.gan.FinancesApp.receipt-handoff
         NSCameraUsageDescription: Attach receipt photos to transactions.
         NSPhotoLibraryUsageDescription: Attach receipt images to transactions.
         UIApplicationSceneManifest:
@@ -86,6 +91,13 @@ targets:
         - UIInterfaceOrientationLandscapeLeft
         - UIInterfaceOrientationLandscapeRight
         UTExportedTypeDeclarations:
+        - UTTypeIdentifier: dev.gan.FinancesApp.receipt-handoff
+          UTTypeDescription: Finances Receipt
+          UTTypeConformsTo:
+          - public.data
+          UTTypeTagSpecification:
+            public.filename-extension:
+            - finances-receipt
         - UTTypeIdentifier: dev.gan.FinancesApp.backup
           UTTypeDescription: Finances Mobile Backup
           UTTypeConformsTo:

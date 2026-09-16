@@ -26,6 +26,11 @@ assert share_entitlements['com.apple.security.application-groups'] == group
 assert share_info['NSExtension']['NSExtensionPointIdentifier'] == 'com.apple.share-services'
 assert 'public.image' in share_info['NSExtension']['NSExtensionAttributes']['NSExtensionActivationRule']
 assert 'FinancesShareExtension.appex in Embed Foundation Extensions' in project
+handoff_type = 'dev.gan.FinancesApp.receipt-handoff'
+handoff_declaration = next(item for item in info['UTExportedTypeDeclarations'] if item['UTTypeIdentifier'] == handoff_type)
+assert handoff_declaration['UTTypeConformsTo'] == ['public.data']
+assert handoff_declaration['UTTypeTagSpecification']['public.filename-extension'] == ['finances-receipt']
+assert any(handoff_type in item['LSItemContentTypes'] and item['LSHandlerRank'] == 'Owner' for item in info['CFBundleDocumentTypes'])
 for key in ['NSCameraUsageDescription', 'NSPhotoLibraryUsageDescription']:
     assert info.get(key)
 assert (root / 'App/PrivacyInfo.xcprivacy').is_file()

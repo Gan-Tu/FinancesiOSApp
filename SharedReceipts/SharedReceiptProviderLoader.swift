@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 @MainActor
 enum SharedReceiptProviderLoader {
     static func stage(_ providers: [NSItemProvider], in inbox: SharedReceiptInbox,
-                      progress: Progress = Progress(totalUnitCount: 1)) async throws -> SharedReceiptEntry {
+                      progress: Progress = Progress(totalUnitCount: 1), awaitsHandoff: Bool = false) async throws -> SharedReceiptEntry {
         guard !providers.isEmpty, providers.count <= SharedReceiptInbox.maximumFiles else {
             throw SharedReceiptError(message: "Choose between 1 and \(SharedReceiptInbox.maximumFiles) images or PDF files.")
         }
@@ -40,7 +40,7 @@ enum SharedReceiptProviderLoader {
             }
         }
         try checkCancellation(progress)
-        return try await inbox.stage(urls, progress: progress)
+        return try await inbox.stage(urls, progress: progress, awaitsHandoff: awaitsHandoff)
     }
 
     private static func file(_ provider: NSItemProvider, type: UTType, name: String?, directory: URL) async throws -> URL {

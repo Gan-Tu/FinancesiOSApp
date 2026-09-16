@@ -92,11 +92,22 @@ final class NativeShareUITests: XCTestCase {
     }
 
     private func completeExtensionShare(in host: XCUIApplication, returnTo app: XCUIApplication) {
-        if host.staticTexts["Ready in Finances"].waitForExistence(timeout: 10) {
-            host.buttons["receipt-share-done"].tap()
-            app.activate()
+        if app.wait(for: .runningForeground, timeout: 2) { return }
+        let open = host.buttons["receipt-share-open-finances"]
+        XCTAssertTrue(open.waitForExistence(timeout: 10), "Sharing must present the receipt preview")
+        if open.isHittable { open.tap() }
+        let labels = ["Finances", "Open in Finances", "Copy to Finances"]
+        func destination() -> XCUIElement? {
+            let predicate = NSPredicate(format: "label IN %@", labels)
+            return (host.cells.matching(predicate).allElementsBoundByIndex
+                + host.buttons.matching(predicate).allElementsBoundByIndex).first(where: \.isHittable)
         }
-        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
+        let targetAppeared = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            destination() != nil || app.state == .runningForeground
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [targetAppeared], timeout: 10), .completed)
+        if app.state != .runningForeground { destination()?.tap() }
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10), "Open In must bring Finances forward without manually activating the app")
     }
 
     private func receipt(in app: XCUIApplication, extension suffix: String) -> XCUIElement {

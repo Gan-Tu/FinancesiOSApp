@@ -15,6 +15,9 @@ struct SharedReceiptEntry: Identifiable, Codable, Equatable, Sendable {
     let id: UUID
     let createdAt: Date
     let files: [File]
+    /// Share-sheet previews are private until the user chooses Open In. Nil
+    /// preserves recovery of batches created by older versions and Shortcuts.
+    var awaitsHandoff: Bool? = nil
 }
 
 /// The actor owns file-provider coordination and bounded copying off the main
@@ -44,8 +47,8 @@ actor SharedReceiptInbox {
         self.access = access
     }
 
-    func stage(_ urls: [URL], progress: Progress = Progress(totalUnitCount: 1)) async throws -> SharedReceiptEntry {
-        try stageSources(urls.map(Source.url), progress: progress)
+    func stage(_ urls: [URL], progress: Progress = Progress(totalUnitCount: 1), awaitsHandoff: Bool = false) async throws -> SharedReceiptEntry {
+        try stageSources(urls.map(Source.url), progress: progress, awaitsHandoff: awaitsHandoff)
     }
 
     func stage(intentFiles: [IntentFile], progress: Progress = Progress(totalUnitCount: 1)) async throws -> SharedReceiptEntry {
@@ -62,6 +65,7 @@ actor SharedReceiptInbox {
             if child.lastPathComponent.hasPrefix(".preparing-") { continue }
             guard let id = UUID(uuidString: child.lastPathComponent) else { continue }
             let entry = try readEntry(id)
+            guard entry.awaitsHandoff != true else { continue }
             _ = try fileURLs(for: entry)
             entries.append(entry)
         }
@@ -85,6 +89,20 @@ actor SharedReceiptInbox {
         }
     }
 
+    func entry(fromHandoff url: URL, ignoring receiptIDs: Set<UUID> = []) throws -> SharedReceiptEntry? {
+        let handoff = try SharedReceiptHandoff.read(url)
+        guard !receiptIDs.contains(handoff.receiptID) else { return nil }
+        var entry = try readEntry(handoff.receiptID)
+        _ = try fileURLs(for: entry)
+        if entry.awaitsHandoff == true {
+            entry.awaitsHandoff = nil
+            let manifest = directory.appendingPathComponent(entry.id.uuidString).appendingPathComponent("entry.json")
+            try JSONEncoder().encode(entry).write(to: manifest, options: .atomic)
+            try synchronize(manifest)
+        }
+        return entry
+    }
+
     /// Called only after receipt copies belong to an editor session, or after
     /// the user cancels the incoming request. Other pending batches are retained.
     func discard(_ id: UUID) throws {
@@ -95,7 +113,7 @@ actor SharedReceiptInbox {
         try FileManager.default.removeItem(at: batch)
     }
 
-    private func stageSources(_ sources: [Source], progress: Progress) throws -> SharedReceiptEntry {
+    private func stageSources(_ sources: [Source], progress: Progress, awaitsHandoff: Bool = false) throws -> SharedReceiptEntry {
         try checkCancellation(progress)
         guard !sources.isEmpty, sources.count <= Self.maximumFiles else {
             throw SharedReceiptError(message: "Choose between 1 and \(Self.maximumFiles) images or PDF files for one transaction.")
@@ -141,7 +159,7 @@ actor SharedReceiptInbox {
             progress.completedUnitCount += 1
         }
         try checkCancellation(progress)
-        let entry = SharedReceiptEntry(id: id, createdAt: Date(), files: files)
+        let entry = SharedReceiptEntry(id: id, createdAt: Date(), files: files, awaitsHandoff: awaitsHandoff ? true : nil)
         let manifest = partial.appendingPathComponent("entry.json")
         try JSONEncoder().encode(entry).write(to: manifest, options: .atomic)
         try synchronize(manifest)

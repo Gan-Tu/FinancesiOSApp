@@ -157,6 +157,65 @@ final class SharedReceiptEntryTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: source), Data("original".utf8))
     }
 
+    func testOpenInHandoffResolvesOriginalBatchWithoutCopyingOrPublishingAnother() async throws {
+        let root = try directory()
+        let source = try source("Screenshot.png", bytes: Data([137, 80, 78, 71]), in: root)
+        let inbox = SharedReceiptInbox(directory: root.appendingPathComponent("inbox"))
+        let entry = try await inbox.stage([source], awaitsHandoff: true)
+        let beforeHandoff = try await inbox.pendingEntries()
+        XCTAssertTrue(beforeHandoff.isEmpty, "Previewing a screenshot must not open a draft before Open In")
+        let handoff = SharedReceiptHandoff(receiptID: entry.id)
+        let url = try handoff.write(in: root.appendingPathComponent("open-in"))
+        XCTAssertEqual(try SharedReceiptHandoff.read(url), handoff)
+        let resolved = try await inbox.entry(fromHandoff: url)
+        XCTAssertEqual(resolved?.id, entry.id)
+        XCTAssertEqual(resolved?.files, entry.files)
+        XCTAssertNil(resolved?.awaitsHandoff)
+        let entries = try await inbox.pendingEntries()
+        XCTAssertEqual(entries.map(\.id), [entry.id])
+        XCTAssertFalse(try String(contentsOf: url, encoding: .utf8).contains(root.path))
+        let router = SystemEntryRouter(receiptInbox: SharedReceiptInbox(directory: root.appendingPathComponent("local")), extensionReceiptInbox: inbox)
+        try await router.openReceiptHandoff(url)
+        guard case .incoming(let request) = router.takeNext()?.destination else { return XCTFail("Open In must open the transaction editor") }
+        XCTAssertEqual(request.sharedReceiptID, entry.id)
+        XCTAssertEqual(request.id, entry.id)
+        XCTAssertEqual(request.receiptURLs.count, 1)
+        try await router.openReceiptHandoff(url)
+        XCTAssertNil(router.takeNext())
+    }
+
+    func testOpenInHandoffRejectsUnknownBatchAndMalformedDocuments() async throws {
+        let root = try directory()
+        let inbox = SharedReceiptInbox(directory: root.appendingPathComponent("inbox"))
+        let url = try SharedReceiptHandoff(receiptID: UUID()).write(in: root.appendingPathComponent("open-in"))
+        do { _ = try await inbox.entry(fromHandoff: url); XCTFail("Unknown receipt IDs must not create a draft") } catch {}
+        for bytes in [Data("{\"version\":2,\"receiptID\":\"\(UUID().uuidString)\"}".utf8), Data(repeating: 1, count: 1_025), Data()] {
+            try bytes.write(to: url)
+            XCTAssertThrowsError(try SharedReceiptHandoff.read(url))
+        }
+        let valid = try SharedReceiptHandoff(receiptID: UUID()).write(in: root.appendingPathComponent("valid"))
+        let link = root.appendingPathComponent("Linked.finances-receipt")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: valid)
+        XCTAssertThrowsError(try SharedReceiptHandoff.read(link))
+        XCTAssertFalse(SharedReceiptHandoff.recognizes(URL(string: "https://example.com/receipt.finances-receipt")!))
+    }
+
+    func testCancelledSharePreviewCannotBecomeARecoveredTransaction() async throws {
+        let root = try directory()
+        let source = try source("Screenshot.png", bytes: Data([137, 80, 78, 71]), in: root)
+        let inbox = SharedReceiptInbox(directory: root.appendingPathComponent("inbox"))
+        let existing = try await inbox.stage([source])
+        let preview = try await inbox.stage([source], awaitsHandoff: true)
+        let reopened = SharedReceiptInbox(directory: root.appendingPathComponent("inbox"))
+        let pendingBeforeCancel = try await reopened.pendingEntries()
+        XCTAssertEqual(pendingBeforeCancel, [existing], "A terminated preview must not appear as a new transaction")
+        let url = try SharedReceiptHandoff(receiptID: preview.id).write(in: root.appendingPathComponent("open-in"))
+        try await inbox.discard(preview.id)
+        do { _ = try await reopened.entry(fromHandoff: url); XCTFail("A cancelled preview must not reopen") } catch {}
+        let pendingAfterCancel = try await reopened.pendingEntries()
+        XCTAssertEqual(pendingAfterCancel, [existing])
+    }
+
     private func directory() throws -> URL {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("SharedReceiptTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
