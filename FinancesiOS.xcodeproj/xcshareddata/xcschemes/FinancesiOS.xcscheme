@@ -85,7 +85,7 @@
                   Identifier = "SharedReceiptProviderTests/testUnsavedEditedScreenshotBytesSurviveProviderAndInboxRecreation()">
                </Test>
                <Test
-                  Identifier = "SharedReceiptEntryTests/testOpenInHandoffResolvesOriginalBatchWithoutCopyingOrPublishingAnother()">
+                  Identifier = "SharedTransactionTests/testSavePersistsCompleteDraftAndReceiptThenImportsExactlyOnce()">
                </Test>
                <Test
                   Identifier = "SharedReceiptEntryTests/testCancelledSharePreviewCannotBecomeARecoveredTransaction()">

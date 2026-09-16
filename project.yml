@@ -173,6 +173,7 @@ targets:
       - FinancesShare.entitlements
     - path: SharedReceipts
     - path: App/PrivacyInfo.xcprivacy
+    - path: Core/AmountExpressionEvaluator.swift
     info:
       path: ShareExtension/Info.plist
       properties:
@@ -249,7 +250,7 @@ schemes:
         - IncomingCaptureSaveTests/testStaleCaptureCannotOverwriteCommittedNotesAmountsOrReceiptsEvenAfterReopen()
         - IncomingCaptureSaveTests/testConcurrentCaptureEditorsDoNotReportTwoSuccessfulSaves()
         - SharedReceiptProviderTests/testUnsavedEditedScreenshotBytesSurviveProviderAndInboxRecreation()
-        - SharedReceiptEntryTests/testOpenInHandoffResolvesOriginalBatchWithoutCopyingOrPublishingAnother()
+        - SharedTransactionTests/testSavePersistsCompleteDraftAndReceiptThenImportsExactlyOnce()
         - SharedReceiptEntryTests/testCancelledSharePreviewCannotBecomeARecoveredTransaction()
   FinancesiOSFullTests:
     build:

@@ -3,6 +3,7 @@ import SwiftUI
 @MainActor
 enum IncomingTransactionDraftFactory {
     static func make(request: IncomingTransactionRequest, store: MobileLedgerStore, visibility: JournalVisibility? = nil) -> TransactionDraft {
+        if let transaction = request.sharedTransaction { return transaction.draft(operationID: request.id) }
         let hidden = visibility ?? JournalVisibility(rawValue: MobileDisplayPreferences.defaults.string(forKey: JournalVisibility.preferenceKey) ?? "")
         let journals = hidden.visible(in: store.orderedLedgers)
         let requestedID = request.suggestion?.journalID ?? store.selectedLedgerID

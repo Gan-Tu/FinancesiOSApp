@@ -1,5 +1,15 @@
 # Verification — September 6, 2026
 
+## Direct screenshot transaction editor (September 15, 2026)
+
+- Journals uses an explicit inline navigation title. The iOS 27 native UI check verifies visible title text and a compact navigation bar; its screenshot was inspected.
+- The share extension embeds a transaction editor immediately after loading the incoming image/PDF. The automatic Quick Look preview and second Open In menu are removed. Receipt preview is optional inside the editor.
+- Save atomically publishes the edited transaction and its existing receipt batch. The main app imports it once on foreground/unlock using the stable batch ID. Cancel leaves no recoverable transaction. A changed/deleted account preserves the saved edits and receipts for review instead of silently retargeting them.
+- Seven new isolated unit tests passed, covering default local date/Cleared, exact-once import and receipt bytes, cancellation, invalid postings, catalog changes, hidden/locked journals, and recovery after account deletion. The existing 17 inbox/provider regressions also passed.
+- Native iOS 27 tests exercised the real share extension with an in-memory UIImage never saved to Photos or Files: direct editor, amount entry, Save, no second menu/editor, one imported transaction, and Cancel without posting. The amount test caught and fixed an initial-minus caret bug. A simulator accessibility stall required rerunning the final Cancel check separately; it passed. These are Simulator checks, not physical-device screenshot Markup verification.
+- The exact 13-test cloud smoke selection passed. Its legacy Open In test is replaced by the saved transaction/receipt import regression; the full local scheme retains the complete suites. Optional prepared Photos/Files QA now expects editing inside the source app.
+- Open Finances once after updating to publish journal/account choices. Extension saves are durable offline and enter the journal/iCloud on the next app open. The share editor provides manual transaction fields; the full app retains receipt AI, recurring controls, and password-protected journal editing.
+
 ## Completed
 
 - **135 tests passed in one complete run** on iPhone 17 Pro Max / iOS 26.5 with Xcode 26.6 (117 domain/protocol tests and 18 UI flows). After the final cash-flow correction, all 11 focused parity/register tests passed, including two new refund/currency/category tests. Result bundles end in `04-53-13-902Z_pid89554_af645276.xcresult` and `05-02-46-504Z_pid89554_8c2b7ffa.xcresult`.

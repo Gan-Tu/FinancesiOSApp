@@ -15,9 +15,10 @@ struct SharedReceiptEntry: Identifiable, Codable, Equatable, Sendable {
     let id: UUID
     let createdAt: Date
     let files: [File]
-    /// Share-sheet previews are private until the user chooses Open In. Nil
-    /// preserves recovery of batches created by older versions and Shortcuts.
+    /// An extension draft stays private until Save. Also recognizes unfinished
+    /// Open In batches from older versions; nil preserves legacy recovery.
     var awaitsHandoff: Bool? = nil
+    var transaction: SharedTransaction? = nil
 }
 
 /// The actor owns file-provider coordination and bounded copying off the main
@@ -45,6 +46,37 @@ actor SharedReceiptInbox {
     init(directory: URL, access: Access = Access()) {
         self.directory = directory.standardizedFileURL
         self.access = access
+    }
+
+    func publishCatalog(_ catalog: SharedTransactionCatalog) throws {
+        try makeDirectory(directory)
+        let url = directory.appendingPathComponent("catalog.json")
+        try JSONEncoder().encode(catalog).write(to: url, options: .atomic)
+        try synchronize(url)
+    }
+
+    func catalog() throws -> SharedTransactionCatalog {
+        let url = directory.appendingPathComponent("catalog.json")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw SharedReceiptError(message: "Open Finances once to make your journals available here, then share again.")
+        }
+        guard let size = try regularFileValues(url).fileSize, size <= 4 * 1024 * 1024 else { throw invalidEntry }
+        return try JSONDecoder().decode(SharedTransactionCatalog.self, from: Data(contentsOf: url))
+    }
+
+    func saveTransaction(_ transaction: SharedTransaction, for entry: SharedReceiptEntry) throws {
+        try transaction.validate(in: catalog())
+        var saved = try readEntry(entry.id)
+        if saved.transaction == transaction { return } // Safe retry after a completed publication.
+        guard saved == entry, saved.awaitsHandoff == true, saved.transaction == nil else { throw invalidEntry }
+        _ = try fileURLs(for: saved)
+        saved.transaction = transaction
+        saved.awaitsHandoff = nil
+        let manifest = directory.appendingPathComponent(entry.id.uuidString).appendingPathComponent("entry.json")
+        let encoded = try JSONEncoder().encode(saved)
+        guard encoded.count <= 256 * 1024 else { throw SharedReceiptError(message: "Shorten the transaction notes before saving.") }
+        try encoded.write(to: manifest, options: .atomic)
+        try synchronize(manifest)
     }
 
     func stage(_ urls: [URL], progress: Progress = Progress(totalUnitCount: 1), awaitsHandoff: Bool = false) async throws -> SharedReceiptEntry {

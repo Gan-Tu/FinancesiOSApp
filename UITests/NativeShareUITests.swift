@@ -6,9 +6,11 @@ import XCTest
 final class NativeShareUITests: XCTestCase {
     func testPhotoShareOpensEditableDraftAndCancelDoesNotPost() throws {
         let app = try launch()
-        sharePhoto(returnTo: app)
-        assertReceipt(in: app, extension: ".PNG")
-        cancelAndCheckBaseline(app)
+        let photos = sharePhoto(returnTo: app)
+        assertReceipt(in: photos, extension: ".PNG")
+        photos.buttons["receipt-share-cancel"].tap()
+        app.activate()
+        checkBaseline(app)
     }
 
     func testPDFShareOpensEditableDraftAndCancelDoesNotPost() throws {
@@ -33,22 +35,21 @@ final class NativeShareUITests: XCTestCase {
         let finances = shareCell(in: files)
         XCTAssertTrue(finances.waitForExistence(timeout: 5)); finances.tap()
         completeExtensionShare(in: files, returnTo: app)
-        assertReceipt(in: app, extension: ".pdf")
-        cancelAndCheckBaseline(app)
+        assertReceipt(in: files, extension: ".pdf")
+        files.buttons["receipt-share-cancel"].tap()
+        app.activate()
+        checkBaseline(app)
     }
 
-    func testPhotoShareWaitsForExistingDraftWithoutReplacingIt() throws {
+    func testPhotoShareKeepsExistingAppDraftAndCancelDoesNotReplaceIt() throws {
         let app = try launch(wallet: true)
-        let payee = app.textFields["Payee"]
-        XCTAssertEqual(payee.value as? String, "SYNTHETIC Wallet Store")
-        sharePhoto(returnTo: app)
-        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
-        XCTAssertEqual(payee.value as? String, "SYNTHETIC Wallet Store", "An incoming share must preserve the existing draft")
-        XCTAssertFalse(receipt(in: app, extension: ".PNG").exists)
-        capture(app, "Existing Wallet draft preserved after share")
+        let photos = sharePhoto(returnTo: app)
+        assertReceipt(in: photos, extension: ".PNG")
+        photos.buttons["receipt-share-cancel"].tap()
+        app.activate()
+        XCTAssertEqual(app.textFields["Payee"].value as? String, "SYNTHETIC Wallet Store")
         app.navigationBars["New Transaction"].buttons["Cancel"].tap()
-        assertReceipt(in: app, extension: ".PNG")
-        cancelAndCheckBaseline(app)
+        checkBaseline(app)
     }
 
     private func launch(wallet: Bool = false) throws -> XCUIApplication {
@@ -67,7 +68,7 @@ final class NativeShareUITests: XCTestCase {
         app.cells.matching(NSPredicate(format: "identifier == %@ AND label == %@", "shareCell", "Finances")).firstMatch
     }
 
-    private func sharePhoto(returnTo app: XCUIApplication) {
+    private func sharePhoto(returnTo app: XCUIApplication) -> XCUIApplication {
         let photos = XCUIApplication(bundleIdentifier: "com.apple.mobileslideshow")
         photos.activate()
         XCTAssertTrue(photos.wait(for: .runningForeground, timeout: 5))
@@ -89,31 +90,19 @@ final class NativeShareUITests: XCTestCase {
         let finances = shareCell(in: photos)
         XCTAssertTrue(finances.waitForExistence(timeout: 5)); finances.tap()
         completeExtensionShare(in: photos, returnTo: app)
+        return photos
     }
 
     private func completeExtensionShare(in host: XCUIApplication, returnTo app: XCUIApplication) {
-        if app.wait(for: .runningForeground, timeout: 2) { return }
-        let open = host.buttons["receipt-share-open-finances"]
-        XCTAssertTrue(open.waitForExistence(timeout: 10), "Sharing must present the receipt preview")
-        if open.isHittable { open.tap() }
-        let labels = ["Finances", "Open in Finances", "Copy to Finances"]
-        func destination() -> XCUIElement? {
-            let predicate = NSPredicate(format: "label IN %@", labels)
-            return (host.cells.matching(predicate).allElementsBoundByIndex
-                + host.buttons.matching(predicate).allElementsBoundByIndex).first(where: \.isHittable)
-        }
-        let targetAppeared = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            destination() != nil || app.state == .runningForeground
-        }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [targetAppeared], timeout: 10), .completed)
-        if app.state != .runningForeground { destination()?.tap() }
-        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10), "Open In must bring Finances forward without manually activating the app")
+        XCTAssertTrue(host.buttons["receipt-share-save"].waitForExistence(timeout: 10), "Sharing must open the transaction editor directly")
+        XCTAssertFalse(host.buttons["receipt-share-open-finances"].exists)
+        XCTAssertFalse(app.state == .runningForeground, "The extension should stay in the source app")
     }
 
     private func receipt(in app: XCUIApplication, extension suffix: String) -> XCUIElement {
         // Photos adds a numeric suffix when exporting the same image again.
-        app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@ AND label ENDSWITH[c] %@",
-            "editor-receipt-preview-", "SYNTHETIC-Receipt", suffix)).firstMatch
+        app.buttons.matching(NSPredicate(format: "identifier == %@ AND label BEGINSWITH %@ AND label ENDSWITH[c] %@",
+            "shared-transaction-receipt", "SYNTHETIC-Receipt", suffix)).firstMatch
     }
 
     private func assertReceipt(in app: XCUIApplication, extension suffix: String) {
@@ -123,7 +112,6 @@ final class NativeShareUITests: XCTestCase {
         for _ in 0..<4 where !attachment.isHittable { app.swipeUp() }
         capture(app, "Editable incoming receipt draft \(suffix)")
         XCTAssertTrue(attachment.waitForExistence(timeout: 10))
-        XCTAssertEqual(app.buttons["receipt-import-picker"].value as? String, "Ready")
         XCTAssertFalse(app.navigationBars["New Transaction"].buttons["Save"].isEnabled)
         XCTAssertEqual(app.switches["Cleared"].value as? String, "1")
         attachment.tap()
@@ -138,8 +126,7 @@ final class NativeShareUITests: XCTestCase {
         XCTAssertTrue(attachment.exists, "Closing the preview must preserve the unsaved receipt")
     }
 
-    private func cancelAndCheckBaseline(_ app: XCUIApplication) {
-        app.navigationBars["New Transaction"].buttons["Cancel"].tap()
+    private func checkBaseline(_ app: XCUIApplication) {
         XCTAssertTrue(app.navigationBars["Journals"].waitForExistence(timeout: 5))
         let alpha = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "SYNTHETIC Alpha,")).firstMatch
         XCTAssertTrue(alpha.label.contains("2 Transactions"), "Cancelling a receipt draft must not post it")

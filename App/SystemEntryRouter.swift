@@ -6,6 +6,7 @@ struct IncomingTransactionRequest: Identifiable {
     var suggestion: CaptureSuggestion?
     var receiptURLs: [URL] = []
     var sharedReceiptID: UUID?
+    var sharedTransaction: SharedTransaction?
 }
 
 @MainActor
@@ -21,6 +22,8 @@ final class SystemEntryRouter: ObservableObject {
     @Published var error: ValidationError?
     private var catalog: SystemIntegrationCatalog?
     private var catalogWrite: Task<Void, Never>?
+    private var sharedCatalog: SharedTransactionCatalog?
+    private var sharedCatalogWrite: Task<Void, Never>?
     private var queuedReceiptIDs: Set<UUID> = []
     private var restoringReceipts = false
     private var receiptSources: [UUID: SharedReceiptInbox] = [:]
@@ -85,11 +88,11 @@ final class SystemEntryRouter: ObservableObject {
         do {
             let urls = try await inbox.fileURLs(for: entry)
             receiptSources[entry.id] = inbox
-            requests.append(.init(destination: .incoming(.init(id: entry.id, receiptURLs: urls, sharedReceiptID: entry.id))))
+            requests.append(.init(destination: .incoming(.init(id: entry.id, receiptURLs: urls, sharedReceiptID: entry.id, sharedTransaction: entry.transaction))))
         } catch { queuedReceiptIDs.remove(entry.id); throw error }
     }
     func restoreSharedReceipts(store: MobileLedgerStore) async {
-        guard !restoringReceipts else { return }
+        guard !restoringReceipts, store.isUnlocked, !store.requiresJournalRecovery else { return }
         restoringReceipts = true
         defer { restoringReceipts = false }
         // A share extension can publish while this app is suspended. Rescan on
@@ -100,7 +103,15 @@ final class SystemEntryRouter: ObservableObject {
                 let committed = await store.durablyStoredTransactionIDs(Set(entries.map(\.id)))
                 for entry in entries {
                     if committed.contains(entry.id) { try await inbox.discard(entry.id) }
-                    else { try await openSharedReceipt(entry, from: inbox) }
+                    else if entry.transaction != nil {
+                        do { try await SharedTransactionImport.save(entry, inbox: inbox, store: store) }
+                        catch {
+                            // If an account was removed while the extension was
+                            // open, preserve all edits and receipts for review.
+                            self.error = ValidationError(message: "Review a saved shared transaction: \(error.localizedDescription)")
+                            try await openSharedReceipt(entry, from: inbox)
+                        }
+                    } else { try await openSharedReceipt(entry, from: inbox) }
                 }
             } catch { self.error = ValidationError(message: "Could not restore pending receipts: \(error.localizedDescription)") }
         }
@@ -128,6 +139,16 @@ final class SystemEntryRouter: ObservableObject {
     func takeNext() -> Request? { requests.isEmpty || !editorIDs.isEmpty ? nil : requests.removeFirst() }
 
     func updateCatalog(data: JournalData, hiddenLedgerIDs: Set<UUID>) {
+        let nextShared = SharedTransactionCatalog(data: data, hiddenLedgerIDs: hiddenLedgerIDs)
+        if let extensionReceiptInbox, nextShared != sharedCatalog {
+            sharedCatalog = nextShared
+            let previous = sharedCatalogWrite
+            sharedCatalogWrite = Task {
+                await previous?.value
+                do { try await extensionReceiptInbox.publishCatalog(nextShared) }
+                catch { if sharedCatalog == nextShared { sharedCatalog = nil } }
+            }
+        }
         let journals = data.ledgers.filter { !hiddenLedgerIDs.contains($0.id) }.sorted { $0.listIndex < $1.listIndex }
         let names = Dictionary(uniqueKeysWithValues: journals.map { ($0.id, $0.name) })
         let next = SystemIntegrationCatalog(journals: journals.map { .init(id: $0.id, name: $0.name) },
@@ -149,7 +170,7 @@ final class SystemEntryRouter: ObservableObject {
         }
     }
 
-    func waitForCatalogUpdates() async { await catalogWrite?.value }
+    func waitForCatalogUpdates() async { await catalogWrite?.value; await sharedCatalogWrite?.value }
 
     func reloadSuggestions(store: MobileLedgerStore) async {
         suggestionsRevision &+= 1

@@ -147,6 +147,7 @@ struct JournalsHomeScreen: View {
             }
         }
         .navigationTitle("Journals")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button("New Journal", systemImage: "plus") { route = .journalNew }

@@ -90,6 +90,13 @@ struct AppShellView: View {
             }
         }
         .tint(.blue)
+        #if DEBUG
+        .overlay(alignment: .bottom) {
+            if CommandLine.arguments.contains("--demo"), CommandLine.arguments.contains("--demo-share-sheet") {
+                SharedReceiptShareQA()
+            }
+        }
+        #endif
         .sheet(item: $route, onDismiss: {
             if let id = activeSharedReceiptID { systemEntries.finishSharedReceipt(id); activeSharedReceiptID = nil }
             handleSystemEntry()
@@ -135,7 +142,10 @@ struct AppShellView: View {
         .onChange(of: systemEntries.editorRevision) { handleSystemEntry() }
         .onChange(of: store.validationError?.id) { _, id in if id == nil { handleSystemEntry() } }
         .onChange(of: systemEntries.error?.id) { _, id in if id == nil { handleSystemEntry() } }
-        .onChange(of: store.isUnlocked) { handleSystemEntry() }
+        .onChange(of: store.isUnlocked) { _, unlocked in
+            handleSystemEntry()
+            if unlocked { Task { await systemEntries.restoreSharedReceipts(store: store) } }
+        }
         .onChange(of: showingNewTransactionDialog) { if !showingNewTransactionDialog { handleSystemEntry() } }
         .onReceive(NotificationCenter.default.publisher(for: .financesSuggestionsChanged)) { _ in
             Task { await systemEntries.reloadSuggestions(store: store) }
