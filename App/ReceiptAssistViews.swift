@@ -153,7 +153,8 @@ struct CardMetadataDocument: FileDocument {
 }
 struct ReceiptAISettingsView: View {
     let accounts: [Account]
-    @State private var settings = ReceiptAISettings.load()
+    @State private var settings = ReceiptPreferencesStore.shared.settings
+    @ObservedObject private var preferences = ReceiptPreferencesStore.shared
     @ObservedObject private var client = ReceiptAnalysisClient.shared
     @ObservedObject private var metadata = PaymentMetadataStore.shared
     @State private var error = ""
@@ -179,18 +180,34 @@ struct ReceiptAISettingsView: View {
                         ).tag($0)
                     }
                 }
-                .labelsHidden()
+                .labelsHidden().disabled(!preferences.ready || !preferences.conflicts.isEmpty)
             }
             HStack {
                 Text("Reasoning effort")
                 Spacer()
                 Picker("Reasoning effort", selection: $settings.effort) {
                     ForEach(settings.efforts, id: \.self) { Text($0.capitalized).tag($0) }
-                }.labelsHidden()
+                }.labelsHidden().disabled(!preferences.ready || !preferences.conflicts.isEmpty)
             }
             Text("Additional instructions").font(.subheadline)
             TextEditor(text: $settings.instructions).frame(minHeight: 70, maxHeight: 100).overlay(
                 RoundedRectangle(cornerRadius: 4).stroke(.quaternary))
+                .disabled(!preferences.ready || !preferences.conflicts.isEmpty)
+            Text(preferences.error.isEmpty ? (preferences.pending ? "Saved on this device. Waiting to sync with iCloud." : preferences.ready ? "Synced with iCloud across Mac, iPhone, and web." : "Connecting receipt settings to iCloud…") : preferences.error)
+                .font(.caption).foregroundStyle(.secondary)
+            if !preferences.conflicts.isEmpty {
+                Text("Changed on this device and in iCloud: " + preferences.conflicts.joined(separator: ", ")).font(.caption)
+                Text("This device: \(preferences.value.model) · \(preferences.value.effort)").font(.caption)
+                Text(preferences.value.instructions.isEmpty ? "No custom instructions" : preferences.value.instructions).font(.caption)
+                Text("iCloud: \(preferences.remote.model) · \(preferences.remote.effort)").font(.caption)
+                Text(preferences.remote.instructions.isEmpty ? "No custom instructions" : preferences.remote.instructions).font(.caption)
+                HStack {
+                    Button("Keep This Device") { resolveSettings(keepLocal: true) }
+                    Button("Use iCloud") { resolveSettings(keepLocal: false) }
+                }
+                Text("Edits to other settings are preserved.").font(.caption)
+            }
+            Button("Refresh Receipt Settings") { Task { await preferences.refresh() } }
             Text("API server").font(.subheadline)
             TextField("API server URL", text: $settings.endpoint).textFieldStyle(.roundedBorder)
                 .autocorrectionDisabled()
@@ -233,10 +250,19 @@ struct ReceiptAISettingsView: View {
                     metadata.scope.isEmpty || metadata.busy)
             }
         }
-        .onChange(of: settings) { _, value in
+        .onChange(of: settings) { previous, value in
             if !value.efforts.contains(value.effort) { settings.effort = "medium" }
             settings.save()
+            do {
+                if ReceiptPreferences(settings) != preferences.value {
+                    try preferences.edit(settings, expected: ReceiptPreferences(previous))
+                }
+            } catch { self.error = error.localizedDescription }
         }
+        .onReceive(preferences.$value) { value in
+            settings.model = value.model; settings.effort = value.effort; settings.instructions = value.instructions
+        }
+        .task { await preferences.refresh() }
         .task(id: settings.endpoint) {
             try? await Task.sleep(for: .milliseconds(400))
             if !Task.isCancelled { await client.prepareSignIn(endpoint: settings.endpoint) }
@@ -261,6 +287,11 @@ struct ReceiptAISettingsView: View {
             }
         }
     }
+    private func resolveSettings(keepLocal: Bool) {
+        do { try preferences.resolve(keepLocal: keepLocal, expectedLocal: preferences.value, expectedRemote: preferences.remote) }
+        catch { self.error = error.localizedDescription }
+    }
+
 }
 struct ReceiptAnalysisPanel: View {
     @Binding var draft: TransactionDraft
@@ -412,6 +443,7 @@ struct ReceiptAnalysisPanel: View {
             defer { if analysisGeneration == generation { busy = false } }
             do {
                 await metadata.refresh()
+                await ReceiptPreferencesStore.shared.refresh()
                 try Task.checkCancellation()
                 guard !metadata.scope.isEmpty, !metadata.busy, metadata.error.isEmpty,
                     metadata.conflicts.isEmpty
@@ -419,7 +451,7 @@ struct ReceiptAnalysisPanel: View {
                 let result = try await ReceiptAnalysisClient.shared.analyze(
                     draft: baseline, ledgerID: ledgerID, accounts: accounts, commodities: commodities,
                     metadata: metadata.metadata,
-                    assets: assets.map { ($0, attachmentURL($0)) }, settings: .load())
+                    assets: assets.map { ($0, attachmentURL($0)) }, settings: ReceiptPreferencesStore.shared.settings)
                 try Task.checkCancellation()
                 guard draft.ledgerID == baseline.ledgerID,
                     assets.allSatisfy({ asset in draft.attachments.contains(asset) })
