@@ -374,7 +374,10 @@ private struct SectionActionHeader: View {
 
     var body: some View {
         HStack {
-            Text(title.uppercased())
+            Text(title)
+                .font(.headline)
+                .foregroundStyle(.primary)
+                .accessibilityAddTraits(.isHeader)
             Spacer()
             Button { showingActions = true } label: {
                 Image(systemName: "ellipsis").font(.body.weight(.semibold)).foregroundStyle(.tint)
