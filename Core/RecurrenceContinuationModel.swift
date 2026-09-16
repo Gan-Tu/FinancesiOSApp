@@ -40,4 +40,3 @@ struct RecurrenceContinuation: Codable, Hashable {
         }
     }
 }
-

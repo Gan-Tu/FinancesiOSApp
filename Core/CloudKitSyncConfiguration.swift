@@ -78,4 +78,3 @@ struct CloudKitSyncRecord: Equatable, Sendable, Codable {
     var assetMIMEType: String? = nil
     var key: String { "\(recordType):\(recordID)" }
 }
-

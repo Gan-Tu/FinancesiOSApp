@@ -60,4 +60,3 @@ struct FinanceFormLabel: View {
         }.contentShape(Rectangle())
     }
 }
-
