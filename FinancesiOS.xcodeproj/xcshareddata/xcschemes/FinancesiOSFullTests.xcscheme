@@ -41,8 +41,7 @@
       <Testables>
          <TestableReference
             skipped = "NO"
-            parallelizable = "NO"
-            useTestSelectionWhitelist = "YES">
+            parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "54CF1C406DAAFD2B452E9193"
@@ -50,47 +49,17 @@
                BlueprintName = "FinancesiOSTests"
                ReferencedContainer = "container:FinancesiOS.xcodeproj">
             </BuildableReference>
-            <SelectedTests>
-               <Test
-                  Identifier = "AmountExpressionEvaluatorTests/testBasicArithmetic()">
-               </Test>
-               <Test
-                  Identifier = "AmountExpressionEvaluatorTests/testDecimalPrecisionBeatsDouble()">
-               </Test>
-               <Test
-                  Identifier = "AccountBalanceAndImportedEditTests/testMovingFundedAccountUpdatesBothParentBalances()">
-               </Test>
-               <Test
-                  Identifier = "AccountBalanceAndImportedEditTests/testZeroSplitPreservationStillRejectsNewAndEntirelyZeroPostings()">
-               </Test>
-               <Test
-                  Identifier = "SplitTransactionPersistenceTests/testExistingThreeLegSplitSurvivesUnchangedEquivalentAndNoteOnlySaves()">
-               </Test>
-               <Test
-                  Identifier = "RecurringTransactionEditPolicyTests/testEveryAnchorScheduleControlAndDateRequiresExplicitSeriesConfirmation()">
-               </Test>
-               <Test
-                  Identifier = "BackupArchiveTests/testZIPRoundTripPreservesMetadataAndSharedReceiptBytes()">
-               </Test>
-               <Test
-                  Identifier = "ReceiptAssistTests/testReceiptSessionKeychainRoundTrip()">
-               </Test>
-               <Test
-                  Identifier = "IncomingCaptureSaveTests/testStaleCaptureCannotOverwriteCommittedNotesAmountsOrReceiptsEvenAfterReopen()">
-               </Test>
-               <Test
-                  Identifier = "IncomingCaptureSaveTests/testConcurrentCaptureEditorsDoNotReportTwoSuccessfulSaves()">
-               </Test>
-               <Test
-                  Identifier = "SharedReceiptProviderTests/testUnsavedEditedScreenshotBytesSurviveProviderAndInboxRecreation()">
-               </Test>
-               <Test
-                  Identifier = "SharedReceiptEntryTests/testOpenInHandoffResolvesOriginalBatchWithoutCopyingOrPublishingAnother()">
-               </Test>
-               <Test
-                  Identifier = "SharedReceiptEntryTests/testCancelledSharePreviewCannotBecomeARecoveredTransaction()">
-               </Test>
-            </SelectedTests>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "3D77B9171A903EB9D4F80899"
+               BuildableName = "FinancesiOSUITests.xctest"
+               BlueprintName = "FinancesiOSUITests"
+               ReferencedContainer = "container:FinancesiOS.xcodeproj">
+            </BuildableReference>
          </TestableReference>
       </Testables>
       <CommandLineArguments>

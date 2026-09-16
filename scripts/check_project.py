@@ -5,6 +5,7 @@ import plistlib
 import re
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 
 root = Path(__file__).resolve().parents[1]
 subprocess.run([sys.executable, str(root / 'scripts/check_xcode_capabilities.py')], check=True)
@@ -31,6 +32,29 @@ handoff_declaration = next(item for item in info['UTExportedTypeDeclarations'] i
 assert handoff_declaration['UTTypeConformsTo'] == ['public.data']
 assert handoff_declaration['UTTypeTagSpecification']['public.filename-extension'] == ['finances-receipt']
 assert any(handoff_type in item['LSItemContentTypes'] and item['LSHandlerRank'] == 'Owner' for item in info['CFBundleDocumentTypes'])
+
+# A missing selection silently runs every test in the target, so guard the
+# cloud budget as well as preserving the unrestricted local suite.
+schemes = root / 'FinancesiOS.xcodeproj/xcshareddata/xcschemes'
+smoke = ET.parse(schemes / 'FinancesiOS.xcscheme').getroot()
+smoke_targets = smoke.findall('./TestAction/Testables/TestableReference')
+assert len(smoke_targets) == 1
+assert smoke_targets[0].find('BuildableReference').get('BlueprintName') == 'FinancesiOSTests'
+assert smoke_targets[0].get('skipped') == 'NO'
+assert smoke_targets[0].get('useTestSelectionWhitelist') == 'YES'
+selected = [item.get('Identifier') for item in smoke_targets[0].findall('./SelectedTests/Test')]
+assert 1 <= len(selected) <= 15 and len(selected) == len(set(selected))
+assert not smoke.findall('./TestAction/TestPlans/TestPlanReference')
+for identifier in selected:
+    test_class, method = identifier.split('/')
+    assert method.endswith('()')
+    source = (root / 'Tests' / (test_class + '.swift')).read_text()
+    assert re.search(r'\bfunc\s+' + re.escape(method[:-2]) + r'\s*\(', source), identifier
+full = ET.parse(schemes / 'FinancesiOSFullTests.xcscheme').getroot()
+full_targets = full.findall('./TestAction/Testables/TestableReference')
+assert not full.findall('./TestAction/TestPlans/TestPlanReference')
+assert {item.find('BuildableReference').get('BlueprintName') for item in full_targets} == {'FinancesiOSTests', 'FinancesiOSUITests'}
+assert all(item.get('skipped') == 'NO' and item.find('SelectedTests') is None and item.find('SkippedTests') is None for item in full_targets)
 for key in ['NSCameraUsageDescription', 'NSPhotoLibraryUsageDescription']:
     assert info.get(key)
 assert (root / 'App/PrivacyInfo.xcprivacy').is_file()

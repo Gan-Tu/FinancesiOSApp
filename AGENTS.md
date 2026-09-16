@@ -9,3 +9,9 @@
 - If the required build or tests cannot run, validation is incomplete. Report the blocker and do not push unless Gan explicitly authorizes an exception.
 - After pushing, verify that the remote branch matches the local commit. Distinguish a successful push from successful Xcode Cloud tests, archive, and TestFlight delivery.
 - Xcode Cloud is this project's automated test and release pipeline. Do not reintroduce the removed GitHub Actions workflow without an explicit request.
+
+## Xcode Cloud Usage Budget
+
+- Keep the `FinancesiOS` release scheme limited to its small smoke-test selection. Do not add UI audits, performance sweeps, or large-file stress tests to routine TestFlight builds without Gan's request.
+- Preserve the complete suite in `FinancesiOSFullTests`. Use `scripts/test.sh` for full or targeted local regression checks and `scripts/test.sh --smoke` for the exact cloud selection.
+- Reducing cloud coverage is an intentional cost limit, not permission to ignore a failure. Run the smoke suite and the relevant local regressions before pushing, and fix failures first.

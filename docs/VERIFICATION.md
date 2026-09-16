@@ -117,3 +117,8 @@ The nine UI tests reported by Xcode Cloud for `f23eba6` passed unchanged on iOS 
 Confirmation tests now use a visible Cancel action or the system popover-dismissal region. Duplicate counts come from the journal's complete transaction count; search assertions use the result total and visit lazily created rows. Chart checks wait for the visible Show/Hide label (iOS 27 does not expose the custom toolbar accessibility value) and still check the chart and its preference after relaunch. Split-edit checks tap the visible row title and retain all exact posting, currency, amount, and identity assertions.
 
 `AGENTS.md` requires failed tests and related regressions to pass before pushing, with unavailable validation reported as a blocker rather than treated as success.
+
+
+## TestFlight smoke-test budget (September 15, 2026)
+
+At Gan's request, the cloud release scheme now selects 13 fast, app-hosted unit tests and excludes the long UI audit and stress-test suite. The exact smoke selection passed locally on iOS 27: 13 executed, zero failures, zero skips, approximately 0.4 seconds of test execution (build and simulator startup are additional). The complete suite remains available through `FinancesiOSFullTests` and the default `scripts/test.sh` command. `scripts/test.sh --smoke` uses the release selection. Project preflight guards against accidentally removing the selection or adding the UI target to the cloud scheme.

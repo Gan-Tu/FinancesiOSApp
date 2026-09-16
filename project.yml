@@ -236,5 +236,29 @@ schemes:
     test:
       config: Debug
       targets:
+      - name: FinancesiOSTests
+        selectedTests:
+        - AmountExpressionEvaluatorTests/testBasicArithmetic()
+        - AmountExpressionEvaluatorTests/testDecimalPrecisionBeatsDouble()
+        - AccountBalanceAndImportedEditTests/testMovingFundedAccountUpdatesBothParentBalances()
+        - AccountBalanceAndImportedEditTests/testZeroSplitPreservationStillRejectsNewAndEntirelyZeroPostings()
+        - SplitTransactionPersistenceTests/testExistingThreeLegSplitSurvivesUnchangedEquivalentAndNoteOnlySaves()
+        - RecurringTransactionEditPolicyTests/testEveryAnchorScheduleControlAndDateRequiresExplicitSeriesConfirmation()
+        - BackupArchiveTests/testZIPRoundTripPreservesMetadataAndSharedReceiptBytes()
+        - ReceiptAssistTests/testReceiptSessionKeychainRoundTrip()
+        - IncomingCaptureSaveTests/testStaleCaptureCannotOverwriteCommittedNotesAmountsOrReceiptsEvenAfterReopen()
+        - IncomingCaptureSaveTests/testConcurrentCaptureEditorsDoNotReportTwoSuccessfulSaves()
+        - SharedReceiptProviderTests/testUnsavedEditedScreenshotBytesSurviveProviderAndInboxRecreation()
+        - SharedReceiptEntryTests/testOpenInHandoffResolvesOriginalBatchWithoutCopyingOrPublishingAnother()
+        - SharedReceiptEntryTests/testCancelledSharePreviewCannotBecomeARecoveredTransaction()
+  FinancesiOSFullTests:
+    build:
+      targets:
+        FinancesiOS: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
       - FinancesiOSTests
       - FinancesiOSUITests
