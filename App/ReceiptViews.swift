@@ -260,9 +260,9 @@ actor ReceiptImportIO {
 
     func stage(_ data: Data, filename: String) throws -> ReceiptTemporaryFile {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ReceiptImport-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.protectionKey: FileProtectionType.complete])
         let url = directory.appendingPathComponent((filename as NSString).lastPathComponent)
-        do { try data.write(to: url, options: .atomic) }
+        do { try data.write(to: url, options: [.atomic, .completeFileProtection]) }
         catch { try? FileManager.default.removeItem(at: directory); throw error }
         return ReceiptTemporaryFile(url: url, directory: directory)
     }
@@ -672,6 +672,8 @@ private struct ReceiptPreviewContent: View {
 }
 
 struct ReceiptScanner: UIViewControllerRepresentable {
+    var maximumPages: Int? = nil
+    var maximumBytes: Int? = nil
     let completion: (Result<[Data], Error>) -> Void
     func makeUIViewController(context: Context) -> VNDocumentCameraViewController {
         let controller = VNDocumentCameraViewController(); controller.delegate = context.coordinator; return controller
@@ -680,19 +682,32 @@ struct ReceiptScanner: UIViewControllerRepresentable {
     static func dismantleUIViewController(_ controller: VNDocumentCameraViewController, coordinator: Coordinator) {
         coordinator.invalidate()
     }
-    func makeCoordinator() -> Coordinator { Coordinator(completion: completion) }
+    func makeCoordinator() -> Coordinator { Coordinator(maximumPages: maximumPages, maximumBytes: maximumBytes, completion: completion) }
     @MainActor final class Coordinator: NSObject, @preconcurrency VNDocumentCameraViewControllerDelegate {
         let completion: (Result<[Data], Error>) -> Void
+        let maximumPages: Int?
+        let maximumBytes: Int?
         private lazy var session = ReceiptScanSession(completion: completion)
-        init(completion: @escaping (Result<[Data], Error>) -> Void) { self.completion = completion }
+        init(maximumPages: Int?, maximumBytes: Int?, completion: @escaping (Result<[Data], Error>) -> Void) {
+            self.maximumPages = maximumPages; self.maximumBytes = maximumBytes; self.completion = completion
+        }
         func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFinishWith scan: VNDocumentCameraScan) {
+            if let maximumPages, scan.pageCount > maximumPages {
+                session.fail(ValidationError(message: "Scan up to \(maximumPages) pages at a time.")); return
+            }
             session.start {
                 var pages: [Data] = []
+                var total = 0
                 pages.reserveCapacity(scan.pageCount)
                 for index in 0..<scan.pageCount {
                     try Task.checkCancellation()
                     let source = ReceiptScanImage(image: scan.imageOfPage(at: index))
-                    pages.append(try await source.jpegData())
+                    let bytes = try await source.jpegData()
+                    total += bytes.count
+                    if let maximumBytes = self.maximumBytes, total > maximumBytes {
+                        throw ValidationError(message: "The scan is too large. Try fewer pages.")
+                    }
+                    pages.append(bytes)
                 }
                 return pages
             }

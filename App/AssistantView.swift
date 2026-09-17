@@ -9,7 +9,6 @@ struct AssistantView: View {
     @State private var text = ""
     @State private var detent = PresentationDetent.medium
     @State private var auxiliary: AssistantAuxiliary?
-    @State private var pickingUploads = false
     @State private var renameTarget: AssistantConversation?
     @State private var renameError: String?
     @FocusState private var typing: Bool
@@ -54,12 +53,8 @@ struct AssistantView: View {
             case .settings: settingsSheet
             }
         }
-        .fileImporter(isPresented: Binding(get: { pickingUploads || assistant.filePurpose != nil }, set: { if !$0 { pickingUploads = false } }), allowedContentTypes: assistant.filePurpose == "backup" ? [.zip, .json, .data] : [.image, .pdf, .plainText, .commaSeparatedText, .data], allowsMultipleSelection: assistant.filePurpose != "backup") { result in
-            if assistant.filePurpose != nil { assistant.selectFilesResult(result) }
-            else {
-                do { assistant.attach(try result.get()) } catch { assistant.error = error.localizedDescription }
-            }
-            pickingUploads = false
+        .fileImporter(isPresented: Binding(get: { assistant.filePurpose != nil }, set: { _ in }), allowedContentTypes: assistant.filePurpose == "backup" ? [.zip, .json, .data] : [.image, .pdf, .plainText, .commaSeparatedText, .data], allowsMultipleSelection: assistant.filePurpose != "backup") { result in
+            assistant.selectFilesResult(result)
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("assistant.sheet")
@@ -255,12 +250,7 @@ struct AssistantView: View {
             .accessibilityIdentifier("assistant.composer")
     }
     private var attachmentButton: some View {
-        Button { pickingUploads = true } label: {
-            Image(systemName: "plus").font(.system(size: 21, weight: .regular)).frame(width: 44, height: 44).contentShape(Circle())
-        }
-        .foregroundStyle(Color(uiColor: .secondaryLabel))
-        .accessibilityLabel("Attach Files")
-        .disabled(!assistant.connected || assistant.isRunning || assistant.isConnecting || assistant.conversation.canResume)
+        AssistantAttachmentMenu(assistant: assistant)
     }
     private var voiceButton: some View {
         Button { typing = false; detent = .large; assistant.startVoice() } label: {

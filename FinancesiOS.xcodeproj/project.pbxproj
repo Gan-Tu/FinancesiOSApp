@@ -102,6 +102,7 @@
 		84312A060DEBFBABF6993569 /* SharedReceiptProviderLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0554736B64DAB8F4C2A1003 /* SharedReceiptProviderLoader.swift */; };
 		8665C331BC82BBAF78E8137E /* AssistantInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 406D3ACDF4FA29013767296B /* AssistantInteractionTests.swift */; };
 		87CAD232623A284FA659E5E7 /* MobileAppIconBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 120177F093E73C7D0481DAC2 /* MobileAppIconBadge.swift */; };
+		88A592576F98DD9A01613F14 /* AssistantAttachments.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1017C3646DBDA61772F22E51 /* AssistantAttachments.swift */; };
 		8C1F4DC2A63ED79025C6C8C4 /* AsyncInteractionLatencyBenchmarks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75D95CF8AF0F4F1544A5FF86 /* AsyncInteractionLatencyBenchmarks.swift */; };
 		8F88CF61A2D9D49C88346E06 /* AssistantContract.json in Resources */ = {isa = PBXBuildFile; fileRef = 61781F6CA42F09ABB59D0EE2 /* AssistantContract.json */; };
 		8F977A0B4310795829EBD5A5 /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = E882BF1F926EBB5D62DA53A4 /* WebRTC */; };
@@ -241,6 +242,7 @@
 		090311332FA6B7D2C0A46636 /* libsqlite3.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libsqlite3.tbd; path = usr/lib/libsqlite3.tbd; sourceTree = SDKROOT; };
 		0DE0CFA8C0041BA407E81FE4 /* RegisterChart.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RegisterChart.swift; sourceTree = "<group>"; };
 		0EB71C1D6F61E19732CE91FD /* RecurringJournalEditorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecurringJournalEditorTests.swift; sourceTree = "<group>"; };
+		1017C3646DBDA61772F22E51 /* AssistantAttachments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantAttachments.swift; sourceTree = "<group>"; };
 		103A5A6578909BEC17466757 /* TemplateAndNavigationPerformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemplateAndNavigationPerformanceTests.swift; sourceTree = "<group>"; };
 		11B91AB74D5A1D827CC671A6 /* SharedTransactionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedTransactionTests.swift; sourceTree = "<group>"; };
 		11F684E49866EF7F9D34DC23 /* IncomingCaptureCurrencyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncomingCaptureCurrencyTests.swift; sourceTree = "<group>"; };
@@ -434,6 +436,7 @@
 				F0117BB6E878EA57F13889AB /* AppShellView.swift */,
 				B5CD3AA6662EAAD3753AF40F /* Assets.xcassets */,
 				7FEB261FFF021039B1C10488 /* AssistantApproval.swift */,
+				1017C3646DBDA61772F22E51 /* AssistantAttachments.swift */,
 				61781F6CA42F09ABB59D0EE2 /* AssistantContract.json */,
 				47A0C83FC9A74CFBB3A667D6 /* AssistantCoordinator.swift */,
 				2450221776AACEC708EE3450 /* AssistantGateway.swift */,
@@ -964,6 +967,7 @@
 				72112E529D976720A45E9888 /* AmountExpressionEvaluator.swift in Sources */,
 				31995C99B67C5DD75EB53FCA /* AppShellView.swift in Sources */,
 				5F16B4F9F60797C7FDA5CB86 /* AssistantApproval.swift in Sources */,
+				88A592576F98DD9A01613F14 /* AssistantAttachments.swift in Sources */,
 				0A6B2535C20F9326102CBE81 /* AssistantBackup.swift in Sources */,
 				5F5E9DA4ABA1328C41260ECE /* AssistantCoordinator.swift in Sources */,
 				15D384C606527D3F5D1F5899 /* AssistantGateway.swift in Sources */,

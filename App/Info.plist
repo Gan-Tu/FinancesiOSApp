@@ -67,13 +67,13 @@
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Attach receipt photos to transactions.</string>
+	<string>Take photos and scan documents for receipts and Ask AI attachments.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Unlock your private financial journals.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Talk with the Finances assistant. Audio is sent to OpenAI only while voice chat is active.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Attach receipt images to transactions.</string>
+	<string>Choose photos for receipts and Ask AI attachments.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

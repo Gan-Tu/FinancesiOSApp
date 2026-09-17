@@ -477,20 +477,53 @@ final class AssistantCoordinator: ObservableObject {
         needsAttachmentRecovery = false; conversation.hasPendingInference = true; conversation.paused = true
         do { try persist(); resume() } catch { self.error = error.localizedDescription }
     }
-    func attach(_ urls: [URL]) {
-        guard connected, !isRunning, !isConnecting, !conversation.canResume, let tools else { return }
+    var canAttachFiles: Bool { connected && !isRunning && !isConnecting && !conversation.canResume && uploadedFiles.count < 10 }
+    var attachmentContext: AssistantAttachmentContext { .init(conversationID: conversation.id, identity: identity) }
+    func isCurrentAttachmentContext(_ context: AssistantAttachmentContext) -> Bool {
+        context == attachmentContext && (try? requireActive()) != nil
+    }
+    func beginAttachmentSelection() -> AssistantAttachmentContext? {
+        guard canAttachFiles, isCurrentAttachmentContext(attachmentContext) else { return nil }
+        voice.stop()
+        error = nil
+        return attachmentContext
+    }
+    func attach(_ urls: [URL], context: AssistantAttachmentContext? = nil) {
+        attach(context: context ?? attachmentContext) { urls.map { .file($0) } }
+    }
+    func attach(context: AssistantAttachmentContext, load: @escaping @MainActor () async throws -> [AssistantAttachmentInput]) {
+        guard canAttachFiles, isCurrentAttachmentContext(context), let tools else { return }
         isRunning = true; let stamp = generation
         task = Task {
             defer { if generation == stamp { isRunning = false; task = nil; activity = "" } }
             do {
-                guard uploadedFiles.count + urls.count <= 10 else { throw AssistantFailure("attachment_limit", "Attach up to 10 files per message.") }
-                for url in urls {
-                    try requireActive(); activity = "Preparing attachment…"
-                    let file = try tools.stage(url), id = try file.required("file_id")
+                activity = "Preparing attachment…"
+                let inputs = try await load()
+                try Task.checkCancellation()
+                guard generation == stamp, isCurrentAttachmentContext(context) else { throw CancellationError() }
+                guard uploadedFiles.count + inputs.count <= 10 else { throw AssistantFailure("attachment_limit", "Attach up to 10 files per message. Scan to PDF to combine multiple pages.") }
+                for input in inputs {
+                    try Task.checkCancellation(); try requireActive()
+                    let file: AssistantJSON
+                    switch input {
+                    case .file(let url): file = try tools.stage(url)
+                    case .bytes(let bytes, let filename):
+                        guard !bytes.isEmpty, bytes.count <= 15 * 1024 * 1024 else { throw AssistantFailure("attachment_limit", "Each chat attachment must be at most 15 MiB. Try fewer scanned pages.") }
+                        let temporary = try await ReceiptImportIO.shared.stage(bytes, filename: filename)
+                        do {
+                            try Task.checkCancellation(); try requireActive()
+                            guard generation == stamp, isCurrentAttachmentContext(context) else { throw CancellationError() }
+                            file = try tools.stage(temporary.url)
+                            await ReceiptImportIO.shared.remove(temporary)
+                        } catch { await ReceiptImportIO.shared.remove(temporary); throw error }
+                    }
+                    let id = try file.required("file_id")
                     let total = uploadedFiles.reduce(0) { $0 + ($1["size_bytes"].int ?? 0) } + (file["size_bytes"].int ?? 0)
                     guard total <= 40_000_000 else { throw AssistantFailure("attachment_limit", "One message can include at most 40 MB of attachments.") }
+                    try Task.checkCancellation()
+                    guard generation == stamp, isCurrentAttachmentContext(context) else { throw CancellationError() }
                     let uploaded = try await gateway.upload(url: tools.stagedFile(id), fileID: id)
-                    try requireActive(); guard generation == stamp else { return }; uploadedFiles.append(uploaded)
+                    try requireActive(); guard generation == stamp, isCurrentAttachmentContext(context) else { return }; uploadedFiles.append(uploaded)
                 }
             } catch is CancellationError { } catch { if generation == stamp { self.error = error.localizedDescription } }
         }

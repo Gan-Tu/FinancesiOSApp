@@ -4,6 +4,50 @@ import XCTest
 /// depend on a developer's local server, API key, or paid inference.
 @MainActor
 final class AssistantInteractionTests: XCTestCase {
+    func testLocalAssistantOffersAttachmentSourcesAndUploadsSelectedPhoto() throws {
+        guard ProcessInfo.processInfo.environment["FINANCES_LIVE_ASSISTANT_TESTS"] == "1" else {
+            throw XCTSkip("Run the local assistant UI test script with a seeded photo in its simulator.")
+        }
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--demo", "--assistant-api-url", "http://127.0.0.1:5184"]
+        app.launch()
+        let open = app.buttons["assistant.open"]
+        XCTAssertTrue(open.waitForExistence(timeout: 10)); open.tap()
+        let consent = app.buttons["assistant.consent"]
+        if consent.waitForExistence(timeout: 2) { consent.tap() }
+        app.buttons["Assistant Options"].tap(); app.buttons["New Chat"].tap()
+        let attach = app.buttons["assistant.attach"]
+        XCTAssertTrue(attach.waitForExistence(timeout: 10))
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: attach)], timeout: 10), .completed)
+        attach.tap()
+        for title in ["Choose Files", "Photo Library", "Take Photo", "Scan Receipt", "Scan to PDF"] {
+            XCTAssertTrue(app.buttons[title].waitForExistence(timeout: 3))
+        }
+        app.buttons["Photo Library"].tap()
+        let photo = app.images.matching(NSPredicate(format: "label BEGINSWITH[c] %@", "Photo")).firstMatch
+        guard photo.waitForExistence(timeout: 10) else {
+            XCTFail("Seeded photo was not available in the picker: \(app.debugDescription)"); return
+        }
+        photo.tap()
+        // The system picker may render its confirmation outside a navigation bar.
+        let add = app.buttons["Add"].firstMatch
+        guard add.waitForExistence(timeout: 5) else {
+            let screenshot = XCTAttachment(screenshot: app.screenshot()); screenshot.lifetime = .keepAlways; self.add(screenshot)
+            XCTFail("Photo confirmation control was not available: \(app.debugDescription)"); return
+        }
+        add.tap()
+        let chip = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Photo-")).firstMatch
+        XCTAssertTrue(chip.waitForExistence(timeout: 30))
+        chip.tap()
+        XCTAssertFalse(chip.exists)
+        attach.tap(); app.buttons["Choose Files"].tap()
+        let cancel = app.buttons["Cancel"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5)); cancel.tap()
+        XCTAssertTrue(attach.waitForExistence(timeout: 5))
+        app.buttons["Close"].tap()
+    }
+
     func testLocalMidTurnSteeringAcceptsFollowUpWhileReplying() throws {
         guard ProcessInfo.processInfo.environment["FINANCES_LIVE_ASSISTANT_TESTS"] == "1" else {
             throw XCTSkip("Run the local assistant UI test script with its backend.")
@@ -99,7 +143,7 @@ final class AssistantInteractionTests: XCTestCase {
             XCTAssertEqual(welcomeBounds.midY, welcomeViewport.frame.midY, accuracy: 8, "Welcome should be centered between the header and composer.")
         }
         XCTAssertTrue(app.buttons["Start Voice Chat"].isHittable)
-        XCTAssertTrue(app.buttons["Attach Files"].isHittable)
+        XCTAssertTrue(app.buttons["assistant.attach"].isHittable)
         for suggestion in ["Summarize this month", "Find recent receipts", "Show my account balances"] {
             XCTAssertFalse(app.buttons[suggestion].exists)
         }

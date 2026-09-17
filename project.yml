@@ -76,8 +76,8 @@ targets:
           LSHandlerRank: Owner
           LSItemContentTypes:
           - dev.gan.FinancesApp.receipt-handoff
-        NSCameraUsageDescription: Attach receipt photos to transactions.
-        NSPhotoLibraryUsageDescription: Attach receipt images to transactions.
+        NSCameraUsageDescription: Take photos and scan documents for receipts and Ask AI attachments.
+        NSPhotoLibraryUsageDescription: Choose photos for receipts and Ask AI attachments.
         NSMicrophoneUsageDescription: Talk with the Finances assistant. Audio is sent to OpenAI only while voice chat is active.
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true

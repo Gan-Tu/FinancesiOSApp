@@ -1,10 +1,129 @@
 import XCTest
 import AVFAudio
+import PDFKit
+import UIKit
 @preconcurrency import WebRTC
 @testable import FinancesClone
 
 @MainActor
 final class AssistantTests: XCTestCase {
+    func testPhotoBatchStopsBeforeLoadingMoreOversizedImagesAndScansCheckPageCountFirst() async throws {
+        var loaded = 0
+        do {
+            _ = try await AssistantPhotoLoader.load([0, 1, 2], maximumBytes: 40_000_000) { _ in
+                loaded += 1
+                return (Data(count: 15 * 1024 * 1024 + 1), "oversized.jpg")
+            }
+            XCTFail("Oversized photo must fail")
+        } catch { XCTAssertEqual((error as? AssistantFailure)?.code, "attachment_limit") }
+        XCTAssertEqual(loaded, 1)
+        loaded = 0
+        do {
+            _ = try await AssistantPhotoLoader.load([0, 1, 2], maximumBytes: 15) { _ in
+                loaded += 1; return (Data(count: 10), "photo.jpg")
+            }
+            XCTFail("Batch over remaining capacity must fail")
+        } catch { XCTAssertEqual((error as? AssistantFailure)?.code, "attachment_limit") }
+        XCTAssertEqual(loaded, 2)
+        do {
+            _ = try await AssistantScanPDF.shared.makeDocument(pages: Array(repeating: Data([0]), count: 31))
+            XCTFail("Too many pages must fail before decoding the invalid image bytes")
+        } catch { XCTAssertEqual((error as? AssistantFailure)?.code, "scan_page_limit") }
+    }
+    func testChatPhotoAndScannedPDFUploadWithoutCreatingLedgerReceipts() async throws {
+        let f = try fixture(), subject = "cloudkit:iCloud.fixture:development:user-a"
+        _ = try f.store.assistantDatabase.bindCloudKitAccount(contextKey: "iCloud.fixture|Development|Journal", accountID: "user-a")
+        let gateway = TestAssistantGateway(subject: subject)
+        var uploads: [(String, Data)] = []
+        gateway.uploadHandler = { url, fileID in
+            uploads.append((url.lastPathComponent, try Data(contentsOf: url)))
+            return .object(["id": .string(UUID().uuidString), "file_id": .string(fileID), "filename": .string(url.lastPathComponent), "size_bytes": .number(Double(uploads.last!.1.count))])
+        }
+        let coordinator = AssistantCoordinator(store: f.store, gateway: gateway, contract: f.contract)
+        coordinator.consented = true; coordinator.setForeground(true); coordinator.present()
+        try await wait { coordinator.connected }
+        let portrait = UIGraphicsImageRenderer(size: CGSize(width: 40, height: 60)).image { context in
+            UIColor.orange.setFill(); context.fill(CGRect(x: 0, y: 0, width: 40, height: 60))
+        }
+        let landscape = UIGraphicsImageRenderer(size: CGSize(width: 60, height: 40)).image { context in
+            UIColor.blue.setFill(); context.fill(CGRect(x: 0, y: 0, width: 60, height: 40))
+        }
+        let photo = try await ReceiptScanImage(image: portrait).jpegData()
+        let secondPage = try await ReceiptScanImage(image: landscape).jpegData()
+        let pdf = try await AssistantScanPDF.shared.makeDocument(pages: [photo, secondPage])
+        let document = try XCTUnwrap(PDFDocument(data: pdf))
+        XCTAssertEqual(document.pageCount, 2)
+        let firstBounds = try XCTUnwrap(document.page(at: 0)).bounds(for: .mediaBox)
+        let secondBounds = try XCTUnwrap(document.page(at: 1)).bounds(for: .mediaBox)
+        XCTAssertLessThan(firstBounds.width, firstBounds.height)
+        XCTAssertGreaterThan(secondBounds.width, secondBounds.height)
+        let ledgerBefore = try AssistantJSON.modelDigest(f.store.data)
+        let outboxBefore = try f.store.assistantDatabase.recordCounts().outboxRows
+        coordinator.attach(context: try XCTUnwrap(coordinator.beginAttachmentSelection())) {
+            [.bytes(photo, filename: "Photo.jpg"), .bytes(pdf, filename: "Scan.pdf")]
+        }
+        XCTAssertFalse(coordinator.canAcceptMessage)
+        try await wait { !coordinator.isRunning }
+        XCTAssertNil(coordinator.error)
+        XCTAssertEqual(uploads.map(\.0), ["Photo.jpg", "Scan.pdf"])
+        XCTAssertEqual(uploads.map(\.1), [photo, pdf])
+        XCTAssertEqual(coordinator.uploadedFiles.count, 2)
+        XCTAssertEqual(try AssistantJSON.modelDigest(f.store.data), ledgerBefore)
+        XCTAssertEqual(try f.store.assistantDatabase.recordCounts().outboxRows, outboxBefore)
+        XCTAssertTrue(coordinator.send("Read these attachments"))
+        try await wait { !coordinator.isRunning }
+        XCTAssertEqual(gateway.itemsSeen.first?.first?["attachments"].array.count, 2)
+        coordinator.dismiss()
+    }
+
+    func testLatePhotoSelectionCannotUploadIntoAnotherConversation() async throws {
+        let f = try fixture(), subject = "cloudkit:iCloud.fixture:development:user-a", gate = AssistantTestGate()
+        _ = try f.store.assistantDatabase.bindCloudKitAccount(contextKey: "iCloud.fixture|Development|Journal", accountID: "user-a")
+        let gateway = TestAssistantGateway(subject: subject)
+        var uploads = 0
+        gateway.uploadHandler = { _, _ in uploads += 1; return .object([:]) }
+        let coordinator = AssistantCoordinator(store: f.store, gateway: gateway, contract: f.contract)
+        coordinator.consented = true; coordinator.setForeground(true); coordinator.present()
+        try await wait { coordinator.connected }
+        let context = try XCTUnwrap(coordinator.beginAttachmentSelection())
+        let loaded = expectation(description: "Old photo provider returned")
+        coordinator.attach(context: context) {
+            await gate.wait(); loaded.fulfill()
+            return [.bytes(Data([1, 2, 3]), filename: "Old photo.jpg")]
+        }
+        try await wait { gate.waiting }
+        try coordinator.beginFreshConversation(context: f.context)
+        gate.release()
+        await fulfillment(of: [loaded], timeout: 3)
+        var retriedOldLoad = false
+        coordinator.attach(context: context) { retriedOldLoad = true; return [] }
+        XCTAssertFalse(retriedOldLoad)
+        XCTAssertEqual(uploads, 0)
+        XCTAssertTrue(coordinator.uploadedFiles.isEmpty)
+        XCTAssertFalse(coordinator.isCurrentAttachmentContext(context))
+        coordinator.dismiss()
+    }
+
+    func testChatPhotoSizeLimitIsCheckedBeforeUploadAndInvalidScansFailClearly() async throws {
+        let f = try fixture(), subject = "cloudkit:iCloud.fixture:development:user-a"
+        _ = try f.store.assistantDatabase.bindCloudKitAccount(contextKey: "iCloud.fixture|Development|Journal", accountID: "user-a")
+        let gateway = TestAssistantGateway(subject: subject)
+        var uploads = 0
+        gateway.uploadHandler = { _, _ in uploads += 1; return .object([:]) }
+        let coordinator = AssistantCoordinator(store: f.store, gateway: gateway, contract: f.contract)
+        coordinator.consented = true; coordinator.setForeground(true); coordinator.present()
+        try await wait { coordinator.connected }
+        coordinator.attach(context: coordinator.attachmentContext) { [.bytes(Data(count: 15 * 1024 * 1024 + 1), filename: "Too large.jpg")] }
+        try await wait { !coordinator.isRunning }
+        XCTAssertEqual(uploads, 0)
+        XCTAssertTrue(coordinator.error?.contains("15 MiB") == true)
+        for pages in [[], [Data([0, 1, 2])]] {
+            do { _ = try await AssistantScanPDF.shared.makeDocument(pages: pages); XCTFail("Invalid scans must fail") }
+            catch { XCTAssertTrue(error is AssistantFailure) }
+        }
+        coordinator.dismiss()
+    }
+
     func testRapidSteeringWaitsForOldStreamAndRejectsItsLateCalls() async throws {
         let f = try fixture(), subject = "cloudkit:iCloud.fixture:development:user-a"
         _ = try f.store.assistantDatabase.bindCloudKitAccount(contextKey: "iCloud.fixture|Development|Journal", accountID: "user-a")
@@ -814,6 +933,7 @@ private final class TestAssistantGateway: AssistantGatewayProtocol {
     var settingsSeen: [AssistantSettings] = []
     var itemsSeen: [[AssistantJSON]] = []
     var stepOverride: ((Int, [AssistantJSON], @escaping @MainActor (AssistantStepEvent) throws -> Void) async throws -> Void)?
+    var uploadHandler: ((URL, String) async throws -> AssistantJSON)?
     var steps = 0
     var offline = false
     init(subject: String) { self.subject = subject }
@@ -834,7 +954,10 @@ private final class TestAssistantGateway: AssistantGatewayProtocol {
         let emitsCalls = steps == (discoveryFirst ? 2 : 1)
         try receive(AssistantStepEvent(type: "step_completed", text: emitsCalls ? "" : "Saved", continuation: "synthetic-continuation", calls: emitsCalls ? firstCalls : []))
     }
-    func upload(url: URL, fileID: String) async throws -> AssistantJSON { throw AssistantFailure("test", "No uploads in this fixture") }
+    func upload(url: URL, fileID: String) async throws -> AssistantJSON {
+        if let uploadHandler { return try await uploadHandler(url, fileID) }
+        throw AssistantFailure("test", "No uploads in this fixture")
+    }
     func voice(sdp: String, provider: String, context: String) async throws -> AssistantJSON { throw AssistantFailure("test", "No voice network in this fixture") }
 }
 
