@@ -4,6 +4,36 @@ import XCTest
 /// depend on a developer's local server, API key, or paid inference.
 @MainActor
 final class AssistantInteractionTests: XCTestCase {
+    func testLocalMidTurnSteeringAcceptsFollowUpWhileReplying() throws {
+        guard ProcessInfo.processInfo.environment["FINANCES_LIVE_ASSISTANT_TESTS"] == "1" else {
+            throw XCTSkip("Run the local assistant UI test script with its backend.")
+        }
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--demo", "--assistant-api-url", "http://127.0.0.1:5184"]
+        app.launch()
+        let open = app.buttons["assistant.open"]
+        XCTAssertTrue(open.waitForExistence(timeout: 10)); open.tap()
+        let consent = app.buttons["assistant.consent"]
+        if consent.waitForExistence(timeout: 2) { consent.tap() }
+        app.buttons["Assistant Options"].tap(); app.buttons["New Chat"].tap()
+        let composer = app.textFields["assistant.composer"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 5)); composer.tap()
+        composer.typeText("Write at least 3000 words explaining general budgeting methods. Use no finance tools and do not edit records.")
+        let send = app.buttons["assistant.send"]
+        XCTAssertTrue(send.waitForExistence(timeout: 5)); send.tap()
+        XCTAssertTrue(app.buttons["assistant.stop"].waitForExistence(timeout: 10))
+        composer.tap()
+        composer.typeText("Change direction: reply with only MID_TURN_STEER_OK and nothing else.")
+        XCTAssertTrue(send.isEnabled)
+        XCTAssertEqual(send.label, "Send Follow-up")
+        send.tap()
+        XCTAssertTrue(app.staticTexts["MID_TURN_STEER_OK"].waitForExistence(timeout: 90))
+        let finished = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.buttons["assistant.stop"])
+        XCTAssertEqual(XCTWaiter.wait(for: [finished], timeout: 10), .completed)
+        app.buttons["Close"].tap()
+    }
+
     func testSyncTitleAndCenteredAssistantAcrossNavigation() throws {
         continueAfterFailure = false
         let app = XCUIApplication()

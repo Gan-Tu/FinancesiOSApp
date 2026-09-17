@@ -46,6 +46,9 @@ struct AssistantConversation: Identifiable, Codable, Sendable {
     var updated = Date()
     var messages: [AssistantMessage] = []
     var items: [AssistantJSON] = []
+    /// Follow-ups are durable before the interrupted worker finishes settling.
+    /// Optional so older on-device checkpoints continue to decode.
+    var pendingSteering: [AssistantJSON]?
     var calls: [AssistantToolCall] = []
     var activity: [AssistantToolCall] = []
     var context = AssistantContext()
@@ -53,7 +56,8 @@ struct AssistantConversation: Identifiable, Codable, Sendable {
     var hasPendingInference = false
     var turnSteps = 0
     var settings = AssistantSettings()
-    var canResume: Bool { paused && (hasPendingInference || !calls.isEmpty) }
+    var hasPendingSteering: Bool { !(pendingSteering ?? []).isEmpty }
+    var canResume: Bool { paused && (hasPendingInference || !calls.isEmpty || hasPendingSteering) }
 }
 
 struct AssistantStepEvent: Decodable, Sendable {

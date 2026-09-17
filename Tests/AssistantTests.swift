@@ -5,6 +5,184 @@ import AVFAudio
 
 @MainActor
 final class AssistantTests: XCTestCase {
+    func testRapidSteeringWaitsForOldStreamAndRejectsItsLateCalls() async throws {
+        let f = try fixture(), subject = "cloudkit:iCloud.fixture:development:user-a"
+        _ = try f.store.assistantDatabase.bindCloudKitAccount(contextKey: "iCloud.fixture|Development|Journal", accountID: "user-a")
+        let gate = AssistantTestGate(), gateway = TestAssistantGateway(subject: subject)
+        let obsolete = call("rename_conversation", .object(["title": .string("Obsolete title")]))
+        gateway.stepOverride = { index, _, receive in
+            if index == 1 {
+                try receive(AssistantStepEvent(type: "text_delta", text: "Old partial answer"))
+                await gate.wait()
+                // Simulate a transport that delivers buffered output after cancellation.
+                try? receive(AssistantStepEvent(type: "step_completed", text: "Obsolete answer", continuation: "old", calls: [obsolete]))
+            } else {
+                try receive(AssistantStepEvent(type: "step_completed", text: "Updated answer", continuation: "updated", calls: []))
+            }
+        }
+        let coordinator = AssistantCoordinator(store: f.store, gateway: gateway, contract: f.contract)
+        coordinator.consented = true; coordinator.setForeground(true); coordinator.present()
+        try await wait { coordinator.connected }
+        XCTAssertTrue(coordinator.send("Explain this month"))
+        try await wait { gate.waiting }
+        XCTAssertTrue(coordinator.send("Only groceries"))
+        XCTAssertTrue(coordinator.send("And use Chinese"))
+        XCTAssertEqual(gateway.steps, 1)
+        XCTAssertEqual(coordinator.conversation.pendingSteering?.count, 2)
+        let saved = try JSONDecoder().decode(AssistantConversation.self, from: XCTUnwrap(f.store.assistantDatabase.assistantHistory(scope: subject).first))
+        XCTAssertEqual(saved.pendingSteering?.count, 2)
+        gate.release()
+        try await wait { !coordinator.isRunning }
+        XCTAssertEqual(gateway.steps, 2)
+        XCTAssertEqual(gateway.itemsSeen.last?.filter { $0["type"].string == "message" }.compactMap { $0["text"].string }, ["Explain this month", "Only groceries", "And use Chinese"])
+        XCTAssertNil(coordinator.conversation.pendingSteering)
+        XCTAssertFalse(coordinator.conversation.messages.contains { $0.text == "Obsolete answer" })
+        XCTAssertNotEqual(coordinator.conversation.title, "Obsolete title")
+        XCTAssertTrue(coordinator.conversation.activity.isEmpty)
+        coordinator.dismiss()
+    }
+
+    func testSteeringPreservesSavedActionsAndSupersedesTheRemainingBatch() async throws {
+        let f = try fixture(), subject = "cloudkit:iCloud.fixture:development:user-a", tx = f.store.data.transactions[0]
+        _ = try f.store.assistantDatabase.bindCloudKitAccount(contextKey: "iCloud.fixture|Development|Journal", accountID: "user-a")
+        let gateway = TestAssistantGateway(subject: subject), gate = AssistantTestGate()
+        let committed = call("update_transaction", .object(["id": .string(tx.id.uuidString), "if_revision": .string(try AssistantJSON.modelDigest(tx)), "note": .string("Already saved")]))
+        let pending = call("select_files", .object(["purpose": .string("receipts")]))
+        let obsolete = call("rename_conversation", .object(["title": .string("Must not execute")]))
+        gateway.firstCalls = [committed, pending, obsolete]
+        let coordinator = AssistantCoordinator(store: f.store, gateway: gateway, contract: f.contract)
+        coordinator.consented = true; coordinator.setForeground(true); coordinator.present()
+        try await wait { coordinator.connected }
+        coordinator.tools?.selectFiles = { _ in await gate.wait(); return [] }
+        XCTAssertTrue(coordinator.send("Update and attach a receipt"))
+        try await wait { gate.waiting }
+        XCTAssertEqual(f.store.transaction(tx.id)?.note, "Already saved")
+        XCTAssertTrue(coordinator.send("Leave the saved transaction as-is and just summarize it"))
+        XCTAssertEqual(gateway.steps, 1)
+        gate.release()
+        try await wait { !coordinator.isRunning }
+        XCTAssertEqual(f.store.transaction(tx.id)?.note, "Already saved")
+        let results = coordinator.conversation.activity
+        XCTAssertEqual(results.map(\.operationID), [committed.operationID, pending.operationID, obsolete.operationID])
+        XCTAssertEqual(results.first?.result, try f.store.assistantDatabase.assistantAction(scope: subject, id: committed.operationID, digest: committed.digest))
+        for result in results.dropFirst() {
+            let value = try JSONDecoder().decode(AssistantJSON.self, from: Data(XCTUnwrap(result.result).utf8))
+            XCTAssertEqual(value["error"]["code"].string, "superseded")
+        }
+        XCTAssertNotEqual(coordinator.conversation.title, "Must not execute")
+        let input = try XCTUnwrap(gateway.itemsSeen.last)
+        XCTAssertEqual(input.last?["text"].string, "Leave the saved transaction as-is and just summarize it")
+        XCTAssertEqual(input.filter { $0["type"].string == "tool_result" }.count, 3)
+        coordinator.dismiss()
+    }
+
+    func testSteeringInvalidatesAnOutstandingDeleteApproval() async throws {
+        let f = try fixture(), subject = "cloudkit:iCloud.fixture:development:user-a", tx = f.store.data.transactions[0]
+        _ = try f.store.assistantDatabase.bindCloudKitAccount(contextKey: "iCloud.fixture|Development|Journal", accountID: "user-a")
+        let gateway = TestAssistantGateway(subject: subject)
+        gateway.firstCalls = [call("delete_transaction", .object(["id": .string(tx.id.uuidString), "if_revision": .string(try AssistantJSON.modelDigest(tx)), "snapshot_revision": .string(f.snapshot)]))]
+        let coordinator = AssistantCoordinator(store: f.store, gateway: gateway, contract: f.contract)
+        coordinator.consented = true; coordinator.setForeground(true); coordinator.present()
+        try await wait { coordinator.connected }
+        XCTAssertTrue(coordinator.send("Delete this transaction"))
+        try await wait { coordinator.approval != nil && !coordinator.isRunning }
+        XCTAssertTrue(coordinator.send("Actually keep it and explain it"))
+        XCTAssertNil(coordinator.approval)
+        coordinator.approve(true) // A stale confirmation must not authorize the old deletion.
+        try await wait { !coordinator.isRunning }
+        XCTAssertNotNil(f.store.transaction(tx.id))
+        XCTAssertEqual(gateway.steps, 2)
+        XCTAssertTrue(coordinator.conversation.calls.isEmpty)
+        coordinator.dismiss()
+    }
+
+    func testSteeringSurvivesBackgroundAndHistoryRestoreWithoutAutomaticExecution() async throws {
+        let f = try fixture(), subject = "cloudkit:iCloud.fixture:development:user-a", gate = AssistantTestGate()
+        _ = try f.store.assistantDatabase.bindCloudKitAccount(contextKey: "iCloud.fixture|Development|Journal", accountID: "user-a")
+        let gateway = TestAssistantGateway(subject: subject)
+        gateway.stepOverride = { _, _, _ in await gate.wait() }
+        let coordinator = AssistantCoordinator(store: f.store, gateway: gateway, contract: f.contract)
+        coordinator.consented = true; coordinator.setForeground(true); coordinator.present()
+        try await wait { coordinator.connected }
+        XCTAssertTrue(coordinator.send("Explain spending"))
+        try await wait { gate.waiting }
+        XCTAssertTrue(coordinator.send("Only this week"))
+        coordinator.setForeground(false)
+        gate.release()
+        let saved = try JSONDecoder().decode(AssistantConversation.self, from: XCTUnwrap(f.store.assistantDatabase.assistantHistory(scope: subject).first))
+        XCTAssertTrue(saved.canResume)
+        XCTAssertEqual(saved.pendingSteering?.first?["text"].string, "Only this week")
+        XCTAssertEqual(gateway.steps, 1)
+        let replacement = TestAssistantGateway(subject: subject)
+        let restored = AssistantCoordinator(store: f.store, gateway: replacement, contract: f.contract)
+        restored.consented = true; restored.setForeground(true); restored.present()
+        try await wait { restored.connected }
+        restored.selectConversation(saved)
+        XCTAssertEqual(replacement.steps, 0)
+        restored.resume()
+        try await wait { !restored.isRunning }
+        XCTAssertEqual(replacement.itemsSeen.first?.filter { $0["text"].string == "Only this week" }.count, 1)
+        XCTAssertNil(restored.conversation.pendingSteering)
+        restored.dismiss()
+    }
+
+    func testFailedSteeringCheckpointRetainsOriginalHistoryAndStopsOldWork() async throws {
+        let f = try fixture(), subject = "cloudkit:iCloud.fixture:development:user-a", gate = AssistantTestGate()
+        let db = f.store.assistantDatabase
+        _ = try db.bindCloudKitAccount(contextKey: "iCloud.fixture|Development|Journal", accountID: "user-a")
+        let gateway = TestAssistantGateway(subject: subject)
+        gateway.stepOverride = { index, _, receive in
+            if index == 1 { await gate.wait() }
+            else { try receive(AssistantStepEvent(type: "step_completed", text: "Resumed", continuation: "resumed", calls: [])) }
+        }
+        let coordinator = AssistantCoordinator(store: f.store, gateway: gateway, contract: f.contract)
+        coordinator.consented = true; coordinator.setForeground(true); coordinator.present()
+        try await wait { coordinator.connected }
+        XCTAssertTrue(coordinator.send("Original request"))
+        try await wait { gate.waiting }
+        try SQLiteWriteAudit.execute("CREATE TRIGGER reject_steer BEFORE INSERT ON assistant_history BEGIN SELECT RAISE(ABORT, 'Synthetic disk failure'); END", at: db.databaseURL)
+        XCTAssertFalse(coordinator.send("Unsaved correction"))
+        XCTAssertFalse(coordinator.isRunning)
+        XCTAssertNil(coordinator.conversation.pendingSteering)
+        XCTAssertFalse(coordinator.conversation.messages.contains { $0.text == "Unsaved correction" })
+        XCTAssertNotNil(coordinator.error)
+        try SQLiteWriteAudit.execute("DROP TRIGGER reject_steer", at: db.databaseURL)
+        gate.release()
+        coordinator.resume()
+        try await wait { !coordinator.isRunning }
+        XCTAssertEqual(gateway.itemsSeen.last?.filter { $0["type"].string == "message" }.compactMap { $0["text"].string }, ["Original request"])
+        coordinator.dismiss()
+    }
+
+    func testNewChatKeepsTheRetirementBarrierAndLeavesSteeringInItsOriginalHistory() async throws {
+        let f = try fixture(), subject = "cloudkit:iCloud.fixture:development:user-a", gate = AssistantTestGate()
+        let db = f.store.assistantDatabase
+        _ = try db.bindCloudKitAccount(contextKey: "iCloud.fixture|Development|Journal", accountID: "user-a")
+        let gateway = TestAssistantGateway(subject: subject)
+        gateway.stepOverride = { index, _, receive in
+            if index == 1 { await gate.wait() }
+            else { try receive(AssistantStepEvent(type: "step_completed", text: "New chat answer", continuation: "new", calls: [])) }
+        }
+        let coordinator = AssistantCoordinator(store: f.store, gateway: gateway, contract: f.contract)
+        coordinator.consented = true; coordinator.setForeground(true); coordinator.present()
+        try await wait { coordinator.connected }
+        XCTAssertTrue(coordinator.send("Original chat request"))
+        let originalID = coordinator.conversation.id
+        try await wait { gate.waiting }
+        XCTAssertTrue(coordinator.send("Original chat correction"))
+        try coordinator.beginFreshConversation(context: AssistantContext(journalID: UUID()))
+        XCTAssertTrue(coordinator.send("Separate chat request"))
+        XCTAssertEqual(gateway.steps, 1)
+        gate.release()
+        try await wait { !coordinator.isRunning }
+        XCTAssertEqual(gateway.itemsSeen.last?.compactMap { $0["text"].string }, ["Separate chat request"])
+        XCTAssertNotEqual(coordinator.conversation.id, originalID)
+        let original = try db.assistantHistory(scope: subject).map { try JSONDecoder().decode(AssistantConversation.self, from: $0) }.first { $0.id == originalID }
+        XCTAssertEqual(original?.pendingSteering?.first?["text"].string, "Original chat correction")
+        XCTAssertTrue(original?.canResume == true)
+        coordinator.dismiss()
+    }
+
     func testInterruptedVoiceResponsesCannotDispatchFinanceActions() {
         func event(responseStatus: String, callStatus: String) -> AssistantJSON {
             .object(["type": .string("response.done"), "response": .object([
@@ -634,6 +812,8 @@ private final class TestAssistantGateway: AssistantGatewayProtocol {
     var beforeSecondStep: (() throws -> Void)?
     var discoveryFirst = false
     var settingsSeen: [AssistantSettings] = []
+    var itemsSeen: [[AssistantJSON]] = []
+    var stepOverride: ((Int, [AssistantJSON], @escaping @MainActor (AssistantStepEvent) throws -> Void) async throws -> Void)?
     var steps = 0
     var offline = false
     init(subject: String) { self.subject = subject }
@@ -643,6 +823,8 @@ private final class TestAssistantGateway: AssistantGatewayProtocol {
     func step(items: [AssistantJSON], settings: AssistantSettings, receive: @escaping @MainActor (AssistantStepEvent) throws -> Void) async throws {
         steps += 1
         settingsSeen.append(settings)
+        itemsSeen.append(items)
+        if let stepOverride { try await stepOverride(steps, items, receive); return }
         if steps == 1 { try beforeFirstStep?() }
         if steps == 2 { try beforeSecondStep?() }
         if discoveryFirst && steps == 1 {
@@ -654,4 +836,20 @@ private final class TestAssistantGateway: AssistantGatewayProtocol {
     }
     func upload(url: URL, fileID: String) async throws -> AssistantJSON { throw AssistantFailure("test", "No uploads in this fixture") }
     func voice(sdp: String, provider: String, context: String) async throws -> AssistantJSON { throw AssistantFailure("test", "No voice network in this fixture") }
+}
+
+@MainActor
+private final class AssistantTestGate {
+    private(set) var waiting = false
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var released = false
+    func wait() async {
+        guard !released else { return }
+        waiting = true
+        await withCheckedContinuation { continuation = $0 }
+    }
+    func release() {
+        released = true
+        continuation?.resume(); continuation = nil
+    }
 }

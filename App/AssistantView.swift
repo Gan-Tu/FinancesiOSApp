@@ -247,7 +247,7 @@ struct AssistantView: View {
         .padding(.bottom, 10)
     }
     private var composerInput: some View {
-        TextField("Ask about your finances…", text: $text, axis: .vertical)
+        TextField(assistant.isRunning || assistant.conversation.canResume ? "Add a follow-up…" : "Ask about your finances…", text: $text, axis: .vertical)
             .font(.body)
             .lineLimit(1...5)
             .focused($typing)
@@ -260,7 +260,7 @@ struct AssistantView: View {
         }
         .foregroundStyle(Color(uiColor: .secondaryLabel))
         .accessibilityLabel("Attach Files")
-        .disabled(!assistant.connected || assistant.isRunning)
+        .disabled(!assistant.connected || assistant.isRunning || assistant.isConnecting || assistant.conversation.canResume)
     }
     private var voiceButton: some View {
         Button { typing = false; detent = .large; assistant.startVoice() } label: {
@@ -271,10 +271,10 @@ struct AssistantView: View {
         .disabled(!assistant.connected || assistant.isConnecting || assistant.isRunning || assistant.conversation.canResume)
     }
     private var canSend: Bool {
-        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && assistant.connected && !assistant.isConnecting && !assistant.isRunning && !assistant.conversation.canResume
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && assistant.canAcceptMessage
     }
     @ViewBuilder private var submitButton: some View {
-        if assistant.isRunning {
+        if assistant.isRunning && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             Button { assistant.pause() } label: {
                 Image(systemName: "stop.fill").font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Color.accentColor)
@@ -290,7 +290,7 @@ struct AssistantView: View {
                     .frame(width: 44, height: 44)
                     .background(canSend ? Color.accentColor : Color(uiColor: .quaternarySystemFill), in: Circle())
             }
-            .accessibilityLabel("Send Message")
+            .accessibilityLabel(assistant.isRunning || assistant.conversation.canResume ? "Send Follow-up" : "Send Message")
             .accessibilityIdentifier("assistant.send")
             .disabled(!canSend)
         }

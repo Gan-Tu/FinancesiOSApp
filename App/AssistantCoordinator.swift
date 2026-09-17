@@ -38,6 +38,9 @@ final class AssistantCoordinator: ObservableObject {
     private var foreground = false
     private var presented = false
     private var task: Task<Void, Never>?
+    // New work waits for a cancelled worker to finish before reconciling its
+    // action receipts. Cancellation alone does not prove a save rolled back.
+    private var retiringTask: Task<Void, Never>?
     private var generation = UUID()
     private let observations = AssistantNotificationTokens()
     private var fileContinuation: CheckedContinuation<[URL], Error>?
@@ -101,13 +104,16 @@ final class AssistantCoordinator: ObservableObject {
         guard fields.count >= 2, subject == "cloudkit:\(fields[0]):\(fields[1].lowercased()):\(binding.account)" else { throw AssistantFailure("identity_mismatch", "The signed-in account does not own this local journal. Existing data is preserved.") }
     }
     func prepare() {
-        guard consented, !isConnecting else { return }
+        guard consented, !isConnecting, !isRunning else { return }
         isConnecting = true; error = nil
         let stamp = generation
+        let previousTask = retiringTask; retiringTask = nil
         task = Task { [weak self] in
             guard let self else { return }
             defer { if generation == stamp { isConnecting = false; task = nil } }
             do {
+                await previousTask?.value
+                guard generation == stamp else { return }
                 try requireActive()
                 if let local = try await gateway.localIdentity() {
                     try requireActive(); guard generation == stamp else { return }
@@ -165,10 +171,14 @@ final class AssistantCoordinator: ObservableObject {
         }
     }
     func persist() throws {
+        try persist(conversation)
+    }
+    private func persist(_ value: AssistantConversation) throws {
         guard !identity.isEmpty else { throw AssistantFailure("not_connected", "Connect before saving assistant history.") }
-        conversation.updated = Date()
-        try store.assistantDatabase.saveAssistantHistory(scope: identity, id: conversation.id.uuidString, payload: JSONEncoder().encode(conversation))
-        history.removeAll { $0.id == conversation.id }; history.insert(conversation, at: 0)
+        var saved = value; saved.updated = Date()
+        try store.assistantDatabase.saveAssistantHistory(scope: identity, id: saved.id.uuidString, payload: JSONEncoder().encode(saved))
+        conversation = saved
+        history.removeAll { $0.id == saved.id }; history.insert(saved, at: 0)
     }
     /// The launcher owns this boundary. View appearances also occur when
     /// returning from History, Settings, or a file picker and must not reset chat.
@@ -234,24 +244,31 @@ final class AssistantCoordinator: ObservableObject {
     @discardableResult
     func send(_ text: String, fromVoice: Bool = false, voiceRequestID: String? = nil, displayText: String? = nil) -> Bool {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, connected, consented else { return false }
-        if fromVoice { cancelRemaining(stopVoice: false) }
-        guard !isRunning, !isConnecting, !conversation.canResume else { return false }
+        guard !text.isEmpty, canAcceptMessage else { return false }
         do {
             try requireActive()
-            // A paused run keeps its checkpointed settings; each new user turn
-            // adopts app preferences without changing a running model request.
-            conversation.settings = try settingsForNewRequest()
-            self.voiceRequestID = voiceRequestID
+            let steering = isRunning || conversation.canResume
+            // Steering retains the current run's settings and journal scope.
+            let settings = steering ? conversation.settings : try settingsForNewRequest()
+            if steering { interruptExecution(stopVoice: !fromVoice) }
+            var next = conversation
+            next.settings = settings
             let visible = displayText ?? text
-            if conversation.messages.isEmpty && conversation.customTitle != true { conversation.title = String(visible.prefix(70)) }
-            conversation.messages.append(AssistantMessage(role: "user", text: visible))
+            if next.messages.isEmpty && next.customTitle != true { next.title = String(visible.prefix(70)) }
+            next.messages.append(AssistantMessage(role: "user", text: visible))
             var item: AssistantJSON = .object(["type": .string("message"), "role": .string("user"), "text": .string(text)])
             if !uploadedFiles.isEmpty { item = item.setting("attachments", .array(uploadedFiles.map { $0["id"] })) }
-            conversation.items.append(item); uploadedFiles = []
-            conversation.turnSteps = 0; conversation.hasPendingInference = true; conversation.paused = true
-            try persist(); resume(); return true
+            if steering { next.pendingSteering = (next.pendingSteering ?? []) + [item] }
+            else { next.items.append(item); next.turnSteps = 0 }
+            next.hasPendingInference = true; next.paused = true
+            try persist(next)
+            uploadedFiles = []; self.voiceRequestID = voiceRequestID
+            resume(); return true
         } catch { self.error = error.localizedDescription; return false }
+    }
+    var canAcceptMessage: Bool {
+        connected && consented && !isConnecting && !needsAttachmentRecovery
+            && (!isRunning || conversation.hasPendingInference || !conversation.calls.isEmpty || conversation.hasPendingSteering)
     }
     func resume() {
         guard !isRunning, !isConnecting, conversation.canResume else { return }
@@ -259,17 +276,26 @@ final class AssistantCoordinator: ObservableObject {
         let stamp = UUID(); generation = stamp
         let delegatedRequestID = voiceRequestID
         isRunning = true; conversation.paused = false
+        if conversation.hasPendingSteering { activity = "Updating request…" }
+        let previousTask = retiringTask; retiringTask = nil
         task = Task { [weak self] in
             guard let self else { return }
             defer { if generation == stamp { isRunning = false; activity = ""; task = nil } }
             do {
+                await previousTask?.value
+                guard generation == stamp else { return }
                 let subject = try await gateway.connect()
                 try requireActive(); guard generation == stamp else { return }
                 try verifyIdentity(subject)
                 guard subject == identity, let tools else { throw AssistantFailure("identity_mismatch", "Reconnect with the account that owns this conversation.") }
                 tools.context = conversation.context
                 while generation == stamp {
+                    // Let a follow-up arrive between local actions, even when
+                    // an entire batch consists of synchronous SQLite saves.
+                    await Task.yield()
+                    guard generation == stamp else { return }
                     try requireActive()
+                    try applyPendingSteering(using: tools)
                     if let call = conversation.calls.first {
                         let definition = try tools.definition(call.name)
                         let replay = try store.assistantDatabase.assistantAction(scope: identity, id: call.operationID, digest: call.digest)
@@ -328,8 +354,10 @@ final class AssistantCoordinator: ObservableObject {
                             if !self.conversation.hasPendingInference { self.voice.returnResult(text, requestID: delegatedRequestID) }
                         }
                     }
+                    guard generation == stamp else { return }
                     guard completed else { throw AssistantFailure("interrupted", "The reply was interrupted.") }
                 }
+                guard generation == stamp else { return }
                 conversation.paused = false; try persist()
             } catch is CancellationError {
                 if generation == stamp { conversation.paused = true; try? persist() }
@@ -343,7 +371,28 @@ final class AssistantCoordinator: ObservableObject {
             }
         }
     }
+    private func applyPendingSteering(using tools: AssistantTools) throws {
+        guard let updates = conversation.pendingSteering, !updates.isEmpty else { return }
+        var next = conversation
+        for call in next.calls {
+            let result: AssistantJSON
+            if let committed = try store.assistantDatabase.assistantAction(scope: identity, id: call.operationID, digest: call.digest) {
+                result = try JSONDecoder().decode(AssistantJSON.self, from: Data(committed.utf8))
+            } else {
+                result = tools.failure(AssistantFailure("superseded", "A newer user message interrupted this call. Re-read current data and replan using the update. Previously committed actions remain saved."))
+            }
+            Self.finishCall(call, result: result, in: &next)
+        }
+        next.items.append(contentsOf: updates)
+        next.pendingSteering = nil; next.turnSteps = 0
+        next.hasPendingInference = true; next.paused = false
+        // Publish the reconciled calls and consume the updates in one checkpoint.
+        try persist(next)
+    }
     private func finishCall(_ call: AssistantToolCall, result: AssistantJSON) {
+        Self.finishCall(call, result: result, in: &conversation)
+    }
+    private static func finishCall(_ call: AssistantToolCall, result: AssistantJSON, in conversation: inout AssistantConversation) {
         var completed = call; completed.result = result.jsonString
         conversation.activity.append(completed)
         conversation.calls.removeAll { $0.id == call.id }
@@ -371,18 +420,23 @@ final class AssistantCoordinator: ObservableObject {
         catch { self.error = "Could not save paused progress: \(error.localizedDescription)" }
     }
     private func pauseAndCheckpoint(stopVoice: Bool = true) throws {
-        generation = UUID(); task?.cancel(); task = nil; isRunning = false; isConnecting = false
-        store.assistantCancelConflictResolution()
-        approval = nil; activity = ""; streamingText = ""
-        if conversation.hasPendingInference || !conversation.calls.isEmpty { conversation.paused = true }
-        fileContinuation?.resume(throwing: CancellationError()); fileContinuation = nil; filePurpose = nil
-        if stopVoice { voice.stop() }
+        interruptExecution(stopVoice: stopVoice)
         // Merely opening and closing the welcome screen should not fill History.
         let hasHistory = history.contains { $0.id == conversation.id }
         let hasContent = !conversation.messages.isEmpty || !conversation.items.isEmpty
             || !conversation.calls.isEmpty || !conversation.activity.isEmpty
-            || conversation.hasPendingInference || conversation.customTitle == true
+            || conversation.hasPendingInference || conversation.hasPendingSteering || conversation.customTitle == true
         if !identity.isEmpty && (hasHistory || hasContent) { try persist() }
+    }
+    private func interruptExecution(stopVoice: Bool) {
+        generation = UUID()
+        if let task { task.cancel(); retiringTask = task }
+        task = nil; isRunning = false; isConnecting = false
+        store.assistantCancelConflictResolution()
+        approval = nil; activity = ""; streamingText = ""
+        if conversation.hasPendingInference || !conversation.calls.isEmpty || conversation.hasPendingSteering { conversation.paused = true }
+        fileContinuation?.resume(throwing: CancellationError()); fileContinuation = nil; filePurpose = nil
+        if stopVoice { voice.stop() }
     }
     func cancelRemaining(stopVoice: Bool = true) {
         pause(stopVoice: stopVoice)
@@ -402,6 +456,10 @@ final class AssistantCoordinator: ObservableObject {
                 return
             }
         }
+        // Keep accepted follow-ups in history even when the user cancels their
+        // remaining execution, so a later turn retains the updated intent.
+        conversation.items.append(contentsOf: conversation.pendingSteering ?? [])
+        conversation.pendingSteering = nil
         conversation.calls = []; conversation.hasPendingInference = false; conversation.paused = false; approval = nil
         if !identity.isEmpty { do { try persist() } catch { self.error = error.localizedDescription } }
     }
@@ -420,7 +478,7 @@ final class AssistantCoordinator: ObservableObject {
         do { try persist(); resume() } catch { self.error = error.localizedDescription }
     }
     func attach(_ urls: [URL]) {
-        guard connected, !isRunning, let tools else { return }
+        guard connected, !isRunning, !isConnecting, !conversation.canResume, let tools else { return }
         isRunning = true; let stamp = generation
         task = Task {
             defer { if generation == stamp { isRunning = false; task = nil; activity = "" } }
