@@ -1,8 +1,38 @@
 import XCTest
+import AVFAudio
+@preconcurrency import WebRTC
 @testable import FinancesClone
 
 @MainActor
 final class AssistantTests: XCTestCase {
+    func testVoiceKeepsSpeakerDefaultWhenWebRTCReconfiguresAndReconnects() throws {
+        let voice = AssistantVoiceSession()
+        let audio = RTCAudioSession.sharedInstance()
+        let previousConfiguration = RTCAudioSessionConfiguration.webRTC()
+        defer {
+            voice.stop()
+            RTCAudioSessionConfiguration.setWebRTC(previousConfiguration)
+        }
+        for _ in 0..<2 {
+            try voice.activateAudioSession()
+            try voice.activateAudioSession() // Repeated setup must not leak an activation.
+            XCTAssertTrue(audio.isActive)
+            // Exercise the same configuration WebRTC reapplies at audio-unit startup.
+            do {
+                let configuration = RTCAudioSessionConfiguration.webRTC()
+                audio.lockForConfiguration()
+                defer { audio.unlockForConfiguration() }
+                try audio.setConfiguration(configuration)
+                XCTAssertEqual(audio.category, AVAudioSession.Category.playAndRecord.rawValue)
+                XCTAssertEqual(audio.mode, AVAudioSession.Mode.voiceChat.rawValue)
+                XCTAssertTrue(audio.categoryOptions.contains(.defaultToSpeaker))
+                XCTAssertTrue(audio.categoryOptions.contains(.allowBluetoothHFP))
+            }
+            voice.stop()
+            XCTAssertFalse(audio.isActive)
+        }
+    }
+
     private var stores: [MobileLedgerStore] = []
     private var directories: [URL] = []
     override func tearDown() async throws {

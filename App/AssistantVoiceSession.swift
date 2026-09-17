@@ -62,15 +62,31 @@ final class AssistantVoiceSession: NSObject, ObservableObject {
             let allowed = await withCheckedContinuation { continuation in AVAudioApplication.requestRecordPermission { continuation.resume(returning: $0) } }
             guard allowed else { throw AssistantFailure("microphone_denied", "Enable microphone access for Finances in Settings, or continue typing.") }
             try requireActive(); guard generation == stamp else { throw CancellationError() }
-            try AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
-            try AVAudioSession.sharedInstance().setActive(true)
-            ownsAudioSession = true
+            try activateAudioSession()
             provider = "live"
             try await connectPeer(gateway: gateway, stamp: stamp, requireActive: requireActive)
         } catch {
             if generation == stamp { release(); connecting = false; active = false; status = error.localizedDescription }
             throw error
         }
+    }
+    func activateAudioSession() throws {
+        guard !ownsAudioSession else { return }
+        let audio = RTCAudioSession.sharedInstance()
+        audio.lockForConfiguration()
+        defer { audio.unlockForConfiguration() }
+        // WebRTC reapplies this configuration when its audio unit starts. Setting
+        // AVAudioSession alone loses the speaker preference at that point.
+        let configuration = RTCAudioSessionConfiguration()
+        configuration.categoryOptions.insert(.defaultToSpeaker)
+        RTCAudioSessionConfiguration.setWebRTC(configuration)
+        // Keep WebRTC's voice processing and Bluetooth defaults. Unlike a forced
+        // speaker override, defaultToSpeaker still respects connected headsets.
+        try audio.setCategory(AVAudioSession.Category(rawValue: configuration.category),
+                              mode: AVAudioSession.Mode(rawValue: configuration.mode),
+                              options: configuration.categoryOptions)
+        try audio.setActive(true)
+        ownsAudioSession = true
     }
     private func connectPeer(gateway: any AssistantGatewayProtocol, stamp: UUID, requireActive: @escaping @MainActor () throws -> Void) async throws {
         RTCInitializeSSL()
@@ -135,7 +151,14 @@ final class AssistantVoiceSession: NSObject, ObservableObject {
         audioTrack?.isEnabled = false; channel?.delegate = nil; channel?.close(); channel = nil
         peer?.delegate = nil; peer?.close(); peer = nil; audioTrack = nil; factory = nil
         receivingTracks = []; acceptingEvents = false
-        if usedAudio { try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation) }
+        if usedAudio {
+            let audio = RTCAudioSession.sharedInstance()
+            audio.lockForConfiguration()
+            defer { audio.unlockForConfiguration() }
+            // Balance our activation without deactivating an audio unit that
+            // WebRTC is still closing. Its final release notifies other apps.
+            try? audio.setActive(false)
+        }
     }
     private func send(_ event: AssistantJSON) {
         guard let data = try? event.encoded(), channel?.readyState == .open else { return }
