@@ -33,6 +33,95 @@ private actor PreferencesTestCloud: CloudKitSyncTransport {
     func duringSave(_ action: @escaping @Sendable () async -> Void) { beforeSave = action }
     nonisolated func cancel() {}
 }
+
+@MainActor final class AssistantPreferencesTests: XCTestCase {
+    private var directories: [URL] = []
+    private func make(_ cloud: PreferencesTestCloud, directory: URL? = nil) -> AssistantPreferencesStore {
+        let dir = directory ?? FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        directories.append(dir)
+        return AssistantPreferencesStore(directory: dir, network: cloud)
+    }
+    override func tearDown() { for dir in directories { try? FileManager.default.removeItem(at: dir) }; directories = [] }
+    func testAcknowledgedSettingsRestoreAfterReinstallAndOverrideLegacyHistory() async throws {
+        let cloud = PreferencesTestCloud(), first = make(cloud)
+        first.legacySettings = { _ in AssistantSettings(customInstructions: "Old chat instructions") }
+        await first.refresh()
+        let desired = AssistantSettings(model: "gpt-5.6-sol", effort: "high", customInstructions: "My app preferences")
+        try first.edit(desired, expected: first.value)
+        await first.refresh()
+        XCTAssertFalse(first.pending)
+        first.disconnect()
+        let reinstall = make(cloud) // A new installation has no local cache.
+        reinstall.legacySettings = { _ in AssistantSettings(customInstructions: "Stale conversation") }
+        await reinstall.refresh()
+        XCTAssertEqual(reinstall.settings, desired)
+        XCTAssertTrue(reinstall.ready)
+        XCTAssertFalse(reinstall.pending)
+        reinstall.legacySettings = { _ in nil } // Deleting chat history cannot remove app preferences.
+        await reinstall.refresh()
+        XCTAssertEqual(reinstall.settings, desired)
+        reinstall.disconnect()
+    }
+    func testOfflineOutboxAndAccountIsolation() async throws {
+        let cloud = PreferencesTestCloud(), dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let first = make(cloud, directory: dir)
+        await first.refresh()
+        await cloud.setOffline(true)
+        let desired = AssistantSettings(customInstructions: "Private pending instructions")
+        try first.edit(desired, expected: first.value)
+        await first.refresh(); XCTAssertTrue(first.pending); first.disconnect()
+        let restarted = make(cloud, directory: dir)
+        await restarted.refresh()
+        XCTAssertEqual(restarted.settings, desired)
+        XCTAssertTrue(restarted.pending)
+        restarted.disconnect(); await cloud.switchAccount(); await cloud.setOffline(false)
+        restarted.legacySettings = { subject in subject.hasSuffix(":A") ? desired : nil }
+        await restarted.refresh()
+        XCTAssertEqual(restarted.settings, AssistantSettings())
+        XCTAssertFalse(restarted.pending)
+        restarted.disconnect()
+    }
+    func testConcurrentPreferencesMergeAndConflict() async throws {
+        let cloud = PreferencesTestCloud(), a = make(cloud), b = make(cloud)
+        await a.refresh(); await b.refresh()
+        try a.edit(AssistantSettings(model: "gpt-5.6-sol", effort: "high"), expected: a.value)
+        try b.edit(AssistantSettings(customInstructions: "Use English"), expected: b.value)
+        await a.refresh(); await b.refresh(); await a.refresh()
+        XCTAssertEqual(a.settings, b.settings)
+        XCTAssertEqual(a.settings.model, "gpt-5.6-sol")
+        XCTAssertEqual(a.settings.customInstructions, "Use English")
+        var local = a.settings; local.customInstructions = "Local"
+        var remote = b.settings; remote.customInstructions = "Remote"
+        try a.edit(local, expected: a.value); try b.edit(remote, expected: b.value)
+        await a.refresh(); await b.refresh()
+        XCTAssertEqual(b.conflicts, ["Custom instructions"])
+        try b.resolve(keepLocal: false, expectedLocal: b.value, expectedRemote: b.remote)
+        await b.refresh()
+        XCTAssertEqual(b.settings.customInstructions, "Local")
+        a.disconnect(); b.disconnect()
+    }
+    func testEditDuringUploadSurvivesAcknowledgment() async throws {
+        let cloud = PreferencesTestCloud(), store = make(cloud)
+        await store.refresh()
+        try store.edit(AssistantSettings(customInstructions: "First"), expected: store.value)
+        await cloud.duringSave { @MainActor in
+            try? store.edit(AssistantSettings(customInstructions: "Newer edit"), expected: store.value)
+        }
+        await store.refresh()
+        XCTAssertEqual(store.settings.customInstructions, "Newer edit")
+        XCTAssertFalse(store.pending)
+        store.disconnect()
+    }
+    func testAssistantZoneAndUTF16Limit() throws {
+        let codec = CloudKitSyncRecordCodec(zoneID: CKRecordZone.ID(zoneName: AssistantPreferences.zone, ownerName: CKCurrentUserDefaultName))
+        XCTAssertNoThrow(try codec.recordID(type: AssistantPreferences.domain, id: AssistantPreferences.recordID))
+        XCTAssertThrowsError(try codec.recordID(type: ReceiptPreferences.domain, id: AssistantPreferences.recordID))
+        let receipts = CloudKitSyncRecordCodec(zoneID: CKRecordZone.ID(zoneName: ReceiptPreferences.zone, ownerName: CKCurrentUserDefaultName))
+        XCTAssertThrowsError(try receipts.recordID(type: AssistantPreferences.domain, id: AssistantPreferences.recordID))
+        XCTAssertThrowsError(try AssistantPreferences(AssistantSettings(customInstructions: String(repeating: "😀", count: 2001))).validate())
+        XCTAssertThrowsError(try AssistantPreferences(AssistantSettings(effort: "none")).validate())
+    }
+}
 @MainActor final class ReceiptPreferencesTests: XCTestCase {
     private var directories: [URL] = []
     private func make(_ cloud: PreferencesTestCloud, directory: URL? = nil, defaults: UserDefaults? = nil) -> ReceiptPreferencesStore {

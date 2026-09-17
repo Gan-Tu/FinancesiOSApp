@@ -25,7 +25,7 @@ final class RegisterInteractionTests: XCTestCase {
         app.swipeUp()
         Thread.sleep(forTimeInterval: 1)
         XCTAssertTrue(row.isHittable)
-        XCTAssertLessThan(row.frame.maxY, app.buttons["iCloud Sync"].frame.minY - 8)
+        XCTAssertLessThan(row.frame.maxY, app.buttons["assistant.open"].frame.minY - 8)
         capture(app, "Last transaction remains above toolbar")
         row.swipeRight()
         XCTAssertTrue(app.buttons["Uncleared"].waitForExistence(timeout: 3))

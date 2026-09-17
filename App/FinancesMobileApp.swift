@@ -67,10 +67,23 @@ private final class FinancesMobileLaunchState: ObservableObject {
 @MainActor
 private struct FinancesMobileNormalContent: View {
     @ObservedObject var store: MobileLedgerStore
+    @StateObject private var assistant: AssistantCoordinator
+    init(store: MobileLedgerStore) {
+        self.store = store
+        let preferences = AssistantPreferencesStore.shared
+        preferences.legacySettings = { [weak store] subject in
+            guard let store else { return nil }
+            return try store.assistantDatabase.assistantHistory(scope: subject).first
+                .map { try JSONDecoder().decode(AssistantConversation.self, from: $0).settings }
+        }
+        _assistant = StateObject(wrappedValue: AssistantCoordinator(store: store, preferences: preferences))
+    }
     @AppStorage(JournalVisibility.preferenceKey, store: MobileDisplayPreferences.defaults) private var hiddenJournalIDs = ""
     var body: some View {
         AppShellView()
             .environmentObject(store)
+            .environmentObject(assistant)
+            .environmentObject(AssistantPreferencesStore.shared)
             .environmentObject(store.cloudSyncState)
             .preferredColorScheme(store.data.appearance.colorScheme)
             .task {

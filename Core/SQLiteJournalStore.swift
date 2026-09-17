@@ -2,6 +2,13 @@ import CryptoKit
 import Foundation
 import SQLite3
 
+struct SQLiteAssistantActionReceipt: Sendable {
+    var scope: String
+    var id: String
+    var digest: String
+    var result: String
+}
+
 enum SQLiteJournalStoreError: LocalizedError {
     case openFailed(String)
     case prepareFailed(String)
@@ -726,6 +733,91 @@ final class SQLiteJournalStore: @unchecked Sendable {
         try applyDiff(diff, data: data, trackSyncChanges: trackSyncChanges)
     }
 
+    /// Assistant history and action receipts are local-only, outside every sync
+    /// envelope and portable JournalData export. The receipt commits with the
+    /// graph and outbox, never in a second transaction after the financial save.
+    private func ensureAssistantSchema(_ db: OpaquePointer) throws {
+        try execute("CREATE TABLE IF NOT EXISTS assistant_history(scope TEXT NOT NULL, id TEXT NOT NULL, updated REAL NOT NULL, payload BLOB NOT NULL, PRIMARY KEY(scope,id))", db)
+        try execute("CREATE TABLE IF NOT EXISTS assistant_actions(scope TEXT NOT NULL, id TEXT NOT NULL, digest TEXT NOT NULL, result TEXT NOT NULL, PRIMARY KEY(scope,id))", db)
+    }
+
+    func assistantHistory(scope: String, now: Date = Date()) throws -> [Data] {
+        try withCloudKitDatabase { db in
+            try ensureAssistantSchema(db)
+            try executePrepared("DELETE FROM assistant_history WHERE updated < ?", db) {
+                sqlite3_bind_double($0, 1, now.addingTimeInterval(-30 * 86400).timeIntervalSince1970)
+            }
+            return try rows("SELECT payload FROM assistant_history WHERE scope = ? ORDER BY updated DESC", database: db,
+                bindValues: { try self.bind(scope, to: $0, at: 1, db) }, map: { Data(base64Encoded: columnText($0, 0) ?? "") ?? Data() })
+        }
+    }
+
+    func saveAssistantHistory(scope: String, id: String, payload: Data, now: Date = Date()) throws {
+        try withCloudKitDatabase { db in
+            try ensureAssistantSchema(db)
+            try executePrepared("INSERT INTO assistant_history(scope,id,updated,payload) VALUES (?,?,?,?) ON CONFLICT(scope,id) DO UPDATE SET updated=excluded.updated,payload=excluded.payload", db) {
+                try bind(scope, to: $0, at: 1, db); try bind(id, to: $0, at: 2, db)
+                sqlite3_bind_double($0, 3, now.timeIntervalSince1970)
+                try bind(payload.base64EncodedString(), to: $0, at: 4, db)
+            }
+        }
+    }
+
+    func deleteAssistantHistory(scope: String, id: String) throws {
+        try withCloudKitDatabase { db in
+            try ensureAssistantSchema(db)
+            try executePrepared("DELETE FROM assistant_history WHERE scope = ? AND id = ?", db) {
+                try bind(scope, to: $0, at: 1, db); try bind(id, to: $0, at: 2, db)
+            }
+        }
+    }
+
+    func assistantAction(scope: String, id: String, digest: String) throws -> String? {
+        try withCloudKitDatabase { db in
+            try ensureAssistantSchema(db)
+            let values = try rows("SELECT digest,result FROM assistant_actions WHERE scope = ? AND id = ?", database: db,
+                bindValues: { try self.bind(scope, to: $0, at: 1, db); try self.bind(id, to: $0, at: 2, db) },
+                map: { (columnText($0, 0), columnText($0, 1)) })
+            guard let saved = values.first else { return nil }
+            guard saved.0 == digest else { throw SQLiteJournalStoreError.stepFailed("This action ID belongs to different arguments.") }
+            return saved.1
+        }
+    }
+
+    func persistAssistant(_ data: JournalData, previous: JournalData?, scope: String, id: String,
+                          digest: String, result: String, beforeCommit: (() throws -> Void)? = nil) throws {
+        Self.accessLock.lock(); defer { Self.accessLock.unlock() }
+        let db = try open(); defer { sqlite3_close(db) }
+        try ensureSchema(in: db); try ensureAssistantSchema(db)
+        try execute("BEGIN IMMEDIATE TRANSACTION", db)
+        do {
+            let existing = try rows("SELECT id FROM assistant_actions WHERE scope = ? AND id = ?", database: db,
+                bindValues: { try self.bind(scope, to: $0, at: 1, db); try self.bind(id, to: $0, at: 2, db) }, map: { columnText($0, 0) })
+            guard existing.isEmpty else { throw SQLiteJournalStoreError.stepFailed("Action already committed; use its recorded result.") }
+            if let previous {
+                try applyDiffContents(JournalDataDiff.between(previous, data), data: data, trackSyncChanges: true, database: db)
+            } else {
+                let old = try readSyncHashes(db), envelopes = try syncEnvelopes(for: data)
+                try replaceAppRows(data, envelopes: envelopes, database: db)
+                try updateSyncRows(envelopes: envelopes, previousRows: old, database: db)
+            }
+            try executePrepared("INSERT INTO assistant_actions(scope,id,digest,result) VALUES (?,?,?,?)", db) {
+                try bind(scope, to: $0, at: 1, db); try bind(id, to: $0, at: 2, db)
+                try bind(digest, to: $0, at: 3, db); try bind(result, to: $0, at: 4, db)
+            }
+            try beforeCommit?()
+            try execute("COMMIT", db)
+        } catch { try? execute("ROLLBACK", db); throw error }
+    }
+
+    func assistantBoundIdentity() throws -> (context: String, account: String)? {
+        try withCloudKitDatabase { db in
+            let bindings = try cloudKitBindings(db)
+            guard bindings.count <= 1 else { throw SQLiteJournalStoreError.stepFailed("Multiple iCloud identities require recovery.") }
+            return bindings.first.map { ($0.0, $0.1) }
+        }
+    }
+
     private func applyDiff(_ diff: JournalDataDiff, data: JournalData, trackSyncChanges: Bool) throws {
         Self.accessLock.lock()
         defer { Self.accessLock.unlock() }
@@ -1411,7 +1503,7 @@ final class SQLiteJournalStore: @unchecked Sendable {
         try withCloudKitDatabase(contextKey: contextKey) { try readCloudKitConflicts(contextKey: contextKey, database: $0) }
     }
 
-    func resolveCloudKitConflict(id: String, keepLocal: Bool, contextKey: String, data: JournalData, previous: JournalData?, receiptInstallationID: UUID? = nil) throws {
+    func resolveCloudKitConflict(id: String, keepLocal: Bool, contextKey: String, data: JournalData, previous: JournalData?, receiptInstallationID: UUID? = nil, assistantReceipt: SQLiteAssistantActionReceipt? = nil) throws {
         try withCloudKitDatabase(contextKey: contextKey) { database in
             guard let conflict = try readCloudKitConflicts(contextKey: contextKey, database: database).first(where: { $0.id == id }) else { throw cloudKitError("This CloudKit conflict is no longer available.") }
             let originalKnown = try rows("SELECT known_system_fields FROM cloudkit_conflicts WHERE id = ? AND context_key = ?", database: database, bindValues: {
@@ -1447,6 +1539,13 @@ final class SQLiteJournalStore: @unchecked Sendable {
                 try bind(isoString(Date()), to: $0, at: 1, database); try bind(id, to: $0, at: 2, database); try bind(contextKey, to: $0, at: 3, database)
             }
             if let receiptInstallationID { try markReceiptInstallationCommitted(receiptInstallationID, database: database) }
+            if let receipt = assistantReceipt {
+                try ensureAssistantSchema(database)
+                try executePrepared("INSERT INTO assistant_actions(scope,id,digest,result) VALUES (?,?,?,?)", database) {
+                    try bind(receipt.scope, to: $0, at: 1, database); try bind(receipt.id, to: $0, at: 2, database)
+                    try bind(receipt.digest, to: $0, at: 3, database); try bind(receipt.result, to: $0, at: 4, database)
+                }
+            }
         }
     }
 

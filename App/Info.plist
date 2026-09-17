@@ -70,6 +70,8 @@
 	<string>Attach receipt photos to transactions.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Unlock your private financial journals.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Talk with the Finances assistant. Audio is sent to OpenAI only while voice chat is active.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Attach receipt images to transactions.</string>
 	<key>UIApplicationSceneManifest</key>

@@ -57,6 +57,9 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    NavigationLink { AssistantPreferencesView() } label: {
+                        SettingsIconLabel(title: "Ask AI", systemImage: "message.badge.waveform", tint: .green)
+                    }
                     NavigationLink {
                         ScrollView { ReceiptAISettingsView(accounts: store.data.accounts).padding() }
                             .navigationTitle("Receipt Suggestions")
@@ -249,6 +252,7 @@ struct CloudSyncManagementView: View {
     @State private var showingConnection = false
     @State private var showingConflicts = false
     @State private var confirmingReset = false
+    @State private var isRetryingPersistence = false
 
     var body: some View {
         FinanceForm {
@@ -263,6 +267,20 @@ struct CloudSyncManagementView: View {
                         .font(.body).fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.horizontal, 20).padding(.vertical, 12)
+            }
+
+            if let error = store.localPersistenceError {
+                FinanceFormCard {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label("Changes Not Saved", systemImage: "exclamationmark.triangle")
+                            .font(.headline).foregroundStyle(.red)
+                        Text(error.message).font(.footnote).foregroundStyle(Color(uiColor: .secondaryLabel))
+                        Button(isRetryingPersistence ? "Retrying Save…" : "Retry Saving Changes", action: retryLocalSave)
+                            .disabled(isRetryingPersistence)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(20)
+                }
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -332,6 +350,16 @@ struct CloudSyncManagementView: View {
         case .running: syncState.progress.phase.title
         case .succeeded: "Up to date"
         case .failed: "Sync failed"
+        }
+    }
+
+    private func retryLocalSave() {
+        guard !isRetryingPersistence, store.localPersistenceError != nil else { return }
+        isRetryingPersistence = true
+        Task {
+            defer { isRetryingPersistence = false }
+            do { try await store.flushLocalChangesAsync() }
+            catch { /* Keep the store's failed write visible until a durable save succeeds. */ }
         }
     }
 

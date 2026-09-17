@@ -211,6 +211,52 @@ private actor AssistTestTransport: CloudKitSyncTransport {
     func remove(endpoint: String) throws { values[endpoint] = nil }
 }
 extension ReceiptAssistTests {
+    func testLargeAssistantAttachmentUsesBoundedChunksAndChatFinalize() async throws {
+        let state = AssistantUploadFixture()
+        let (client, session) = try uploadClient(state)
+        defer { session.invalidateAndCancel(); AssistantUploadProtocol.responder = nil }
+        let result: AssistantJSON = try await client.uploadAssistantAttachment(Data(repeating: 65, count: 6_000_000), contentType: "multipart/form-data; boundary=qa", endpoint: "https://assistant-upload.invalid")
+        XCTAssertEqual(result["ok"].bool, true)
+        let requests = state.requests
+        XCTAssertEqual(requests.first?.0, "/api/v1/receipt-upload/start")
+        let parts = requests.filter { $0.0 == "/api/v1/receipt-upload/part" }
+        XCTAssertEqual(parts.count, 6)
+        XCTAssertTrue(parts.allSatisfy { $0.1 == 1_000_000 })
+        XCTAssertEqual(requests.last?.0, "/api/v1/chat-attachments")
+        XCTAssertLessThan(requests.last?.1 ?? .max, 1_000)
+        XCTAssertFalse(requests.contains { $0.0 == "/api/v1/receipt-analysis" })
+    }
+    func testSmallAssistantAttachmentRemainsDirect() async throws {
+        let state = AssistantUploadFixture()
+        let (client, session) = try uploadClient(state)
+        defer { session.invalidateAndCancel(); AssistantUploadProtocol.responder = nil }
+        let _: AssistantJSON = try await client.uploadAssistantAttachment(Data(repeating: 65, count: 1_024), contentType: "multipart/form-data; boundary=qa", endpoint: "https://assistant-upload.invalid")
+        XCTAssertEqual(state.requests.map(\.0), ["/api/v1/chat-attachments"])
+        XCTAssertEqual(state.requests.first?.1, 1_024)
+    }
+    func testFailedAssistantChunkCancelsTransferWithoutFinalizing() async throws {
+        let state = AssistantUploadFixture(failPart: true)
+        let (client, session) = try uploadClient(state)
+        defer { session.invalidateAndCancel(); AssistantUploadProtocol.responder = nil }
+        do {
+            let _: AssistantJSON = try await client.uploadAssistantAttachment(Data(repeating: 65, count: 6_000_000), contentType: "multipart/form-data; boundary=qa", endpoint: "https://assistant-upload.invalid")
+            XCTFail("Chunk failure must fail the upload")
+        } catch { }
+        for _ in 0..<100 where !state.requests.contains(where: { $0.0 == "/api/v1/receipt-upload/cancel" }) { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(state.requests.contains { $0.0 == "/api/v1/receipt-upload/cancel" })
+        XCTAssertFalse(state.requests.contains { $0.0 == "/api/v1/chat-attachments" })
+    }
+    private func uploadClient(_ state: AssistantUploadFixture) throws -> (ReceiptAnalysisClient, URLSession) {
+        let store = MemoryReceiptCredentials()
+        try store.save(syntheticSession(), endpoint: "https://assistant-upload.invalid")
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [AssistantUploadProtocol.self]
+        let session = URLSession(configuration: config)
+        AssistantUploadProtocol.responder = { request in try state.respond(request) }
+        let client = ReceiptAnalysisClient(credentialStore: store, session: session)
+        try client.restoreSession(endpoint: "https://assistant-upload.invalid")
+        return (client, session)
+    }
     private func syntheticSession() throws -> ReceiptSessionCredential {
         let data = try JSONSerialization.data(withJSONObject: [
             "exp": Date().addingTimeInterval(3600).timeIntervalSince1970
@@ -288,6 +334,52 @@ extension ReceiptAssistTests {
             XCTAssertNil(try store.load(endpoint: endpoint))
         #endif
     }
+}
+
+private final class AssistantUploadFixture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [(String, Int)] = []
+    private let failPart: Bool
+    init(failPart: Bool = false) { self.failPart = failPart }
+    var requests: [(String, Int)] { lock.lock(); defer { lock.unlock() }; return recorded }
+    func respond(_ request: URLRequest) throws -> (Int, Data) {
+        var body = request.httpBody ?? Data()
+        if body.isEmpty, let stream = request.httpBodyStream {
+            stream.open(); defer { stream.close() }
+            var buffer = [UInt8](repeating: 0, count: 8192)
+            while stream.hasBytesAvailable {
+                let count = stream.read(&buffer, maxLength: buffer.count)
+                if count <= 0 { break }; body.append(buffer, count: count)
+            }
+        }
+        let path = request.url!.path
+        lock.lock(); recorded.append((path, body.count)); lock.unlock()
+        var status = 200
+        let result: [String: Any]
+        switch path {
+        case "/api/v1/receipt-upload/start": result = ["uploadToken": "synthetic-token", "chunkBytes": 1_000_000]
+        case "/api/v1/receipt-upload/part":
+            if failPart { status = 500; result = ["error": "Synthetic upload failure"] }
+            else { result = ["part": "part-" + (request.value(forHTTPHeaderField: "X-Receipt-Part") ?? "missing")] }
+        default: result = ["ok": true]
+        }
+        return (status, try JSONSerialization.data(withJSONObject: result))
+    }
+}
+private final class AssistantUploadProtocol: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var responder: (@Sendable (URLRequest) throws -> (Int, Data))?
+    override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "assistant-upload.invalid" }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        do {
+            let (status, data) = try Self.responder!(request)
+            let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch { client?.urlProtocol(self, didFailWithError: error) }
+    }
+    override func stopLoading() {}
 }
 
 extension ReceiptAssistTests {

@@ -6,6 +6,7 @@ enum MobileRoute: Hashable {
     case journal(UUID)
     case transactions(scope: MobileTransactionScope, title: String, ledgerID: UUID)
     case searchTransactions(scope: MobileTransactionScope, ledgerID: UUID, query: TransactionSearchQuery)
+    case assistantRegister(scope: MobileTransactionScope, ledgerID: UUID, query: String, interval: DateInterval?)
     case transaction(UUID)
     case templates(UUID)
     case account(UUID)
@@ -15,7 +16,7 @@ enum MobileRoute: Hashable {
     @MainActor func resolvedLedgerID(in store: MobileLedgerStore) -> UUID? {
         switch self {
         case .journal(let id), .templates(let id): id
-        case .transactions(_, _, let id), .searchTransactions(_, let id, _): id
+        case .transactions(_, _, let id), .searchTransactions(_, let id, _), .assistantRegister(_, let id, _, _): id
         case .account(let id): store.account(id)?.ledgerID
         case .currency(let id): store.commodity(id)?.ledgerID
         case .transaction(let id): store.transaction(id)?.ledgerID
@@ -26,6 +27,7 @@ enum MobileRoute: Hashable {
 }
 
 enum ShellSheet: Identifiable {
+    case assistant
     case settings
     case cloudSync
     case quickSearch
@@ -34,6 +36,7 @@ enum ShellSheet: Identifiable {
 
     var id: String {
         switch self {
+        case .assistant: "assistant"
         case .settings: "settings"
         case .cloudSync: "cloud-sync"
         case .quickSearch: "quick-search"
@@ -1212,17 +1215,14 @@ struct CurrencyTransactionsScreen: View {
 }
 
 struct FinanceBottomBar: View {
-    @EnvironmentObject private var store: MobileLedgerStore
-    @EnvironmentObject private var syncState: MobileCloudSyncState
     var isJournalActive: Bool
     var openSettings: () -> Void
     var openSearch: () -> Void
-    var openCloudSync: () -> Void
     var newTransaction: () -> Void
-    @State private var isRetryingPersistence = false
+    var openAssistant: () -> Void = {}
 
     var body: some View {
-        HStack {
+        HStack(alignment: .center) {
             Button(action: isJournalActive ? openSearch : openSettings) {
                 Image(systemName: isJournalActive ? "magnifyingglass" : "gear")
                     .font(.title3)
@@ -1230,27 +1230,22 @@ struct FinanceBottomBar: View {
             }
             .accessibilityLabel(isJournalActive ? "Quick Search" : "Settings")
 
-            Spacer()
-
-            Button(action: store.localPersistenceError == nil ? openCloudSync : retryLocalSave) {
-                VStack(spacing: 5) {
-                    Text(store.localPersistenceError == nil ? syncTitle : isRetryingPersistence ? "Retrying Save…" : "Save Failed · Retry")
-                        .font(.body)
+            Button(action: openAssistant) {
+                HStack(alignment: .center, spacing: 7) {
+                    Image(systemName: "message.badge.waveform")
+                        .font(.title3)
+                        .frame(height: 44)
+                    Text("Ask AI")
+                        .font(.body.weight(.regular))
                         .lineLimit(1)
-                    if store.localPersistenceError == nil && syncState.progress.isRunning {
-                        CloudSyncProgressBar(progress: syncState.progress)
-                            .frame(maxWidth: 160)
-                    }
+                        .minimumScaleFactor(0.8)
+                        .frame(minHeight: 44)
                 }
-                .frame(maxWidth: 220, minHeight: 44)
+                .frame(maxWidth: .infinity, minHeight: 44)
                 .contentShape(Rectangle())
             }
-            .foregroundStyle(store.localPersistenceError == nil ? Color.accentColor : Color.red)
-            .disabled(isRetryingPersistence)
-            .accessibilityLabel(store.localPersistenceError == nil ? "iCloud Sync" : "Retry Saving Changes")
-            .accessibilityValue(store.localPersistenceError?.message ?? (syncState.progress.detail.map { "\(syncTitle) \($0)" } ?? syncTitle))
-
-            Spacer()
+            .accessibilityLabel("Ask AI")
+            .accessibilityIdentifier("assistant.open")
 
             if isJournalActive {
                 Button(action: newTransaction) {
@@ -1272,14 +1267,35 @@ struct FinanceBottomBar: View {
         }
     }
 
-    private func retryLocalSave() {
-        guard !isRetryingPersistence, store.localPersistenceError != nil else { return }
-        isRetryingPersistence = true
-        Task {
-            defer { isRetryingPersistence = false }
-            do { try await store.flushLocalChangesAsync() }
-            catch { /* The store keeps the failed write visible until a newer durable save succeeds. */ }
+}
+
+struct FinanceSyncTitle: View {
+    @EnvironmentObject private var store: MobileLedgerStore
+    @EnvironmentObject private var syncState: MobileCloudSyncState
+    let title: String
+    let openCloudSync: () -> Void
+
+    var body: some View {
+        Button(action: openCloudSync) {
+            VStack(spacing: 1) {
+                Text(title).font(.headline).foregroundStyle(Color.primary)
+                Text(store.localPersistenceError == nil ? syncTitle : "Save Failed")
+                    .font(.caption2)
+                    .foregroundStyle(store.localPersistenceError == nil ? Color(uiColor: .secondaryLabel) : .red)
+                if store.localPersistenceError == nil && syncState.progress.isRunning {
+                    CloudSyncProgressBar(progress: syncState.progress).frame(maxWidth: 140)
+                }
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+            .frame(maxWidth: 220, minHeight: 44)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel("iCloud Sync")
+        .accessibilityValue("\(title), \(store.localPersistenceError?.message ?? (syncState.progress.detail.map { "\(syncTitle) \($0)" } ?? syncTitle))")
+        .accessibilityHint("Opens sync settings")
+        .accessibilityIdentifier("navigation.sync")
     }
 
     private var syncTitle: String {

@@ -79,12 +79,14 @@ enum DemoData {
         if CommandLine.arguments.contains("--demo-scroll"), let index = data.transactions.indices.min(by: { data.transactions[$0].date < data.transactions[$1].date }) {
             data.transactions[index].note = "Oldest test transaction"
         }
-        let dependencies: CloudKitSyncDependencies = (isSplitEditorFixtureRequested || isTextSuggestionFixtureRequested || isSystemEntryFixtureRequested)
+        let assistantTesting = CommandLine.arguments.contains("--assistant-api-url")
+        let dependencies: CloudKitSyncDependencies = (assistantTesting || isSplitEditorFixtureRequested || isTextSuggestionFixtureRequested || isSystemEntryFixtureRequested)
             ? CloudKitSyncDependencies(configuration: { nil }, makeClient: { _ in
                 throw ValidationError(message: "Synthetic split editor tests prohibit CloudKit access.")
             }, automaticTriggersEnabled: false)
             : .live
-        let store = MobileLedgerStore(supportDirectory: directory, initialData: data, cloudKitSyncDependencies: dependencies)
+        let restoreAssistantDemo = assistantTesting && FileManager.default.fileExists(atPath: directory.appendingPathComponent("journal.sqlite").path)
+        let store = MobileLedgerStore(supportDirectory: directory, initialData: restoreAssistantDemo ? nil : data, cloudKitSyncDependencies: dependencies)
         let hasSampleReceipt = store.data.transactions.contains { $0.note == "Weekly groceries" && $0.attachment?.assets.isEmpty == false }
         if !hasSampleReceipt, let transaction = store.data.transactions.first(where: { $0.note == "Weekly groceries" }) {
             do {

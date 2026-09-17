@@ -35,6 +35,7 @@ enum EditorRoute: Identifiable {
 struct AppShellView: View {
     @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var store: MobileLedgerStore
+    @EnvironmentObject private var assistant: AssistantCoordinator
     @State private var sceneID = UUID()
     @State private var route: EditorRoute?
     @State private var navigationPath: [MobileRoute] = []
@@ -46,6 +47,9 @@ struct AppShellView: View {
     var body: some View {
         NavigationStack(path: $navigationPath) {
             JournalsHomeScreen(navigationPath: $navigationPath, route: $route)
+                .toolbar {
+                    ToolbarItem(placement: .principal) { syncTitle("Journals") }
+                }
                 .toolbarBackground(Color(uiColor: .systemBackground), for: .navigationBar)
                 .toolbarBackground(.visible, for: .navigationBar)
                 .safeAreaInset(edge: .bottom, spacing: 0) { globalBottomBar }
@@ -60,6 +64,8 @@ struct AppShellView: View {
                         TransactionListScreen(scope: scope, title: title, route: $route, ledgerID: ledgerID, openTransaction: { navigationPath.append(.transaction($0)) })
                     case .searchTransactions(let scope, let ledgerID, let query):
                         TransactionListScreen(scope: scope, title: query.title, route: $route, ledgerID: ledgerID, searchFilter: query, openTransaction: { navigationPath.append(.transaction($0)) })
+                    case .assistantRegister(let scope, let ledgerID, let query, let interval):
+                        TransactionListScreen(scope: scope, title: query.isEmpty ? "Transactions" : query, route: $route, dateInterval: interval, ledgerID: ledgerID, searchFilter: query.isEmpty ? nil : TransactionSearchQuery(text: query), openTransaction: { navigationPath.append(.transaction($0)) })
                     case .transaction(let transactionID):
                         TransactionDetailScreen(transactionID: transactionID, route: $route)
                     case .templates(let ledgerID):
@@ -78,6 +84,11 @@ struct AppShellView: View {
                     // moves to today's rows and the navigation title changes.
                     .toolbarBackground(Color(uiColor: .systemBackground), for: .navigationBar)
                     .toolbarBackground(.visible, for: .navigationBar)
+                    .toolbar {
+                        if let title = syncNavigationTitle(for: destination) {
+                            ToolbarItem(placement: .principal) { syncTitle(title) }
+                        }
+                    }
                     .safeAreaInset(edge: .bottom, spacing: 0) { globalBottomBar }
                 }
         }
@@ -105,6 +116,8 @@ struct AppShellView: View {
         }
         .sheet(item: $presentedSheet, onDismiss: finishShellSheet) { sheet in
             switch sheet {
+            case .assistant:
+                AssistantView()
             case .settings:
                 SettingsView(route: $route)
             case .cloudSync:
@@ -122,6 +135,7 @@ struct AppShellView: View {
                 .frame(width: 0, height: 0)
         }
         .onChange(of: scenePhase, initial: true) {
+            assistant.setForeground(scenePhase == .active)
             store.setSceneActive(scenePhase == .active, sceneID: sceneID)
             if scenePhase != .active { store.lockApp() }
             else {
@@ -137,8 +151,26 @@ struct AppShellView: View {
         .onChange(of: store.validationError?.id) { _, id in if id == nil { handleSystemEntry() } }
         .onChange(of: systemEntries.error?.id) { _, id in if id == nil { handleSystemEntry() } }
         .onChange(of: store.isUnlocked) { _, unlocked in
+            assistant.lockChanged()
             handleSystemEntry()
             if unlocked { Task { await systemEntries.restoreSharedReceipts(store: store) } }
+        }
+        .onChange(of: assistant.navigationRequest) { _, request in
+            guard let request else { return }
+            assistant.navigationRequest = nil
+            assistant.dismiss(); presentedSheet = nil
+            if let value = request["transaction"].string, let id = UUID(uuidString: value), store.transaction(id) != nil {
+                navigationPath.append(.transaction(id))
+            } else if let value = request["journal"].string, let id = UUID(uuidString: value), store.ledger(id) != nil {
+                if request["view"].string == "overview" { navigationPath.append(.journal(id)) }
+                else {
+                    let account = request["account"].string.flatMap(UUID.init(uuidString:))
+                    let from = request["from_timestamp"].string.flatMap { ISO8601DateFormatter().date(from: $0) }
+                    let to = request["to_timestamp"].string.flatMap { ISO8601DateFormatter().date(from: $0) }
+                    let interval = (from != nil || to != nil) ? DateInterval(start: from ?? .distantPast, end: to ?? .distantFuture) : nil
+                    navigationPath.append(.assistantRegister(scope: account.map(MobileTransactionScope.account) ?? .all, ledgerID: id, query: request["query"].string ?? "", interval: interval))
+                }
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .financesSuggestionsChanged)) { _ in
             Task { await systemEntries.reloadSuggestions(store: store) }
@@ -193,13 +225,38 @@ struct AppShellView: View {
                 isJournalActive: isJournalContext,
                 openSettings: { presentedSheet = .settings },
                 openSearch: { presentedSheet = .quickSearch },
-                openCloudSync: { presentedSheet = .cloudSync },
                 newTransaction: {
                     guard let ledgerID = currentLedgerID else { return }
                     FinancePerformanceTrace.begin("template-menu")
                     presentedSheet = .newTransaction(ledgerID)
+                },
+                openAssistant: {
+                    let context = AssistantContext(journalID: currentLedgerID, accountID: currentAccountID, transactionID: currentTransactionID)
+                    do {
+                        try assistant.beginFreshConversation(context: context)
+                        presentedSheet = .assistant
+                    } catch {
+                        store.validationError = ValidationError(message: "Could not save the previous conversation: \(error.localizedDescription). Its progress has been kept; please try again.")
+                    }
                 }
             )
+        }
+    }
+
+    private func syncTitle(_ title: String) -> some View {
+        FinanceSyncTitle(title: title) { presentedSheet = .cloudSync }
+    }
+
+    private func syncNavigationTitle(for destination: MobileRoute) -> String? {
+        switch destination {
+        case .journals: "Journals"
+        case .journal(let id): store.ledger(id)?.name ?? "Journal"
+        case .transactions(_, let title, _): title
+        case .searchTransactions(_, _, let query): query.title
+        case .assistantRegister(_, _, let query, _): query.isEmpty ? "Transactions" : query
+        case .account(let id): store.account(id)?.name ?? "Account"
+        case .currency(let id): store.commodity(id)?.name ?? "Currency"
+        case .transaction, .templates, .settings, .suggestions: nil
         }
     }
 
@@ -218,7 +275,7 @@ struct AppShellView: View {
         switch lastRoute {
         case .transaction, .settings, .templates, .suggestions:
             return false
-        case .journals, .journal, .transactions, .searchTransactions, .account, .currency:
+        case .journals, .journal, .transactions, .searchTransactions, .assistantRegister, .account, .currency:
             return true
         }
     }
@@ -227,9 +284,18 @@ struct AppShellView: View {
         navigationPath.reversed().compactMap { $0.resolvedLedgerID(in: store) }.first
     }
 
+    private var currentAccountID: UUID? {
+        if case .account(let id) = navigationPath.last { return id }
+        return nil
+    }
+    private var currentTransactionID: UUID? {
+        if case .transaction(let id) = navigationPath.last { return id }
+        return nil
+    }
+
     private var currentRegisterScope: MobileTransactionScope? {
         switch navigationPath.last {
-        case .transactions(let scope, _, _), .searchTransactions(let scope, _, _): scope
+        case .transactions(let scope, _, _), .searchTransactions(let scope, _, _), .assistantRegister(let scope, _, _, _): scope
         case .account(let id): .account(id)
         case .currency(let id): .currency(id)
         default: nil
@@ -243,7 +309,7 @@ struct AppShellView: View {
 
     private var isJournalContext: Bool {
         switch navigationPath.last {
-        case .journal, .transactions, .searchTransactions, .templates, .account, .currency:
+        case .journal, .transactions, .searchTransactions, .assistantRegister, .templates, .account, .currency:
             return true
         case .journals, .settings, .transaction, .suggestions, .none:
             return false

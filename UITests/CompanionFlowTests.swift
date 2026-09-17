@@ -151,7 +151,7 @@ final class CompanionFlowTests: XCTestCase {
         XCTAssertTrue(child.exists)
     }
 
-    @MainActor func testSyncProgressShowsTransferDirectionInFooterAndSheet() throws {
+    @MainActor func testSyncProgressShowsTransferDirectionInHeaderAndSheet() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
         for (argument, title, detail) in [
@@ -160,11 +160,12 @@ final class CompanionFlowTests: XCTestCase {
         ] {
             app.launchArguments = ["--demo", "--reset-demo", argument]
             app.launch()
-            let footer = app.buttons["iCloud Sync"]
-            XCTAssertTrue(footer.waitForExistence(timeout: 10))
-            XCTAssertTrue((footer.value as? String)?.contains(detail) == true)
-            XCTAssertTrue(footer.isHittable)
-            footer.tap()
+            let header = app.buttons["navigation.sync"]
+            XCTAssertTrue(header.waitForExistence(timeout: 10))
+            XCTAssertLessThan(header.frame.maxY, app.frame.height * 0.25)
+            XCTAssertTrue((header.value as? String)?.contains(detail) == true)
+            XCTAssertTrue(header.isHittable)
+            header.tap()
             XCTAssertTrue(app.staticTexts[title].waitForExistence(timeout: 5))
             XCTAssertTrue(app.staticTexts[detail].exists)
             let bar = app.descendants(matching: .any)["cloud-sync-status"].descendants(matching: .any)["cloud-sync-progress-bar"].firstMatch
@@ -173,19 +174,19 @@ final class CompanionFlowTests: XCTestCase {
             let screenshot = XCTAttachment(screenshot: app.screenshot())
             screenshot.name = title; screenshot.lifetime = .keepAlways; add(screenshot)
             app.navigationBars["Cloud Sync"].buttons["Done"].tap()
-            wait(for: [expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: footer)], timeout: 10)
+            wait(for: [expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: header)], timeout: 10)
             XCTAssertFalse(app.navigationBars["Cloud Sync"].exists)
-            XCTAssertTrue((footer.value as? String)?.contains(detail) == true)
-            footer.tap()
+            XCTAssertTrue((header.value as? String)?.contains(detail) == true)
+            header.tap()
             XCTAssertTrue(app.staticTexts[title].waitForExistence(timeout: 5))
             // A swipe confined to the short navigation bar can miss the sheet's
             // dismissal threshold on CI. Drag through the visible sheet instead.
             let start = app.navigationBars["Cloud Sync"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95))
             start.press(forDuration: 0.1, thenDragTo: end)
-            wait(for: [expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: footer)], timeout: 10)
+            wait(for: [expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: header)], timeout: 10)
             XCTAssertFalse(app.navigationBars["Cloud Sync"].exists)
-            XCTAssertTrue((footer.value as? String)?.contains(detail) == true)
+            XCTAssertTrue((header.value as? String)?.contains(detail) == true)
             app.terminate()
         }
     }

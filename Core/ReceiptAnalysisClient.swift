@@ -288,6 +288,66 @@ private final class ReceiptSessionObservers {
         var nonce: String
     }
     struct Login: Decodable { var token: String }
+
+    /// Reuses the native Apple proof and Keychain session. No provider key or
+    /// long-lived Apple credential leaves this boundary for the assistant UI.
+    func connectAssistant(endpoint: String) async throws -> String {
+        try restoreSession(endpoint: endpoint)
+        try await checkSavedIdentity()
+        if !authenticated {
+            let options: Options = try await perform(request("receipt-analysis/options", endpoint: endpoint))
+            guard options.configured else { throw AssistError.message("The assistant is not configured on this server.") }
+            if options.local {
+                #if DEBUG
+                guard ["localhost", "127.0.0.1", "::1"].contains(try base(endpoint).host ?? "") else { throw AssistError.message("Local authentication requires localhost.") }
+                let login: Login = try await perform(request("auth/local", endpoint: endpoint, method: "POST", origin: options.localOrigin))
+                let stamp = generation
+                try saveSession(ReceiptSessionCredential(token: login.token), endpoint: endpoint, stamp: stamp)
+                #else
+                throw AssistError.message("Use the signed-in Finances service.")
+                #endif
+            } else {
+                guard try await connectCloudKit(endpoint: endpoint) else { throw AssistError.message("Open the signed Finances build and sign in to iCloud to use the assistant.") }
+            }
+        }
+        let localHost = ["localhost", "127.0.0.1", "::1"].contains(try base(endpoint).host ?? "")
+        guard let subject = try ReceiptSessionCredential.claims(token)["sub"] as? String,
+              subject.hasPrefix("cloudkit:") || (subject == "local-developer" && localHost) else {
+            throw AssistError.message("The assistant needs the iCloud identity that owns this journal.")
+        }
+        return subject
+    }
+
+    func verifiedAssistantIdentity(endpoint: String) async throws -> String? {
+        #if DEBUG
+        if CommandLine.arguments.contains("--demo"), ["localhost", "127.0.0.1", "::1"].contains(try base(endpoint).host ?? "") { return "local-developer" }
+        #endif
+        guard let configuration = CloudKitSyncConfiguration.availableConfiguration() else { return nil }
+        let user = try await CKContainer(identifier: configuration.containerIdentifier).userRecordID()
+        try Task.checkCancellation()
+        return "cloudkit:\(configuration.containerIdentifier):\(configuration.environment.lowercased()):\(user.recordName)"
+    }
+
+    func assistantRequest(_ path: String, endpoint: String, data: Data? = nil, contentType: String = "application/json") throws -> URLRequest {
+        guard authenticated, try canonicalEndpoint(endpoint) == authEndpoint else { throw AssistError.message("Reconnect the assistant first.") }
+        return try request(path, endpoint: endpoint, method: data == nil ? "GET" : "POST", data: data, contentType: contentType)
+    }
+    var assistantURLSession: URLSession { session }
+    func assistantSessionExpired() { invalidateSession() }
+    func uploadAssistantAttachment<T: Decodable>(_ body: Data, contentType: String, endpoint: String) async throws -> T {
+        let direct = try assistantRequest("chat-attachments", endpoint: endpoint, data: body, contentType: contentType)
+        #if DEBUG
+        let localServer = ["localhost", "127.0.0.1", "::1"].contains(direct.url?.host ?? "")
+        #else
+        let localServer = false
+        #endif
+        // Hosted functions reject large bodies before the handler runs. Local
+        // sample servers can accept them directly without private Blob storage.
+        if body.count > 3_500_000 && !localServer {
+            return try await stagedUpload(body, contentType: contentType, endpoint: endpoint, origin: nil, finishPath: "chat-attachments")
+        }
+        return try await perform(direct)
+    }
     private func base(_ endpoint: String) throws -> URL {
         #if DEBUG
             let allowLocalHTTP = true
@@ -439,25 +499,22 @@ private final class ReceiptSessionObservers {
         }.value
         try Task.checkCancellation()
         if options.stagedUploads == true && body.count > 3_500_000 {
-            return try await stagedAnalysis(
+            return try await stagedUpload(
                 body, contentType: "multipart/form-data; boundary=\(boundary)", endpoint: settings.endpoint,
-                origin: options.localOrigin)
+                origin: options.localOrigin, finishPath: "receipt-analysis")
         }
         return try await perform(
             request(
                 "receipt-analysis", endpoint: settings.endpoint, method: "POST", data: body,
                 contentType: "multipart/form-data; boundary=\(boundary)", origin: options.localOrigin))
     }
-    private func stagedAnalysis(_ body: Data, contentType: String, endpoint: String, origin: String?)
-        async throws -> ReceiptAnalysisResponse
+    private struct UploadStart: Decodable { var uploadToken: String; var chunkBytes: Int }
+    private struct UploadPart: Decodable { var part: String }
+    private struct UploadCancelled: Decodable { var ok: Bool }
+    private func stagedUpload<T: Decodable>(_ body: Data, contentType: String, endpoint: String, origin: String?, finishPath: String)
+        async throws -> T
     {
-        struct Start: Decodable {
-            var uploadToken: String
-            var chunkBytes: Int
-        }
-        struct Part: Decodable { var part: String }
-        struct Cancelled: Decodable { var ok: Bool }
-        let start: Start = try await perform(
+        let start: UploadStart = try await perform(
             request(
                 "receipt-upload/start", endpoint: endpoint, method: "POST",
                 data: JSONSerialization.data(withJSONObject: [
@@ -476,12 +533,12 @@ private final class ReceiptSessionObservers {
                     contentType: "application/octet-stream", origin: origin)
                 partRequest.setValue(start.uploadToken, forHTTPHeaderField: "X-Receipt-Upload")
                 partRequest.setValue(String(parts.count), forHTTPHeaderField: "X-Receipt-Part")
-                let part: Part = try await perform(partRequest)
+                let part: UploadPart = try await perform(partRequest)
                 parts.append(part.part)
             }
             return try await perform(
                 request(
-                    "receipt-analysis", endpoint: endpoint, method: "POST",
+                    finishPath, endpoint: endpoint, method: "POST",
                     data: JSONSerialization.data(withJSONObject: [
                         "uploadToken": start.uploadToken, "parts": parts,
                     ]), origin: origin))
@@ -491,7 +548,7 @@ private final class ReceiptSessionObservers {
                 data: JSONSerialization.data(withJSONObject: ["uploadToken": start.uploadToken]),
                 origin: origin)
             {
-                Task { let _: Cancelled? = try? await perform(cancellation) }
+                Task { let _: UploadCancelled? = try? await perform(cancellation) }
             }
             throw error
         }

@@ -1,0 +1,446 @@
+import Foundation
+import Combine
+import CloudKit
+import os
+
+final class AssistantNotificationTokens {
+    var values: [NSObjectProtocol] = []
+    deinit { values.forEach(NotificationCenter.default.removeObserver) }
+}
+
+@MainActor
+final class AssistantCoordinator: ObservableObject {
+    @Published var conversation = AssistantConversation()
+    @Published var history: [AssistantConversation] = []
+    @Published var isRunning = false
+    @Published var isConnecting = false
+    @Published var connected = false
+    @Published var error: String?
+    @Published var activity = ""
+    @Published var streamingText = ""
+    @Published var approval: AssistantToolCall?
+    @Published var approvalText = ""
+    private var approvalFingerprint = ""
+    @Published var filePurpose: String?
+    @Published var artifact: URL?
+    @Published var navigationRequest: AssistantJSON?
+    @Published var uploadedFiles: [AssistantJSON] = []
+    @Published var needsAttachmentRecovery = false
+    @Published var modelChoices: [AssistantModelChoice] = []
+    @Published var consented: Bool
+    let store: MobileLedgerStore
+    let gateway: any AssistantGatewayProtocol
+    let contract: AssistantContract
+    let voice: AssistantVoiceSession
+    let preferences: AssistantPreferencesStore?
+    private(set) var identity = ""
+    private(set) var tools: AssistantTools?
+    private var foreground = false
+    private var presented = false
+    private var task: Task<Void, Never>?
+    private var generation = UUID()
+    private let observations = AssistantNotificationTokens()
+    private var fileContinuation: CheckedContinuation<[URL], Error>?
+    private var voiceRequestID: String?
+    private let logger = Logger(subsystem: "dev.gan.FinancesApp.iOS", category: "Assistant")
+
+    static var localEndpoint: String {
+        #if DEBUG
+        let args = ProcessInfo.processInfo.arguments
+        if args.contains("--demo"), let index = args.firstIndex(of: "--assistant-api-url"), args.indices.contains(index + 1),
+           let url = URL(string: args[index + 1]), ["localhost", "127.0.0.1", "::1"].contains(url.host ?? "") { return url.absoluteString }
+        #endif
+        return "https://finances.tugan.app"
+    }
+
+    init(store: MobileLedgerStore, gateway: (any AssistantGatewayProtocol)? = nil, contract: AssistantContract? = nil, preferences: AssistantPreferencesStore? = nil) {
+        self.store = store
+        self.preferences = preferences
+        self.gateway = gateway ?? AssistantGateway(endpoint: Self.localEndpoint)
+        self.contract = contract ?? (try? AssistantContract.load()) ?? AssistantContract(version: 1, tools: [])
+        voice = AssistantVoiceSession()
+        consented = UserDefaults.standard.bool(forKey: "assistant.cloudConsent.v1")
+        observations.values.append(NotificationCenter.default.addObserver(forName: .CKAccountChanged, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.invalidateIdentity() }
+        })
+        voice.onRequest = { [weak self] text, id, visible in self?.send(text, fromVoice: true, voiceRequestID: id, displayText: visible) }
+        voice.onCorrection = { [weak self] in if self?.isRunning == true { self?.pause(stopVoice: false) } }
+    }
+
+    func setForeground(_ active: Bool) {
+        foreground = active
+        if !active { pause() }
+        else if let preferences { Task { await preferences.refresh() } }
+    }
+    func lockChanged() { if store.requiresUnlock { pause() } }
+    func acceptConsent() {
+        consented = true; UserDefaults.standard.set(true, forKey: "assistant.cloudConsent.v1")
+        prepare()
+    }
+    func present() {
+        presented = true
+        if tools != nil { tools?.context = conversation.context }
+        if consented { prepare() }
+    }
+    func dismiss() { presented = false; pause() }
+    func requireActive() throws {
+        guard foreground, presented, !store.requiresUnlock else { throw CancellationError() }
+        try store.assistantRequireAccess()
+    }
+    func invalidateIdentity() {
+        pause(); tools?.clearPreviews(); connected = false; identity = ""; tools = nil
+        history = []; conversation = AssistantConversation(); uploadedFiles = []; artifact = nil
+        error = "Your iCloud account changed. Reopen the assistant after Finances refreshes its account."
+    }
+    private func verifyIdentity(_ subject: String) throws {
+        #if DEBUG
+        if subject == "local-developer", ProcessInfo.processInfo.arguments.contains("--demo") { return }
+        #endif
+        guard let binding = try store.assistantDatabase.assistantBoundIdentity() else { throw AssistantFailure("unbound_journal", "Finish the initial iCloud connection before using the assistant.") }
+        let fields = binding.context.split(separator: "|")
+        guard fields.count >= 2, subject == "cloudkit:\(fields[0]):\(fields[1].lowercased()):\(binding.account)" else { throw AssistantFailure("identity_mismatch", "The signed-in account does not own this local journal. Existing data is preserved.") }
+    }
+    func prepare() {
+        guard consented, !isConnecting else { return }
+        isConnecting = true; error = nil
+        let stamp = generation
+        task = Task { [weak self] in
+            guard let self else { return }
+            defer { if generation == stamp { isConnecting = false; task = nil } }
+            do {
+                try requireActive()
+                if let local = try await gateway.localIdentity() {
+                    try requireActive(); guard generation == stamp else { return }
+                    try installIdentity(local)
+                }
+                let subject = try await gateway.connect()
+                try requireActive(); guard generation == stamp else { return }
+                try verifyIdentity(subject)
+                try installIdentity(subject)
+                if contract.tools.count != 42 { throw AssistantFailure("contract_missing", "This build is missing the finance tool contract.") }
+                let options = try await gateway.options()
+                guard options["version"].int == contract.version else { throw AssistantFailure("contract_version", "Update Finances to match the assistant service.") }
+                guard generation == stamp else { return }
+                modelChoices = try JSONDecoder().decode([AssistantModelChoice].self, from: options["models"].encoded())
+                connected = true
+            } catch is CancellationError { }
+            catch { if generation == stamp { self.error = error.localizedDescription; connected = false } }
+        }
+    }
+    private func installIdentity(_ subject: String) throws {
+        try verifyIdentity(subject)
+        guard identity != subject else { return }
+        tools?.clearPreviews()
+        let saved = try store.assistantDatabase.assistantHistory(scope: subject)
+        let loaded = try saved.map { try JSONDecoder().decode(AssistantConversation.self, from: $0) }
+        identity = subject; history = loaded
+        // Restore this user's preferences, not their last transcript or scope.
+        conversation.settings = preferences?.settings(for: subject) ?? history.first?.settings ?? AssistantSettings()
+        if let preferences { Task { await preferences.refresh() } }
+        tools = AssistantTools(store: store, scope: subject, context: conversation.context, contract: contract)
+        configureTools()
+    }
+    private func configureTools() {
+        tools?.requireActive = { [weak self] in guard let self else { throw CancellationError() }; try self.requireActive() }
+        tools?.selectFiles = { [weak self] purpose in
+            guard let self else { throw CancellationError() }
+            return try await withCheckedThrowingContinuation { continuation in fileContinuation = continuation; filePurpose = purpose }
+        }
+        tools?.showArtifact = { [weak self] url in self?.artifact = url }
+        tools?.openView = { [weak self] destination in self?.navigationRequest = destination }
+        tools?.readForModel = { [weak self] _, _, url in
+            guard let self, let tools else { throw CancellationError() }
+            let staged = try tools.stage(url), fileID = try staged.required("file_id")
+            let uploaded = try await gateway.upload(url: tools.stagedFile(fileID), fileID: fileID)
+            return .object(["chat_attachment_id": uploaded["id"], "file_id": .string(fileID), "filename": uploaded["filename"]])
+        }
+    }
+    func persist() throws {
+        guard !identity.isEmpty else { throw AssistantFailure("not_connected", "Connect before saving assistant history.") }
+        conversation.updated = Date()
+        try store.assistantDatabase.saveAssistantHistory(scope: identity, id: conversation.id.uuidString, payload: JSONEncoder().encode(conversation))
+        history.removeAll { $0.id == conversation.id }; history.insert(conversation, at: 0)
+    }
+    /// The launcher owns this boundary. View appearances also occur when
+    /// returning from History, Settings, or a file picker and must not reset chat.
+    func beginFreshConversation(context: AssistantContext) throws {
+        try pauseAndCheckpoint()
+        let settings = preferences?.settings(for: identity) ?? conversation.settings
+        tools?.clearPreviews()
+        conversation = AssistantConversation(context: context, settings: settings)
+        clearConversationPresentation()
+        tools?.context = context
+    }
+    func newConversation() {
+        do {
+            try beginFreshConversation(context: conversation.context)
+            // Explicit New Chat creates a history entry that can be named.
+            if !identity.isEmpty { try persist() }
+            if consented { prepare() }
+        } catch { self.error = "Could not start a new conversation: \(error.localizedDescription)" }
+    }
+    private func clearConversationPresentation() {
+        uploadedFiles = []; error = nil; streamingText = ""; artifact = nil
+        approval = nil; approvalText = ""; approvalFingerprint = ""
+        needsAttachmentRecovery = false; navigationRequest = nil; voiceRequestID = nil
+    }
+    func selectConversation(_ value: AssistantConversation) {
+        pause(); tools?.clearPreviews(); conversation = value
+        conversation.paused = value.hasPendingInference || !value.calls.isEmpty
+        tools?.context = value.context; uploadedFiles = []; error = nil
+    }
+    func deleteConversation(_ id: UUID) {
+        do {
+            if conversation.id == id { cancelRemaining(); conversation = AssistantConversation(context: conversation.context) }
+            try store.assistantDatabase.deleteAssistantHistory(scope: identity, id: id.uuidString)
+            history.removeAll { $0.id == id }
+        } catch { self.error = error.localizedDescription }
+    }
+    func renameConversation(_ id: UUID, title: String) throws {
+        try requireActive()
+        let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name.count <= 80 else { throw AssistantFailure("invalid_title", "Use a conversation name between 1 and 80 characters.") }
+        guard !identity.isEmpty, let index = history.firstIndex(where: { $0.id == id }) else {
+            throw AssistantFailure("conversation_missing", "This conversation is no longer available.")
+        }
+        // Use the live checkpoint for the current conversation. Renaming must
+        // never replace pending tool state with an older history-list snapshot.
+        var updated = conversation.id == id ? conversation : history[index]
+        updated.title = name
+        updated.customTitle = true
+        try store.assistantDatabase.saveAssistantHistory(scope: identity, id: id.uuidString,
+            payload: JSONEncoder().encode(updated), now: updated.updated)
+        if conversation.id == id { conversation.title = name; conversation.customTitle = true }
+        history[index] = updated
+    }
+    @discardableResult
+    func send(_ text: String, fromVoice: Bool = false, voiceRequestID: String? = nil, displayText: String? = nil) -> Bool {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, connected, consented else { return false }
+        if fromVoice { cancelRemaining(stopVoice: false) }
+        guard !isRunning, !isConnecting, !conversation.canResume else { return false }
+        do {
+            try requireActive()
+            // A paused run keeps its checkpointed settings; each new user turn
+            // adopts app preferences without changing a running model request.
+            conversation.settings = try settingsForNewRequest()
+            self.voiceRequestID = voiceRequestID
+            let visible = displayText ?? text
+            if conversation.messages.isEmpty && conversation.customTitle != true { conversation.title = String(visible.prefix(70)) }
+            conversation.messages.append(AssistantMessage(role: "user", text: visible))
+            var item: AssistantJSON = .object(["type": .string("message"), "role": .string("user"), "text": .string(text)])
+            if !uploadedFiles.isEmpty { item = item.setting("attachments", .array(uploadedFiles.map { $0["id"] })) }
+            conversation.items.append(item); uploadedFiles = []
+            conversation.turnSteps = 0; conversation.hasPendingInference = true; conversation.paused = true
+            try persist(); resume(); return true
+        } catch { self.error = error.localizedDescription; return false }
+    }
+    func resume() {
+        guard !isRunning, !isConnecting, conversation.canResume else { return }
+        error = nil; approval = nil
+        let stamp = UUID(); generation = stamp
+        let delegatedRequestID = voiceRequestID
+        isRunning = true; conversation.paused = false
+        task = Task { [weak self] in
+            guard let self else { return }
+            defer { if generation == stamp { isRunning = false; activity = ""; task = nil } }
+            do {
+                let subject = try await gateway.connect()
+                try requireActive(); guard generation == stamp else { return }
+                try verifyIdentity(subject)
+                guard subject == identity, let tools else { throw AssistantFailure("identity_mismatch", "Reconnect with the account that owns this conversation.") }
+                tools.context = conversation.context
+                while generation == stamp {
+                    try requireActive()
+                    if let call = conversation.calls.first {
+                        let definition = try tools.definition(call.name)
+                        let replay = try store.assistantDatabase.assistantAction(scope: identity, id: call.operationID, digest: call.digest)
+                        if definition.needsApproval && replay == nil {
+                            do {
+                                let preview = try tools.approvalPreview(call)
+                                if call.approvedDigest != preview.fingerprint {
+                                    approval = call; approvalText = preview.text; approvalFingerprint = preview.fingerprint
+                                    conversation.paused = true; try persist(); return
+                                }
+                            } catch {
+                                finishCall(call, result: tools.failure(error)); try persist(); continue
+                            }
+                        }
+                        activity = call.label + "…"
+                        // The in-memory call may come from a failed checkpoint
+                        // write. No new action starts until its intent is durable.
+                        try persist()
+                        let started = ContinuousClock.now
+                        let output: AssistantJSON
+                        if let replay { output = try JSONDecoder().decode(AssistantJSON.self, from: Data(replay.utf8)) }
+                        else {
+                            do { output = try await tools.execute(call) }
+                            catch is CancellationError { throw CancellationError() }
+                            catch { output = tools.failure(error) }
+                        }
+                        guard generation == stamp else { return }
+                        // A committed operation may outlive a transport. Its
+                        // receipt is already durable before publishing success.
+                        finishCall(call, result: output)
+                        try persist()
+                        logger.info("tool_finished duration=\(String(describing: started.duration(to: .now)), privacy: .public)")
+                        continue
+                    }
+                    guard conversation.hasPendingInference else { break }
+                    guard conversation.turnSteps < 30 else { throw AssistantFailure("turn_limit", "This request reached its step limit. Start a new request to continue.") }
+                    conversation.turnSteps += 1; try persist()
+                    activity = "Thinking…"; streamingText = ""
+                    var completed = false
+                    try await gateway.step(items: conversation.items, settings: conversation.settings) { [weak self] event in
+                        guard let self, self.generation == stamp else { throw CancellationError() }
+                        try self.requireActive()
+                        if event.type == "text_delta" { self.streamingText += event.text ?? "" }
+                        if event.type == "step_completed" {
+                            guard !completed, let continuation = event.continuation else { throw AssistantFailure("invalid_response", "Missing assistant continuation.") }
+                            completed = true
+                            let calls = event.calls ?? []
+                            guard Set(calls.map(\.id)).count == calls.count else { throw AssistantFailure("invalid_response", "Duplicate tool call identifiers.") }
+                            self.conversation.items.append(.object(["type": .string("continuation"), "value": .string(continuation)]))
+                            self.conversation.calls = calls
+                            let text = event.text ?? self.streamingText
+                            if !text.isEmpty { self.conversation.messages.append(AssistantMessage(role: "assistant", text: text)) }
+                            self.streamingText = ""
+                            self.conversation.hasPendingInference = !calls.isEmpty || event.needsFollowUp == true
+                            try self.persist()
+                            if !self.conversation.hasPendingInference { self.voice.returnResult(text, requestID: delegatedRequestID) }
+                        }
+                    }
+                    guard completed else { throw AssistantFailure("interrupted", "The reply was interrupted.") }
+                }
+                conversation.paused = false; try persist()
+            } catch is CancellationError {
+                if generation == stamp { conversation.paused = true; try? persist() }
+            } catch {
+                if generation == stamp {
+                    self.error = error.localizedDescription; conversation.paused = true
+                    needsAttachmentRecovery = (error as? AssistantFailure)?.code == "attachments_expired"
+                    do { try persist() } catch { self.error = "Could not save assistant progress. \(error.localizedDescription)" }
+                    voice.returnResult("The task paused: " + (self.error ?? "Please check the app."), requestID: delegatedRequestID)
+                }
+            }
+        }
+    }
+    private func finishCall(_ call: AssistantToolCall, result: AssistantJSON) {
+        var completed = call; completed.result = result.jsonString
+        conversation.activity.append(completed)
+        conversation.calls.removeAll { $0.id == call.id }
+        conversation.items.append(.object(["type": .string("tool_result"), "call_id": .string(call.id), "name": .string(call.name), "output": .string(result.jsonString)]))
+        conversation.hasPendingInference = true
+    }
+    func approve(_ accepted: Bool) {
+        guard let approval, let index = conversation.calls.firstIndex(where: { $0.id == approval.id }), let tools else { return }
+        do {
+            try requireActive()
+            if accepted {
+                let latest = try tools.approvalPreview(approval)
+                guard latest.fingerprint == approvalFingerprint else {
+                    approvalText = latest.text; approvalFingerprint = latest.fingerprint
+                    error = "The record changed. Review the updated preview before confirming."; return
+                }
+                conversation.calls[index].approvedDigest = latest.fingerprint
+            }
+            else { finishCall(approval, result: tools.failure(AssistantFailure("user_rejected", "The user declined this action. Do not attempt it another way."))) }
+            self.approval = nil; conversation.paused = true; try persist(); resume()
+        } catch { self.error = error.localizedDescription }
+    }
+    func pause(stopVoice: Bool = true) {
+        do { try pauseAndCheckpoint(stopVoice: stopVoice) }
+        catch { self.error = "Could not save paused progress: \(error.localizedDescription)" }
+    }
+    private func pauseAndCheckpoint(stopVoice: Bool = true) throws {
+        generation = UUID(); task?.cancel(); task = nil; isRunning = false; isConnecting = false
+        store.assistantCancelConflictResolution()
+        approval = nil; activity = ""; streamingText = ""
+        if conversation.hasPendingInference || !conversation.calls.isEmpty { conversation.paused = true }
+        fileContinuation?.resume(throwing: CancellationError()); fileContinuation = nil; filePurpose = nil
+        if stopVoice { voice.stop() }
+        // Merely opening and closing the welcome screen should not fill History.
+        let hasHistory = history.contains { $0.id == conversation.id }
+        let hasContent = !conversation.messages.isEmpty || !conversation.items.isEmpty
+            || !conversation.calls.isEmpty || !conversation.activity.isEmpty
+            || conversation.hasPendingInference || conversation.customTitle == true
+        if !identity.isEmpty && (hasHistory || hasContent) { try persist() }
+    }
+    func cancelRemaining(stopVoice: Bool = true) {
+        pause(stopVoice: stopVoice)
+        if let tools {
+            do {
+                for call in conversation.calls {
+                    let result: AssistantJSON
+                    if let committed = try store.assistantDatabase.assistantAction(scope: identity, id: call.operationID, digest: call.digest) {
+                        result = try JSONDecoder().decode(AssistantJSON.self, from: Data(committed.utf8))
+                    } else {
+                        result = tools.failure(AssistantFailure("cancelled", "The user cancelled the remaining work. Completed actions remain saved."))
+                    }
+                    finishCall(call, result: result)
+                }
+            } catch {
+                self.error = "Could not verify saved actions. The conversation remains paused. \(error.localizedDescription)"
+                return
+            }
+        }
+        conversation.calls = []; conversation.hasPendingInference = false; conversation.paused = false; approval = nil
+        if !identity.isEmpty { do { try persist() } catch { self.error = error.localizedDescription } }
+    }
+    func selectFilesResult(_ result: Result<[URL], Error>) {
+        let continuation = fileContinuation; fileContinuation = nil; filePurpose = nil
+        continuation?.resume(with: result)
+    }
+    func continueWithoutExpiredUploads() {
+        pause()
+        conversation.items = conversation.items.map { item in
+            guard item["type"].string == "message" else { return item }
+            var fields = item.object; fields.removeValue(forKey: "attachments"); return .object(fields)
+        }
+        conversation.items.append(.object(["type": .string("message"), "role": .string("user"), "text": .string("Temporary chat uploads expired. Continue using saved records and already completed actions. Ask me to reattach a document if it is still needed. Do not repeat saved actions.")]))
+        needsAttachmentRecovery = false; conversation.hasPendingInference = true; conversation.paused = true
+        do { try persist(); resume() } catch { self.error = error.localizedDescription }
+    }
+    func attach(_ urls: [URL]) {
+        guard connected, !isRunning, let tools else { return }
+        isRunning = true; let stamp = generation
+        task = Task {
+            defer { if generation == stamp { isRunning = false; task = nil; activity = "" } }
+            do {
+                guard uploadedFiles.count + urls.count <= 10 else { throw AssistantFailure("attachment_limit", "Attach up to 10 files per message.") }
+                for url in urls {
+                    try requireActive(); activity = "Preparing attachment…"
+                    let file = try tools.stage(url), id = try file.required("file_id")
+                    let total = uploadedFiles.reduce(0) { $0 + ($1["size_bytes"].int ?? 0) } + (file["size_bytes"].int ?? 0)
+                    guard total <= 40_000_000 else { throw AssistantFailure("attachment_limit", "One message can include at most 40 MB of attachments.") }
+                    let uploaded = try await gateway.upload(url: tools.stagedFile(id), fileID: id)
+                    try requireActive(); guard generation == stamp else { return }; uploadedFiles.append(uploaded)
+                }
+            } catch is CancellationError { } catch { if generation == stamp { self.error = error.localizedDescription } }
+        }
+    }
+    func startVoice() {
+        guard connected, consented, !conversation.canResume else { return }
+        do { _ = try settingsForNewRequest() }
+        catch { self.error = error.localizedDescription; return }
+        let context = conversation.messages.suffix(10).map { "\($0.role): \($0.text)" }.joined(separator: "\n")
+        let stamp = generation
+        Task {
+            do { try requireActive(); try await voice.start(gateway: gateway, context: context, requireActive: { [weak self] in guard let self else { throw CancellationError() }; try self.requireActive() }) }
+            catch is CancellationError { } catch { if generation == stamp { self.error = error.localizedDescription } }
+        }
+    }
+    private func settingsForNewRequest() throws -> AssistantSettings {
+        guard let preferences else { return conversation.settings }
+        guard let settings = preferences.settings(for: identity) else {
+            Task { await preferences.refresh() }
+            throw AssistantFailure("settings_loading", preferences.error.isEmpty
+                ? "Your Ask AI settings are still loading. Try again shortly."
+                : "Ask AI settings could not load. Open Assistant Settings to reconnect to iCloud.")
+        }
+        guard preferences.conflicts.isEmpty else {
+            throw AssistantFailure("settings_conflict", "Open Assistant Settings to choose which settings to keep.")
+        }
+        return settings
+    }
+}

@@ -368,6 +368,7 @@ final class MobileLedgerStore: ObservableObject {
 
     @Published private(set) var data: JournalData {
         didSet {
+            guard !assistantMutationInProgress else { return }
             appIconBadge?.update(data)
             if systemIntegrationsEnabled { refreshSystemIntegrations() }
         }
@@ -407,6 +408,114 @@ final class MobileLedgerStore: ObservableObject {
     private var duplicateReceiptCopiesByOperation: [UUID: [UUID: AttachmentAsset]] = [:]
     private var completedTransactionSaveOperations: [UUID] = []
     private var journalReplacementGeneration = UUID()
+    private var assistantMutationInProgress = false
+    private var assistantConflictRequest: (conflictID: String, receipt: SQLiteAssistantActionReceipt)?
+    var assistantBeforeCommit: (() throws -> Void)?
+    var assistantDatabase: SQLiteJournalStore { sqliteStore }
+    var assistantDirectory: URL { supportDirectory.appending(path: "Assistant", directoryHint: .isDirectory) }
+    var assistantGeneration: UUID { journalReplacementGeneration }
+
+    func assistantRequireAccess() throws {
+        guard isUnlocked, !requiresUnlock else { throw AssistantFailure("app_locked", "Unlock Finances before continuing.") }
+        try requireWritableJournal()
+        guard !backupFileOperationInProgress else { throw AssistantFailure("store_busy", "Wait for the current backup operation.") }
+    }
+
+    /// Existing UI operations validate and update their caches, but all their
+    /// saves are held until the action receipt and graph can commit together.
+    func assistantMutate(scope: String, id: String, digest: String, _ operation: () throws -> AssistantJSON) throws -> AssistantJSON {
+        try assistantRequireAccess()
+        sealPendingDeferredWrite()
+        if let replay = try Self.deferredPersistenceQueue.sync(execute: { try sqliteStore.assistantAction(scope: scope, id: id, digest: digest) }) {
+            return try JSONDecoder().decode(AssistantJSON.self, from: Data(replay.utf8))
+        }
+        let before = data, tombstones = deletedTransactionTombstoneIDs, priorError = validationError
+        assistantMutationInProgress = true
+        validationError = nil
+        do {
+            let result = try operation()
+            if let error = validationError { throw error }
+            try Self.validateCandidateData(data, operation: "Assistant")
+            let snapshot = data
+            try Self.deferredPersistenceQueue.sync {
+                let previous = persistenceBaseline.snapshot
+                try sqliteStore.persistAssistant(snapshot, previous: persistenceBaseline.snapshot, scope: scope,
+                    id: id, digest: digest, result: result.jsonString, beforeCommit: assistantBeforeCommit)
+                persistenceBaseline.snapshot = snapshot
+                Self.removeObsoleteAttachmentFiles(supportDirectory: supportDirectory, previous: previous, data: snapshot)
+            }
+            assistantMutationInProgress = false; validationError = priorError
+            appIconBadge?.update(data)
+            if systemIntegrationsEnabled { refreshSystemIntegrations() }
+            refreshCloudSyncDataAvailability()
+            if data.syncEnabled { scheduleDeferredCloudSave() }
+            return result
+        } catch {
+            let failedAssets = data.transactions.flatMap { $0.attachment?.assets ?? [] }
+            data = before; deletedTransactionTombstoneIDs = tombstones
+            assistantMutationInProgress = false; validationError = priorError
+            refreshDerivedCache()
+            let priorIDs = Set(before.transactions.flatMap { $0.attachment?.assets.map(\.id) ?? [] })
+            discardUnreferencedImportedAttachments(failedAssets.filter { !priorIDs.contains($0.id) })
+            throw error
+        }
+    }
+
+    @discardableResult
+    func assistantSaveTransaction(_ draft: TransactionDraft, scope: RecurringJournalEditor.Scope) throws -> UUID {
+        let id = draft.id ?? draft.saveOperationID
+        applyTransactionDraft(draft, scope: scope, schedulePersistence: false, newTransactionID: id)
+        if let error = validationError { throw error }
+        return id
+    }
+
+    func assistantSetJournalPosition(_ id: UUID, position: Int) {
+        if let index = data.ledgers.firstIndex(where: { $0.id == id }) { data.ledgers[index].listIndex = position }
+        refreshDerivedCache()
+    }
+
+    func assistantSetAccountPosition(_ id: UUID, position: Int) {
+        if let index = data.accounts.firstIndex(where: { $0.id == id }) { data.accounts[index].listIndex = position }
+        refreshDerivedCache()
+    }
+
+    func assistantCreateJournal(name: String, symbol: String, currencyName: String, position: Int?) throws -> UUID {
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !symbol.isEmpty else { throw AssistantFailure("invalid_name", "Journal name and currency symbol are required.") }
+        let ledger = Ledger(name: name, listIndex: position ?? data.ledgers.count)
+        let currency = Commodity(ledgerID: ledger.id, symbol: symbol, name: currencyName)
+        data.ledgers.append(ledger); data.commodities.append(currency)
+        for kind in AccountKind.allCases { data.accounts.append(Account(ledgerID: ledger.id, commodityID: currency.id, name: kind.title, kind: kind, listIndex: kind.rawValue)) }
+        refreshDerivedCache(); return ledger.id
+    }
+
+    func assistantAppendBackup(_ imported: JournalData) throws {
+        try Self.validateCandidateData(imported, operation: "Imported journals")
+        var journals = imported.ledgers
+        for i in journals.indices { journals[i].listIndex = data.ledgers.count + i }
+        data.ledgers.append(contentsOf: journals); data.commodities.append(contentsOf: imported.commodities)
+        data.accounts.append(contentsOf: imported.accounts); data.transactions.append(contentsOf: imported.transactions)
+        data.sources.append(contentsOf: imported.sources); data.transactionTemplates.append(contentsOf: imported.transactionTemplates)
+        refreshDerivedCache()
+    }
+
+    nonisolated static func assistantValidateBackup(_ data: JournalData) throws { try validateCandidateData(data, operation: "Backup") }
+
+    func assistantCancelConflictResolution() {
+        if assistantConflictRequest != nil { cancelCloudSync() }
+    }
+
+    func assistantResolveConflict(_ conflict: CloudKitSyncConflict, keepLocal: Bool, scope: String, operationID: String, digest: String, result: String) async throws {
+        try assistantRequireAccess()
+        guard assistantConflictRequest == nil else { throw AssistantFailure("store_busy", "A conflict resolution is already running.") }
+        assistantConflictRequest = (conflict.id, SQLiteAssistantActionReceipt(scope: scope, id: operationID, digest: digest, result: result))
+        defer { assistantConflictRequest = nil }
+        try cloudSyncCoordinator.resolveConflict(id: conflict.id, keepLocal: keepLocal)
+        await waitForCloudKitSyncIdle()
+        if try sqliteStore.assistantAction(scope: scope, id: operationID, digest: digest) == nil {
+            try Task.checkCancellation()
+            throw AssistantFailure("conflict_resolution_failed", "The conflict was not resolved. Review iCloud Sync and try again.")
+        }
+    }
     private let cloudKitSyncDependencies: CloudKitSyncDependencies
     private let foregroundTriggerDependencies: CloudKitForegroundSyncTriggerDependencies
     private var activeSceneIDs: Set<UUID> = []
@@ -3259,6 +3368,7 @@ final class MobileLedgerStore: ObservableObject {
     }
 
     func flushLocalChanges() throws {
+        if assistantMutationInProgress { return }
         try requireWritableJournal()
         try Self.validateCandidateData(data, operation: "Journal")
         try persistSnapshot(data, trackSyncChanges: true)
@@ -3312,6 +3422,10 @@ final class MobileLedgerStore: ObservableObject {
         refreshCache: Bool = true,
         trackSyncChanges: Bool = true
     ) {
+        if assistantMutationInProgress {
+            if refreshCache { refreshDerivedCache() }
+            return
+        }
         guard allowJournalMutation() else { return }
         do {
             if refreshCache {
@@ -3958,6 +4072,11 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
         contextKey: String,
         receiptInstallationID: UUID? = nil
     ) throws {
+        let assistantReceipt = assistantConflictRequest.flatMap { $0.conflictID == id ? $0.receipt : nil }
+        if assistantReceipt != nil {
+            try assistantRequireAccess()
+            guard isForegroundActive else { throw CancellationError() }
+        }
         try cloudKitFlushLocalChanges()
         try cloudKitValidate(candidate)
         let databaseURL = sqliteStore.databaseURL
@@ -3973,7 +4092,8 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
                     contextKey: contextKey,
                     data: candidate,
                     previous: baseline.snapshot,
-                    receiptInstallationID: receiptInstallationID
+                    receiptInstallationID: receiptInstallationID,
+                    assistantReceipt: assistantReceipt
                 )
                 baseline.snapshot = candidate
                 Self.removeObsoleteAttachmentFiles(supportDirectory: supportDirectory, previous: previous, data: candidate)

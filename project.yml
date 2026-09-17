@@ -7,6 +7,12 @@ options:
   deploymentTarget:
     iOS: '17.0'
 packages:
+  MarkdownUI:
+    url: https://github.com/gonzalezreal/swift-markdown-ui.git
+    exactVersion: 2.4.1
+  WebRTC:
+    url: https://github.com/stasel/WebRTC.git
+    exactVersion: 153.0.0
   ZIPFoundation:
     url: https://github.com/weichsel/ZIPFoundation.git
     exactVersion: 0.9.20
@@ -72,6 +78,7 @@ targets:
           - dev.gan.FinancesApp.receipt-handoff
         NSCameraUsageDescription: Attach receipt photos to transactions.
         NSPhotoLibraryUsageDescription: Attach receipt images to transactions.
+        NSMicrophoneUsageDescription: Talk with the Finances assistant. Audio is sent to OpenAI only while voice chat is active.
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true
         UIApplicationSupportsIndirectInputEvents: true
@@ -159,6 +166,8 @@ targets:
     dependencies:
     - target: FinancesShareExtension
       embed: true
+    - package: WebRTC
+    - package: MarkdownUI
     - package: ZIPFoundation
     - sdk: libsqlite3.tbd
     - sdk: CloudKit.framework
