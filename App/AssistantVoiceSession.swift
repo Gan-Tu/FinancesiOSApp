@@ -1,7 +1,40 @@
 import Foundation
 import AVFAudio
 import Combine
+import OSLog
 @preconcurrency import WebRTC
+
+/// Realtime transcript/generation events can arrive after playback was cleared.
+/// Only the WebRTC output-buffer events describe what is actually playing.
+struct AssistantRealtimeAudioActivity {
+    struct Update {
+        let status: String
+        let beganUserSpeech: Bool
+    }
+    private var playbackResponseID: String?
+    private var speechItemID: String?
+
+    mutating func receive(_ event: AssistantJSON) -> Update? {
+        var beganUserSpeech = false
+        switch event["type"].string {
+        case "output_audio_buffer.started":
+            guard let id = event["response_id"].string else { return nil }
+            playbackResponseID = id
+        case "output_audio_buffer.stopped", "output_audio_buffer.cleared":
+            guard let id = event["response_id"].string, id == playbackResponseID else { return nil }
+            playbackResponseID = nil
+        case "input_audio_buffer.speech_started":
+            guard let id = event["item_id"].string, id != speechItemID else { return nil }
+            speechItemID = id
+            beganUserSpeech = true
+        case "input_audio_buffer.speech_stopped":
+            guard let id = event["item_id"].string, id == speechItemID else { return nil }
+            speechItemID = nil
+        default: return nil
+        }
+        return Update(status: playbackResponseID == nil ? "Listening" : "Speaking", beganUserSpeech: beganUserSpeech)
+    }
+}
 
 /// Native WebRTC owns media; the app owns every delegated finance operation.
 @MainActor
@@ -30,6 +63,8 @@ final class AssistantVoiceSession: NSObject, ObservableObject {
     private var pendingDelegation: (id: String, offset: Int)?
     private var deliveredTranscriptEnd = -1
     private var realtimeUserText = ""
+    private var realtimeAudioActivity = AssistantRealtimeAudioActivity()
+    private let audioLog = Logger(subsystem: "dev.gan.FinancesApp.iOS", category: "AssistantVoice")
 
     override init() {
         super.init()
@@ -58,6 +93,7 @@ final class AssistantVoiceSession: NSObject, ObservableObject {
         self.context = context; transcript = []; seenDelegations = []; acceptingEvents = true
         pendingDelegation = nil; deliveredTranscriptEnd = -1
         realtimeUserText = ""
+        realtimeAudioActivity = AssistantRealtimeAudioActivity()
         do {
             let allowed = await withCheckedContinuation { continuation in AVAudioApplication.requestRecordPermission { continuation.resume(returning: $0) } }
             guard allowed else { throw AssistantFailure("microphone_denied", "Enable microphone access for Finances in Settings, or continue typing.") }
@@ -151,6 +187,7 @@ final class AssistantVoiceSession: NSObject, ObservableObject {
         audioTrack?.isEnabled = false; channel?.delegate = nil; channel?.close(); channel = nil
         peer?.delegate = nil; peer?.close(); peer = nil; audioTrack = nil; factory = nil
         receivingTracks = []; acceptingEvents = false
+        realtimeAudioActivity = AssistantRealtimeAudioActivity()
         if usedAudio {
             let audio = RTCAudioSession.sharedInstance()
             audio.lockForConfiguration()
@@ -177,6 +214,14 @@ final class AssistantVoiceSession: NSObject, ObservableObject {
     private func handle(_ event: AssistantJSON) {
         if event["type"].string == "session.closed" { release(); active = false; connecting = false; return }
         guard acceptingEvents else { return }
+        if provider == "realtime", active, let update = realtimeAudioActivity.receive(event) {
+            status = update.status
+            // Keep correction handling immediate, but don't let a transcript
+            // fragment change the UI back to Speaking after the buffer cleared.
+            if update.beganUserSpeech { onCorrection?() }
+            if let type = event["type"].string { audioLog.debug("Realtime audio event: \(type, privacy: .public)") }
+            return
+        }
         switch event["type"].string {
         case "session.started", "session.created":
             active = true; connecting = false; status = "Listening"
@@ -189,10 +234,10 @@ final class AssistantVoiceSession: NSObject, ObservableObject {
                 transcript.append(.object(["role": .string("user"), "text": .string(delta), "start_ms": event["start_ms"], "end_ms": event["end_ms"]]))
                 dispatchPendingDelegation()
             }
-        case "session.output_transcript.delta", "response.output_audio_transcript.delta":
-            if active {
+        case "session.output_transcript.delta":
+            if active, provider == "live" {
                 let delta = event["delta"].string ?? ""
-                if provider == "live", !delta.isEmpty { transcript.append(.object(["role": .string("assistant"), "text": .string(delta), "start_ms": event["start_ms"], "end_ms": event["end_ms"]])) }
+                if !delta.isEmpty { transcript.append(.object(["role": .string("assistant"), "text": .string(delta), "start_ms": event["start_ms"], "end_ms": event["end_ms"]])) }
                 status = "Speaking"
             }
         case "session.delegation.created":
@@ -200,20 +245,33 @@ final class AssistantVoiceSession: NSObject, ObservableObject {
             delegationID = id
             pendingDelegation = (id, event["offset_ms"].int ?? 0)
             dispatchPendingDelegation()
-        case "input_audio_buffer.speech_started":
-            guard active else { return }; status = "Listening"; onCorrection?()
         case "conversation.item.input_audio_transcription.completed":
             if let text = event["transcript"].string { realtimeUserText = text }
         case "response.done":
             guard active, provider == "realtime" else { return }
-            for call in event["response"]["output"].array where call["type"].string == "function_call" && call["name"].string == "run_finance_task" {
-                guard let id = call["call_id"].string, seenDelegations.insert(id).inserted,
-                      let args = call["arguments"].string, let value = try? JSONDecoder().decode(AssistantJSON.self, from: Data(args.utf8)), let request = value["request"].string else { continue }
-                delegationID = id; status = "Working…"; onRequest?(request, id, realtimeUserText.isEmpty ? request : realtimeUserText)
+            if event["response"]["status_details"]["reason"].string == "turn_detected" {
+                audioLog.notice("Realtime reply interrupted by input speech detection")
+            }
+            for call in Self.completedRealtimeRequests(in: event) {
+                guard seenDelegations.insert(call.id).inserted else { continue }
+                delegationID = call.id; status = "Working…"; onRequest?(call.request, call.id, realtimeUserText.isEmpty ? call.request : realtimeUserText)
             }
         case "error":
             status = "Voice could not continue. You can keep typing."; onCorrection?(); stop()
         default: break
+        }
+    }
+    static func completedRealtimeRequests(in event: AssistantJSON) -> [(id: String, request: String)] {
+        // VAD can cancel a response after function-call fragments have arrived.
+        // A response.done event alone is not permission to execute that work.
+        guard event["response"]["status"].string == "completed" else { return [] }
+        return event["response"]["output"].array.compactMap { call in
+            guard call["type"].string == "function_call", call["name"].string == "run_finance_task",
+                  call["status"].string == "completed", let id = call["call_id"].string,
+                  let args = call["arguments"].string,
+                  let value = try? JSONDecoder().decode(AssistantJSON.self, from: Data(args.utf8)),
+                  let request = value["request"].string, !request.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return (id, request)
         }
     }
     private func dispatchPendingDelegation() {

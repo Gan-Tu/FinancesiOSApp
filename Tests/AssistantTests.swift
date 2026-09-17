@@ -5,6 +5,45 @@ import AVFAudio
 
 @MainActor
 final class AssistantTests: XCTestCase {
+    func testInterruptedVoiceResponsesCannotDispatchFinanceActions() {
+        func event(responseStatus: String, callStatus: String) -> AssistantJSON {
+            .object(["type": .string("response.done"), "response": .object([
+                "status": .string(responseStatus), "output": .array([.object([
+                    "type": .string("function_call"), "name": .string("run_finance_task"),
+                    "status": .string(callStatus), "call_id": .string("call-1"),
+                    "arguments": .string("{\"request\":\"Create the transaction\"}")
+                ])])
+            ])])
+        }
+        for status in ["cancelled", "failed", "incomplete", "in_progress"] {
+            XCTAssertTrue(AssistantVoiceSession.completedRealtimeRequests(in: event(responseStatus: status, callStatus: "completed")).isEmpty)
+        }
+        XCTAssertTrue(AssistantVoiceSession.completedRealtimeRequests(in: event(responseStatus: "completed", callStatus: "incomplete")).isEmpty)
+        let completed = AssistantVoiceSession.completedRealtimeRequests(in: event(responseStatus: "completed", callStatus: "completed"))
+        XCTAssertEqual(completed.count, 1)
+        XCTAssertEqual(completed.first?.request, "Create the transaction")
+    }
+
+    func testRealtimePlaybackDoesNotFlipWithLateTranscriptsOrGenerationEvents() {
+        var activity = AssistantRealtimeAudioActivity()
+        func event(_ type: String, response: String = "reply", item: String = "user") -> AssistantJSON {
+            .object(["type": .string(type), "response_id": .string(response), "item_id": .string(item)])
+        }
+        XCTAssertEqual(activity.receive(event("output_audio_buffer.started"))?.status, "Speaking")
+        let interruption = activity.receive(event("input_audio_buffer.speech_started"))
+        XCTAssertEqual(interruption?.status, "Speaking") // Still audible until the server clears playback.
+        XCTAssertEqual(interruption?.beganUserSpeech, true)
+        XCTAssertNil(activity.receive(event("input_audio_buffer.speech_started"))) // Don't pause twice.
+        XCTAssertEqual(activity.receive(event("output_audio_buffer.cleared"))?.status, "Listening")
+        for type in ["response.output_audio_transcript.delta", "response.output_audio.done", "response.done"] {
+            XCTAssertNil(activity.receive(event(type)))
+        }
+        XCTAssertEqual(activity.receive(event("input_audio_buffer.speech_stopped"))?.status, "Listening")
+        XCTAssertEqual(activity.receive(event("output_audio_buffer.started", response: "next"))?.status, "Speaking")
+        XCTAssertNil(activity.receive(event("output_audio_buffer.stopped", response: "reply")))
+        XCTAssertEqual(activity.receive(event("output_audio_buffer.stopped", response: "next"))?.status, "Listening")
+    }
+
     func testVoiceKeepsSpeakerDefaultWhenWebRTCReconfiguresAndReconnects() throws {
         let voice = AssistantVoiceSession()
         let audio = RTCAudioSession.sharedInstance()
