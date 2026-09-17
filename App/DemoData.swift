@@ -27,6 +27,15 @@ enum DemoData {
         if isTextSuggestionFixtureRequested { data = textSuggestionFixture() }
         if isSystemEntryFixtureRequested { data = systemEntryFixture() }
         if CommandLine.arguments.contains("--demo-performance") { data = performanceFixture() }
+        if CommandLine.arguments.contains("--demo-template-menu"), let base = data.transactionTemplates.first {
+            let names = ["💵 收入 Income", "💰 支出 Expense", "🧮 转账 Transfer", "🥡 🥤 吃喝 Food & Drinks",
+                         "🍽️ Uber Eats", "🛍️ 购物 Shopping", "🚕 打车 Ride Share", "🏦 Venmo", "💳 信用卡还款 Credit Card Pymt"]
+            data.transactionTemplates = names.enumerated().map { index, name in
+                TransactionTemplate(ledgerID: base.ledgerID, name: name, note: "", payee: "", cleared: true,
+                    enabled: true, scanInvoice: false, listIndex: index,
+                    postings: base.postings.map { PostingTemplate(accountID: $0.accountID, listIndex: $0.listIndex) })
+            }
+        }
         if CommandLine.arguments.contains("--demo-search-matches"), let ledgerID = data.selectedLedgerID {
             let root = data.accounts.first { $0.ledgerID == ledgerID && $0.kind == .asset && $0.parentID == nil }!
             for (index, name) in ["Personal Savings", "Personal Cash", "Son Account"].enumerated() {

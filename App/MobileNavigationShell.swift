@@ -29,6 +29,7 @@ enum ShellSheet: Identifiable {
     case settings
     case cloudSync
     case quickSearch
+    case newTransaction(UUID)
     case templates(UUID)
 
     var id: String {
@@ -36,6 +37,7 @@ enum ShellSheet: Identifiable {
         case .settings: "settings"
         case .cloudSync: "cloud-sync"
         case .quickSearch: "quick-search"
+        case .newTransaction(let id): "new-transaction-\(id.uuidString)"
         case .templates(let id): "templates-\(id.uuidString)"
         }
     }
@@ -833,7 +835,7 @@ private struct TransactionDetailContent: View {
             if let transaction {
                 ForEach(transaction.postings.sortedForDisplay()) { posting in
                     PostingDetailRow(presentation: postingDetailPresentation(for: posting, store: store))
-                        .padding(.vertical, 4)
+                        .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
                 }
                 DetailValueRow(label: "Date", value: detailDate(transaction.date))
                 if let frequency = transaction.recurrenceRule?.frequency, frequency != .never {
@@ -1024,6 +1026,7 @@ private struct DetailValueRow: View {
                 .foregroundStyle(.secondary)
             Text(value).fixedSize(horizontal: false, vertical: true)
         }
+        .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
         .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
     }
 }
@@ -1467,6 +1470,7 @@ struct QuickSearchSheet: View {
             .listStyle(.plain)
             .listSectionSpacing(.custom(0))
             .contentMargins(.top, 0, for: .scrollContent)
+            .environment(\.defaultMinListRowHeight, 44)
             .environment(\.defaultMinListHeaderHeight, 0)
             .searchable(text: $searchText, isPresented: $isSearchPresented, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search")
             .modifier(QuickSearchToolbarVisibility())
@@ -1560,8 +1564,10 @@ struct QuickSearchSheet: View {
         Button(action: action) {
             Label(title, systemImage: icon)
                 .foregroundStyle(.primary)
-                .padding(.vertical, 4)
+                .frame(minHeight: 44)
         }
+        .buttonStyle(TransactionRowButtonStyle())
+        .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
     }
 
     private func accountResultRow(_ account: Account) -> some View {

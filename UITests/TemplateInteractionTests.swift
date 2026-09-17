@@ -2,6 +2,33 @@ import XCTest
 
 @MainActor
 final class TemplateInteractionTests: XCTestCase {
+    func testLongTemplateMenuKeepsCancelAndActionsAccessible() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        defer { app.terminate() }
+        app.launchArguments = ["--demo", "--reset-demo", "--demo-template-menu"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Journals"].waitForExistence(timeout: 10))
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Personal,")).firstMatch.tap()
+        app.buttons["New Transaction"].tap()
+        let picker = app.otherElements["transaction-template-picker"]
+        let cancel = picker.buttons["Cancel"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+        XCTAssertTrue(cancel.isHittable)
+        XCTAssertGreaterThan(cancel.frame.midY, app.frame.maxY * 0.8, "Cancel stays at the bottom of the screen")
+        let image = XCTAttachment(screenshot: app.screenshot())
+        image.name = "Bottom template action sheet - nine templates"; image.lifetime = .keepAlways; add(image)
+        cancel.tap()
+        XCTAssertTrue(picker.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["New Transaction"].isHittable)
+        app.buttons["New Transaction"].tap()
+        let customize = picker.buttons["Customize Templates…"]
+        if !customize.isHittable { picker.swipeUp() }
+        XCTAssertTrue(customize.isHittable)
+        customize.tap()
+        XCTAssertTrue(app.navigationBars["Templates"].waitForExistence(timeout: 5))
+    }
+
     func testTemplateMinusMovesToMoreAndOnlyIncludedTemplatesAppearInAddMenu() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -30,7 +57,7 @@ final class TemplateInteractionTests: XCTestCase {
         app.navigationBars.buttons["Done"].tap()
         app.buttons["New Transaction"].tap()
         XCTAssertTrue(app.buttons["Spending"].waitForExistence(timeout: 5))
-        let choices = app.sheets.firstMatch
+        let choices = app.otherElements["transaction-template-picker"]
         XCTAssertTrue(choices.buttons["Spending"].exists)
         XCTAssertFalse(choices.buttons["Expense"].exists)
         XCTAssertFalse(choices.buttons["Income"].exists)
@@ -58,7 +85,7 @@ final class TemplateInteractionTests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.navigationBars["Journals"].waitForExistence(timeout: 10))
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Personal,")).firstMatch.tap()
-        app.buttons["New Transaction"].tap(); app.sheets.buttons["Income"].tap()
+        app.buttons["New Transaction"].tap(); app.otherElements["transaction-template-picker"].buttons["Income"].tap()
         XCTAssertTrue(app.navigationBars["New Transaction"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.navigationBars["Choose Account"].exists)
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
@@ -125,7 +152,7 @@ final class TemplateInteractionTests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.navigationBars["Journals"].waitForExistence(timeout: 10))
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Personal,")).firstMatch.tap()
-        app.buttons["New Transaction"].tap(); app.sheets.buttons["Income"].tap()
+        app.buttons["New Transaction"].tap(); app.otherElements["transaction-template-picker"].buttons["Income"].tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         let amounts = app.textFields.matching(NSPredicate(format: "label BEGINSWITH %@", "Amount for"))
         XCTAssertEqual(amounts.firstMatch.value as? String, "-")

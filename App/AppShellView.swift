@@ -39,7 +39,7 @@ struct AppShellView: View {
     @State private var route: EditorRoute?
     @State private var navigationPath: [MobileRoute] = []
     @State private var presentedSheet: ShellSheet?
-    @State private var showingNewTransactionDialog = false
+    @State private var templateSelection: TemplatePickerSelection?
     @ObservedObject private var systemEntries = SystemEntryRouter.shared
     @State private var activeSharedReceiptID: UUID?
 
@@ -103,7 +103,7 @@ struct AppShellView: View {
         }) { route in
             EditorSheet(route: route)
         }
-        .sheet(item: $presentedSheet, onDismiss: handleSystemEntry) { sheet in
+        .sheet(item: $presentedSheet, onDismiss: finishShellSheet) { sheet in
             switch sheet {
             case .settings:
                 SettingsView(route: $route)
@@ -111,6 +111,8 @@ struct AppShellView: View {
                 MobileCloudSyncSheet()
             case .templates(let ledgerID):
                 TemplateManagementSheet(ledgerID: ledgerID)
+            case .newTransaction(let ledgerID):
+                TransactionTemplatePicker(ledgerID: ledgerID, selection: $templateSelection)
             case .quickSearch:
                 QuickSearchSheet(navigationPath: $navigationPath, presentedSheet: $presentedSheet, route: $route, contextLedgerID: currentLedgerID, contextScope: currentRegisterScope, initialQuery: currentSearchQuery)
             }
@@ -118,14 +120,6 @@ struct AppShellView: View {
         .background {
             LockPresentationShield(store: store, isLocked: store.requiresUnlock)
                 .frame(width: 0, height: 0)
-        }
-        .confirmationDialog("New Transaction", isPresented: $showingNewTransactionDialog, titleVisibility: .visible) {
-            ForEach((currentLedgerID.map { store.transactionTemplates(for: $0) } ?? []).filter(\.enabled)) { template in
-                Button(template.name) { FinancePerformanceTrace.begin("template-editor"); route = .newFromTemplate(template, "New Transaction") }
-            }
-            if let ledgerID = currentLedgerID {
-                Button("Customize Templates…") { presentedSheet = .templates(ledgerID) }
-            }
         }
         .onChange(of: scenePhase, initial: true) {
             store.setSceneActive(scenePhase == .active, sceneID: sceneID)
@@ -146,7 +140,6 @@ struct AppShellView: View {
             handleSystemEntry()
             if unlocked { Task { await systemEntries.restoreSharedReceipts(store: store) } }
         }
-        .onChange(of: showingNewTransactionDialog) { if !showingNewTransactionDialog { handleSystemEntry() } }
         .onReceive(NotificationCenter.default.publisher(for: .financesSuggestionsChanged)) { _ in
             Task { await systemEntries.reloadSuggestions(store: store) }
         }
@@ -163,7 +156,6 @@ struct AppShellView: View {
               !systemEntries.requests.isEmpty else { return }
         // Close browsing/settings sheets for an explicit external entry action;
         // actual editors keep their global lease and are never replaced.
-        if showingNewTransactionDialog { showingNewTransactionDialog = false; return }
         if presentedSheet != nil { presentedSheet = nil; return }
         guard let request = systemEntries.takeNext() else { return }
         switch request.destination {
@@ -181,6 +173,20 @@ struct AppShellView: View {
         }
     }
 
+    private func finishShellSheet() {
+        let selection = templateSelection
+        templateSelection = nil
+        guard systemEntries.requests.isEmpty else { handleSystemEntry(); return }
+        switch selection {
+        case .template(let template):
+            route = .newFromTemplate(template, "New Transaction")
+        case .customize(let ledgerID):
+            presentedSheet = .templates(ledgerID)
+        case nil:
+            handleSystemEntry()
+        }
+    }
+
     @ViewBuilder private var globalBottomBar: some View {
         if showsGlobalBottomBar {
             FinanceBottomBar(
@@ -188,7 +194,11 @@ struct AppShellView: View {
                 openSettings: { presentedSheet = .settings },
                 openSearch: { presentedSheet = .quickSearch },
                 openCloudSync: { presentedSheet = .cloudSync },
-                newTransaction: { FinancePerformanceTrace.begin("template-menu"); showingNewTransactionDialog = true }
+                newTransaction: {
+                    guard let ledgerID = currentLedgerID else { return }
+                    FinancePerformanceTrace.begin("template-menu")
+                    presentedSheet = .newTransaction(ledgerID)
+                }
             )
         }
     }
@@ -238,6 +248,80 @@ struct AppShellView: View {
         case .journals, .settings, .transaction, .suggestions, .none:
             return false
         }
+    }
+}
+
+private enum TemplatePickerSelection {
+    case template(TransactionTemplate)
+    case customize(UUID)
+}
+
+private struct TransactionTemplatePicker: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var store: MobileLedgerStore
+    @ScaledMetric(relativeTo: .title3) private var rowHeight = 56.0
+    @State private var actionsHeight = 0.0
+    let ledgerID: UUID
+    @Binding var selection: TemplatePickerSelection?
+
+    private var templates: [TransactionTemplate] {
+        store.transactionTemplates(for: ledgerID).filter(\.enabled)
+    }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            ScrollView {
+                VStack(spacing: 0) {
+                    Text("You are creating a new transaction.")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity)
+                        .padding(16)
+                    ForEach(templates) { template in
+                        Divider()
+                        action(template.name) {
+                            FinancePerformanceTrace.begin("template-editor")
+                            selection = .template(template)
+                            dismiss()
+                        }
+                    }
+                    Divider()
+                    action("Customize Templates…") { selection = .customize(ledgerID); dismiss() }
+                }
+                .onGeometryChange(for: Double.self) { $0.size.height } action: { actionsHeight = $0 }
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(maxHeight: actionsHeight > 0 ? actionsHeight : nil)
+
+            action("Cancel", role: .cancel) { dismiss() }
+                .fontWeight(.semibold)
+                .background(Color.white, in: RoundedRectangle(cornerRadius: 16))
+        }
+        .padding(.horizontal, 8)
+        .padding(.top, 8)
+        .frame(maxHeight: .infinity, alignment: .bottom)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("transaction-template-picker")
+        .presentationDetents([.height((actionsHeight > 0 ? actionsHeight : Double(templates.count + 1) * rowHeight + 50) + rowHeight + 16)])
+        .presentationDragIndicator(.hidden)
+        .presentationCornerRadius(24)
+        .presentationBackground(Color(.sRGB, red: 240 / 255, green: 240 / 255, blue: 241 / 255, opacity: 1))
+        .performanceDestination("template-menu")
+    }
+
+    private func action(_ title: String, role: ButtonRole? = nil, perform: @escaping () -> Void) -> some View {
+        Button(role: role, action: perform) {
+            Text(title)
+                .font(.title3)
+                .foregroundStyle(.blue)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, minHeight: rowHeight)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(TransactionRowButtonStyle())
     }
 }
 

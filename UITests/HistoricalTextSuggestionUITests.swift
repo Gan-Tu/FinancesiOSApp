@@ -21,7 +21,7 @@ final class HistoricalTextSuggestionUITests: XCTestCase {
     }
     private func newTransaction(_ app: XCUIApplication) {
         app.buttons["New Transaction"].tap()
-        app.sheets.buttons["Income"].tap()
+        app.otherElements["transaction-template-picker"].buttons["Income"].tap()
         XCTAssertTrue(app.navigationBars["New Transaction"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         app.typeText("25")

@@ -67,7 +67,6 @@ private final class AppActionPerformanceTrace: NSObject {
         pending[name]?.layoutObserved = true
     }
     @objc private func frame(_ link: CADisplayLink) {
-        if pending["template-menu"] != nil && nativeTransactionMenuIsVisible() { layout("template-menu") }
         if pending["transaction-editor-cancel"] != nil && nativeSheetHasDismissed() { layout("transaction-editor-cancel") }
         for name in Array(pending.keys) {
             guard var item = pending[name], item.layoutObserved else { continue }
@@ -84,16 +83,6 @@ private final class AppActionPerformanceTrace: NSObject {
         return windows.contains { window in
             window.isKeyWindow && window.rootViewController?.viewIfLoaded?.window != nil && window.rootViewController?.presentedViewController == nil
         }
-    }
-    private func nativeTransactionMenuIsVisible() -> Bool {
-        let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
-        for window in windows where window.isKeyWindow {
-            var controller = window.rootViewController
-            while let presented = controller?.presentedViewController { controller = presented }
-            if let alert = controller as? UIAlertController, alert.title == "New Transaction", !alert.actions.isEmpty,
-               alert.viewIfLoaded?.window != nil { return true }
-        }
-        return false
     }
     @objc private func finish() {
         displayLink?.invalidate(); displayLink = nil
