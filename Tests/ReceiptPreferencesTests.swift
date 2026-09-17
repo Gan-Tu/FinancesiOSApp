@@ -119,7 +119,7 @@ private actor PreferencesTestCloud: CloudKitSyncTransport {
         let receipts = CloudKitSyncRecordCodec(zoneID: CKRecordZone.ID(zoneName: ReceiptPreferences.zone, ownerName: CKCurrentUserDefaultName))
         XCTAssertThrowsError(try receipts.recordID(type: AssistantPreferences.domain, id: AssistantPreferences.recordID))
         XCTAssertThrowsError(try AssistantPreferences(AssistantSettings(customInstructions: String(repeating: "😀", count: 2001))).validate())
-        XCTAssertThrowsError(try AssistantPreferences(AssistantSettings(effort: "none")).validate())
+        XCTAssertThrowsError(try AssistantPreferences(AssistantSettings(model: "gpt-6-astra", effort: "none")).validate())
     }
 }
 @MainActor final class ReceiptPreferencesTests: XCTestCase {

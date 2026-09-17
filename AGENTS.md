@@ -1,5 +1,13 @@
 # Repository Instructions
 
+## No Real Inference During Development or Verification
+
+- Never use real model inference for testing, verification, development, demos, or release checks. This includes chat, voice, receipt analysis, external providers, and production endpoints.
+- Use deterministic mocks, recorded fixtures, and injected fake transports only. Existing API keys and earlier permissions to reuse keys do not authorize test inference.
+- Do not enable paid calls to verify a deployment or bypass the development/Simulator inference guards. Production inference is for normal user operation only.
+- Keep UI coverage using the mock assistant gateway; never restore a live-inference opt-in test path.
+- Ask AI defaults to `gpt-5.6-terra` with medium reasoning when no saved override exists. Preserve valid user-selected models and effort levels.
+
 ## Tests Before Push
 
 - Run the relevant build and tests after making changes and before pushing.

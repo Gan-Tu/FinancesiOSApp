@@ -7,6 +7,38 @@ import UIKit
 
 @MainActor
 final class AssistantTests: XCTestCase {
+    func testTerraDefaultsPreserveExplicitModelOverrides() throws {
+        XCTAssertEqual(AssistantSettings().model, "gpt-5.6-terra")
+        XCTAssertEqual(AssistantPreferences().model, "gpt-5.6-terra")
+        XCTAssertEqual(AssistantSettings().effort, "medium")
+        let explicit = AssistantSettings(model: "gpt-6-astra", effort: "high")
+        let decoded = try JSONDecoder().decode(AssistantPreferences.self, from: JSONEncoder().encode(AssistantPreferences(explicit)))
+        XCTAssertEqual(decoded.model, "gpt-6-astra")
+        XCTAssertEqual(decoded.effort, "high")
+    }
+
+    func testDevelopmentUsesOfflineGatewayAndBlocksDirectChatAndVoiceInference() async throws {
+        let f = try fixture()
+        XCTAssertTrue(AIInferencePolicy.blocksNetwork)
+        let coordinator = AssistantCoordinator(store: f.store)
+        XCTAssertTrue(coordinator.gateway is AssistantMockGateway)
+        let mockIdentity = try await coordinator.gateway.localIdentity()
+        XCTAssertNil(mockIdentity, "A non-demo ledger must not use the shared mock identity")
+        do {
+            _ = try await coordinator.gateway.connect()
+            XCTFail("Mock history must stay isolated to the sample app")
+        } catch { XCTAssertTrue(error.localizedDescription.contains("isolated sample")) }
+        let networkGateway = AssistantGateway(endpoint: "https://should-never-be-contacted.invalid")
+        do {
+            try await networkGateway.step(items: [], settings: AssistantSettings()) { _ in XCTFail("No response expected") }
+            XCTFail("Real chat inference must be blocked")
+        } catch { XCTAssertTrue(error.localizedDescription.contains("Real AI inference is disabled")) }
+        do {
+            _ = try await networkGateway.voice(sdp: "synthetic-offer", provider: "live", context: "")
+            XCTFail("Real voice inference must be blocked")
+        } catch { XCTAssertTrue(error.localizedDescription.contains("Real AI inference is disabled")) }
+    }
+
     func testPhotoBatchStopsBeforeLoadingMoreOversizedImagesAndScansCheckPageCountFirst() async throws {
         var loaded = 0
         do {

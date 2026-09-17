@@ -47,19 +47,10 @@ final class AssistantCoordinator: ObservableObject {
     private var voiceRequestID: String?
     private let logger = Logger(subsystem: "dev.gan.FinancesApp.iOS", category: "Assistant")
 
-    static var localEndpoint: String {
-        #if DEBUG
-        let args = ProcessInfo.processInfo.arguments
-        if args.contains("--demo"), let index = args.firstIndex(of: "--assistant-api-url"), args.indices.contains(index + 1),
-           let url = URL(string: args[index + 1]), ["localhost", "127.0.0.1", "::1"].contains(url.host ?? "") { return url.absoluteString }
-        #endif
-        return "https://finances.tugan.app"
-    }
-
     init(store: MobileLedgerStore, gateway: (any AssistantGatewayProtocol)? = nil, contract: AssistantContract? = nil, preferences: AssistantPreferencesStore? = nil) {
         self.store = store
         self.preferences = preferences
-        self.gateway = gateway ?? AssistantGateway(endpoint: Self.localEndpoint)
+        self.gateway = gateway ?? (AIInferencePolicy.blocksNetwork ? AssistantMockGateway() : AssistantGateway())
         self.contract = contract ?? (try? AssistantContract.load()) ?? AssistantContract(version: 1, tools: [])
         voice = AssistantVoiceSession()
         consented = UserDefaults.standard.bool(forKey: "assistant.cloudConsent.v1")
@@ -96,9 +87,7 @@ final class AssistantCoordinator: ObservableObject {
         error = "Your iCloud account changed. Reopen the assistant after Finances refreshes its account."
     }
     private func verifyIdentity(_ subject: String) throws {
-        #if DEBUG
-        if subject == "local-developer", ProcessInfo.processInfo.arguments.contains("--demo") { return }
-        #endif
+        if AIInferencePolicy.blocksNetwork, subject == "local-developer", AIInferencePolicy.usesIsolatedSample { return }
         guard let binding = try store.assistantDatabase.assistantBoundIdentity() else { throw AssistantFailure("unbound_journal", "Finish the initial iCloud connection before using the assistant.") }
         let fields = binding.context.split(separator: "|")
         guard fields.count >= 2, subject == "cloudkit:\(fields[0]):\(fields[1].lowercased()):\(binding.account)" else { throw AssistantFailure("identity_mismatch", "The signed-in account does not own this local journal. Existing data is preserved.") }
@@ -540,6 +529,7 @@ final class AssistantCoordinator: ObservableObject {
         }
     }
     private func settingsForNewRequest() throws -> AssistantSettings {
+        if gateway is AssistantMockGateway { return preferences?.settings(for: identity) ?? conversation.settings }
         guard let preferences else { return conversation.settings }
         guard let settings = preferences.settings(for: identity) else {
             Task { await preferences.refresh() }

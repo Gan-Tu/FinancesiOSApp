@@ -188,6 +188,7 @@ targets:
     - path: Core/CloudKitSyncConfiguration.swift
     - path: Core/ReceiptAssistModels.swift
     - path: Core/ReceiptAnalysisClient.swift
+    - path: Core/AIInferencePolicy.swift
     - path: App/TransactionScheduleEditors.swift
     info:
       path: ShareExtension/Info.plist

@@ -79,7 +79,7 @@ enum DemoData {
         if CommandLine.arguments.contains("--demo-scroll"), let index = data.transactions.indices.min(by: { data.transactions[$0].date < data.transactions[$1].date }) {
             data.transactions[index].note = "Oldest test transaction"
         }
-        let assistantTesting = CommandLine.arguments.contains("--assistant-api-url")
+        let assistantTesting = CommandLine.arguments.contains("--mock-ai")
         let dependencies: CloudKitSyncDependencies = (assistantTesting || isSplitEditorFixtureRequested || isTextSuggestionFixtureRequested || isSystemEntryFixtureRequested)
             ? CloudKitSyncDependencies(configuration: { nil }, makeClient: { _ in
                 throw ValidationError(message: "Synthetic split editor tests prohibit CloudKit access.")

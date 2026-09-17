@@ -1,5 +1,7 @@
 #!/bin/bash
 set -euo pipefail
+export OPENAI_API_KEY=""
+export FINANCES_DISABLE_INFERENCE=1
 cd "$(dirname "$0")/.."
 FINANCES_TEST_SCHEME=FinancesiOSFullTests
 if [[ "${1:-}" == "--smoke" ]]; then

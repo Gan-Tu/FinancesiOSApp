@@ -5,7 +5,9 @@ if [[ -z "${ASSISTANT_SIMULATOR:-}" ]]; then
   ASSISTANT_SIMULATOR="$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin); matches=[v["udid"] for rows in d["devices"].values() for v in rows if v["name"] == "Finances Assistant"]; assert matches, "Set ASSISTANT_SIMULATOR to your test device UDID"; print(matches[0])')"
 fi
 ASSISTANT_BUILD_DIR="${ASSISTANT_BUILD_DIR:-build/AssistantDerivedData}"
-curl --fail --silent http://127.0.0.1:5184/api/v1/receipt-analysis/options >/dev/null
+export OPENAI_API_KEY=""
+export FINANCES_DISABLE_INFERENCE=1
+# The app uses AssistantMockGateway. No local backend or API key is required.
 xcodebuild -project FinancesiOS.xcodeproj -scheme FinancesiOSFullTests -configuration Debug \
   -destination "platform=iOS Simulator,id=$ASSISTANT_SIMULATOR" -derivedDataPath "$ASSISTANT_BUILD_DIR" \
   CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- build-for-testing
@@ -20,7 +22,7 @@ for config in data.get('TestConfigurations',[]):
 if 'FinancesiOSUITests' in data:
  targets.append(data['FinancesiOSUITests'])
 assert len(targets)==1, 'Could not find the UI test runner in the generated xctestrun'
-targets[0].setdefault('EnvironmentVariables',{})['FINANCES_LIVE_ASSISTANT_TESTS']='1'
+targets[0].setdefault('EnvironmentVariables',{})['FINANCES_MOCK_ASSISTANT_TESTS']='1'
 destination=root/'AssistantLocal.xctestrun'
 destination.write_bytes(plistlib.dumps(data))
 PY

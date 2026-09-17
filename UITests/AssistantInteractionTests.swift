@@ -1,16 +1,16 @@
 import XCTest
 
-/// The live test is deliberately opt-in: ordinary full-suite/CI runs must not
-/// depend on a developer's local server, API key, or paid inference.
+/// Assistant UI checks use the deterministic, network-free development gateway.
+/// No test may request real inference or require an API key.
 @MainActor
 final class AssistantInteractionTests: XCTestCase {
     func testLocalAssistantOffersAttachmentSourcesAndUploadsSelectedPhoto() throws {
-        guard ProcessInfo.processInfo.environment["FINANCES_LIVE_ASSISTANT_TESTS"] == "1" else {
-            throw XCTSkip("Run the local assistant UI test script with a seeded photo in its simulator.")
+        guard ProcessInfo.processInfo.environment["FINANCES_MOCK_ASSISTANT_TESTS"] == "1" else {
+            throw XCTSkip("Run the local assistant UI test script with a seeded photo in its simulator (mock AI only).")
         }
         continueAfterFailure = false
         let app = XCUIApplication()
-        app.launchArguments = ["--demo", "--assistant-api-url", "http://127.0.0.1:5184"]
+        app.launchArguments = ["--demo", "--mock-ai"]
         app.launch()
         let open = app.buttons["assistant.open"]
         XCTAssertTrue(open.waitForExistence(timeout: 10)); open.tap()
@@ -49,12 +49,12 @@ final class AssistantInteractionTests: XCTestCase {
     }
 
     func testLocalMidTurnSteeringAcceptsFollowUpWhileReplying() throws {
-        guard ProcessInfo.processInfo.environment["FINANCES_LIVE_ASSISTANT_TESTS"] == "1" else {
-            throw XCTSkip("Run the local assistant UI test script with its backend.")
+        guard ProcessInfo.processInfo.environment["FINANCES_MOCK_ASSISTANT_TESTS"] == "1" else {
+            throw XCTSkip("Run the local assistant UI test script with mock responses.")
         }
         continueAfterFailure = false
         let app = XCUIApplication()
-        app.launchArguments = ["--demo", "--assistant-api-url", "http://127.0.0.1:5184"]
+        app.launchArguments = ["--demo", "--mock-ai"]
         app.launch()
         let open = app.buttons["assistant.open"]
         XCTAssertTrue(open.waitForExistence(timeout: 10)); open.tap()
@@ -63,7 +63,7 @@ final class AssistantInteractionTests: XCTestCase {
         app.buttons["Assistant Options"].tap(); app.buttons["New Chat"].tap()
         let composer = app.textFields["assistant.composer"]
         XCTAssertTrue(composer.waitForExistence(timeout: 5)); composer.tap()
-        composer.typeText("Write at least 3000 words explaining general budgeting methods. Use no finance tools and do not edit records.")
+        composer.typeText("MOCK_SLOW_REPLY")
         let send = app.buttons["assistant.send"]
         XCTAssertTrue(send.waitForExistence(timeout: 5)); send.tap()
         XCTAssertTrue(app.buttons["assistant.stop"].waitForExistence(timeout: 10))
@@ -114,12 +114,12 @@ final class AssistantInteractionTests: XCTestCase {
     }
 
     func testLocalHistorySwipeRenamePersists() throws {
-        guard ProcessInfo.processInfo.environment["FINANCES_LIVE_ASSISTANT_TESTS"] == "1" else {
-            throw XCTSkip("Run the local assistant UI test script with its backend.")
+        guard ProcessInfo.processInfo.environment["FINANCES_MOCK_ASSISTANT_TESTS"] == "1" else {
+            throw XCTSkip("Run the local assistant UI test script with mock responses.")
         }
         continueAfterFailure = false
         let app = XCUIApplication()
-        app.launchArguments = ["--demo", "--assistant-api-url", "http://127.0.0.1:5184"]
+        app.launchArguments = ["--demo", "--mock-ai"]
         func openAssistant() {
             let open = app.buttons["assistant.open"]
             XCTAssertTrue(open.waitForExistence(timeout: 10)); open.tap()
@@ -188,12 +188,12 @@ final class AssistantInteractionTests: XCTestCase {
     }
 
     func testLocalAssistantRoundTrip() throws {
-        guard ProcessInfo.processInfo.environment["FINANCES_LIVE_ASSISTANT_TESTS"] == "1" else {
-            throw XCTSkip("Run scripts/test-assistant-local.sh with the local backend for live verification.")
+        guard ProcessInfo.processInfo.environment["FINANCES_MOCK_ASSISTANT_TESTS"] == "1" else {
+            throw XCTSkip("Run scripts/test-assistant-local.sh for offline UI verification.")
         }
         continueAfterFailure = false
         let app = XCUIApplication()
-        app.launchArguments = ["--demo", "--assistant-api-url", "http://127.0.0.1:5184"]
+        app.launchArguments = ["--demo", "--mock-ai"]
         app.launch()
         let open = app.buttons["assistant.open"]
         XCTAssertTrue(open.waitForExistence(timeout: 10))
@@ -236,7 +236,7 @@ final class AssistantInteractionTests: XCTestCase {
         XCTAssertEqual(actions.value as? String, "Expanded")
         actions.tap()
         XCTAssertEqual(actions.value as? String, "Collapsed")
-        let capture = XCTAttachment(screenshot: app.screenshot()); capture.name = "Native assistant live answer"; capture.lifetime = .keepAlways; add(capture)
+        let capture = XCTAttachment(screenshot: app.screenshot()); capture.name = "Native assistant mock answer"; capture.lifetime = .keepAlways; add(capture)
         // Relaunch opens fresh, while History restores the saved conversation.
         app.terminate(); app.launch()
         XCTAssertTrue(open.waitForExistence(timeout: 10)); open.tap()

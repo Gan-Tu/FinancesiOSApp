@@ -166,37 +166,22 @@ private actor AssistTestTransport: CloudKitSyncTransport {
     }
 }
 
-@MainActor final class ReceiptAssistLiveIntegrationTests: XCTestCase {
-    func testSyntheticReceiptThroughLocalAPI() async throws {
-        guard let endpoint = ProcessInfo.processInfo.environment["FINANCES_AI_INTEGRATION_URL"],
-            let path = ProcessInfo.processInfo.environment["FINANCES_AI_INTEGRATION_PDF"]
-        else { throw XCTSkip("Opt-in synthetic local API integration") }
-        let ledger = UUID()
-        let root = UUID()
-        let currency = Commodity(ledgerID: ledger, symbol: "USD", name: "Dollar")
-        let source = Account(
-            ledgerID: ledger, parentID: root, commodityID: currency.id, name: "Test Visa", kind: .liability)
-        let counter = Account(
-            ledgerID: ledger, parentID: root, commodityID: currency.id, name: "Groceries", kind: .expense)
-        let identity = PaymentAccountMetadata(
-            id: source.id, ledgerID: ledger,
-            identities: [.init(label: "Test Visa", network: "visa", last4: "0414")])
-        let url = URL(fileURLWithPath: path)
-        let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-        let asset = AttachmentAsset(
-            originalFilename: "Synthetic Receipt.pdf", storedPath: path, mimeType: "application/pdf",
-            sizeBytes: Int64(size))
-        var settings = ReceiptAISettings()
-        settings.endpoint = endpoint
-        let result = try await ReceiptAnalysisClient().analyze(
-            draft: TransactionDraft(ledgerID: ledger), ledgerID: ledger,
-            accounts: [source, counter], commodities: [currency], metadata: [source.id: identity],
-            assets: [(asset, url)], settings: settings)
-        let proposed = try ReceiptDraftProposal.make(
-            result, accounts: [source, counter], commodities: [currency])
-        XCTAssertEqual(proposed.payee, "Example Market")
-        XCTAssertTrue(proposed.postings?.contains { $0.accountID == source.id } == true)
-        XCTAssertTrue(proposed.postings?.contains { $0.accountID == counter.id } == true)
+@MainActor final class ReceiptAssistOfflineIntegrationTests: XCTestCase {
+    func testRealReceiptInferenceIsBlockedBeforeAnyNetworkOrFileRead() async throws {
+        XCTAssertTrue(AIInferencePolicy.blocksNetwork)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [AssistantUploadProtocol.self]
+        AssistantUploadProtocol.responder = { _ in
+            XCTFail("Inference protection must run before any HTTP request")
+            throw URLError(.badURL)
+        }
+        defer { AssistantUploadProtocol.responder = nil }
+        let client = ReceiptAnalysisClient(session: URLSession(configuration: configuration))
+        var settings = ReceiptAISettings(); settings.endpoint = "https://assistant-upload.invalid"
+        do {
+            _ = try await client.analyze(draft: TransactionDraft(), ledgerID: UUID(), accounts: [], commodities: [], metadata: [:], assets: [], settings: settings)
+            XCTFail("Development receipt inference must be blocked")
+        } catch { XCTAssertTrue(error.localizedDescription.contains("Real AI inference is disabled")) }
     }
 }
 
