@@ -4,6 +4,7 @@ import PhotosUI
 import QuickLook
 import QuickLookThumbnailing
 import VisionKit
+import PDFKit
 
 /// File/Photo pickers may append again while the transaction's durable save is
 /// suspended. Keep the cumulative selection and persist it in order, including
@@ -290,6 +291,29 @@ struct ReceiptScanImage: @unchecked Sendable {
     }
 }
 
+/// Shared by transaction receipts and Ask AI; conversion stays off the main
+/// actor and retains scanned page order in a single PDF attachment.
+actor ReceiptScanPDF {
+    static let shared = ReceiptScanPDF()
+
+    func makeDocument(pages: [Data]) throws -> Data {
+        guard !pages.isEmpty else { throw AssistantFailure("empty_scan", "Scan at least one page.") }
+        guard pages.count <= 30 else { throw AssistantFailure("scan_page_limit", "Scan up to 30 pages per PDF.") }
+        guard pages.reduce(0, { $0 + $1.count }) <= 40_000_000 else { throw AssistantFailure("attachment_limit", "The scan is too large. Try fewer pages.") }
+        let document = PDFDocument()
+        for (index, bytes) in pages.enumerated() {
+            try Task.checkCancellation()
+            guard let image = UIImage(data: bytes), let page = PDFPage(image: image) else {
+                throw AssistantFailure("invalid_scan", "A scanned page could not be read. Please scan it again.")
+            }
+            document.insert(page, at: index)
+        }
+        guard let data = document.dataRepresentation() else { throw AssistantFailure("invalid_scan", "The scanned PDF could not be created.") }
+        try Task.checkCancellation()
+        return data
+    }
+}
+
 /// Own the async scanner lifecycle independently of the presented controller.
 /// Dismantling suppresses completion; the explicit Cancel button completes once.
 @MainActor
@@ -350,6 +374,10 @@ struct ReceiptPicker: View {
 #endif
 
 private struct ReceiptPickerContent: View {
+    private enum ScanFormat: String, Identifiable {
+        case images, pdf
+        var id: String { rawValue }
+    }
     @EnvironmentObject private var store: MobileLedgerStore
     @Binding var assets: [AttachmentAsset]
     let textOnly: Bool
@@ -358,7 +386,7 @@ private struct ReceiptPickerContent: View {
     @State private var didStartInitialScan = false
     @State private var files = false
     @State private var photos = false
-    @State private var scan = false
+    @State private var scan: ScanFormat?
     @State private var selections: [PhotosPickerItem] = []
     @State private var importGeneration: UUID?
 
@@ -367,7 +395,8 @@ private struct ReceiptPickerContent: View {
             Button("Choose Files", systemImage: "folder") { importGeneration = store.attachmentImportGeneration; files = true }
             Button("Photo Library", systemImage: "photo") { importGeneration = store.attachmentImportGeneration; photos = true }
             if VNDocumentCameraViewController.isSupported {
-                Button("Scan Receipt", systemImage: "doc.viewfinder") { importGeneration = store.attachmentImportGeneration; scan = true }
+                Button("Scan Receipt", systemImage: "doc.viewfinder") { importGeneration = store.attachmentImportGeneration; scan = .images }
+                Button("Scan to PDF", systemImage: "doc") { importGeneration = store.attachmentImportGeneration; scan = .pdf }
             }
         } label: {
             if session.isImporting { ProgressView("Adding Receipt…") }
@@ -390,7 +419,7 @@ private struct ReceiptPickerContent: View {
             guard startWithScan, !didStartInitialScan else { return }
             didStartInitialScan = true
             importGeneration = store.attachmentImportGeneration
-            if VNDocumentCameraViewController.isSupported { scan = true }
+            if VNDocumentCameraViewController.isSupported { scan = .images }
             else {
                 session.start { _ in throw ValidationError(message: "Receipt scanning is unavailable on this device. Choose a file or photo instead.") }
             }
@@ -421,13 +450,20 @@ private struct ReceiptPickerContent: View {
                 }
             }
         }
-        .sheet(isPresented: $scan) {
+        .sheet(item: $scan) { format in
             let generation = importGeneration ?? store.attachmentImportGeneration
-            ReceiptScanner { result in
-                scan = false
+            ReceiptScanner(maximumPages: format == .pdf ? 30 : nil, maximumBytes: format == .pdf ? 40_000_000 : nil) { result in
+                scan = nil
                 session.start { operationID in
-                    for (index, bytes) in try result.get().enumerated() {
-                        try await importBytes(bytes, filename: "Receipt-\(UUID().uuidString.prefix(8))-\(index + 1).jpg", generation: generation, operationID: operationID)
+                    let pages = try result.get()
+                    guard !pages.isEmpty else { return }
+                    if format == .pdf {
+                        let bytes = try await ReceiptScanPDF.shared.makeDocument(pages: pages)
+                        try await importBytes(bytes, filename: "Receipt-\(UUID().uuidString.prefix(8)).pdf", generation: generation, operationID: operationID)
+                    } else {
+                        for (index, bytes) in pages.enumerated() {
+                            try await importBytes(bytes, filename: "Receipt-\(UUID().uuidString.prefix(8))-\(index + 1).jpg", generation: generation, operationID: operationID)
+                        }
                     }
                 }
             }

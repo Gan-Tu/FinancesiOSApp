@@ -2,7 +2,6 @@ import SwiftUI
 import PhotosUI
 import AVFoundation
 import VisionKit
-import PDFKit
 
 struct AssistantAttachmentContext: Equatable {
     let conversationID: UUID
@@ -31,27 +30,6 @@ enum AssistantPhotoLoader {
             inputs.append(.bytes(photo.data, filename: photo.filename))
         }
         return inputs
-    }
-}
-
-actor AssistantScanPDF {
-    static let shared = AssistantScanPDF()
-
-    func makeDocument(pages: [Data]) throws -> Data {
-        guard !pages.isEmpty else { throw AssistantFailure("empty_scan", "Scan at least one page.") }
-        guard pages.count <= 30 else { throw AssistantFailure("scan_page_limit", "Scan up to 30 pages per PDF.") }
-        guard pages.reduce(0, { $0 + $1.count }) <= 40_000_000 else { throw AssistantFailure("attachment_limit", "The scan is too large. Try fewer pages.") }
-        let document = PDFDocument()
-        for (index, bytes) in pages.enumerated() {
-            try Task.checkCancellation()
-            guard let image = UIImage(data: bytes), let page = PDFPage(image: image) else {
-                throw AssistantFailure("invalid_scan", "A scanned page could not be read. Please scan it again.")
-            }
-            document.insert(page, at: index)
-        }
-        guard let data = document.dataRepresentation() else { throw AssistantFailure("invalid_scan", "The scanned PDF could not be created.") }
-        try Task.checkCancellation()
-        return data
     }
 }
 
@@ -153,7 +131,7 @@ struct AssistantAttachmentMenu: View {
             guard !pages.isEmpty else { return } // Explicit scanner/camera cancellation.
             assistant.attach(context: request.context) {
                 if request.kind == .pdf {
-                    return [.bytes(try await AssistantScanPDF.shared.makeDocument(pages: pages), filename: "Scan-\(UUID().uuidString.prefix(8)).pdf")]
+                    return [.bytes(try await ReceiptScanPDF.shared.makeDocument(pages: pages), filename: "Scan-\(UUID().uuidString.prefix(8)).pdf")]
                 }
                 let prefix = request.kind == .photo ? "Photo" : "Receipt"
                 return pages.enumerated().map { .bytes($0.element, filename: "\(prefix)-\(UUID().uuidString.prefix(8))-\($0.offset + 1).jpg") }

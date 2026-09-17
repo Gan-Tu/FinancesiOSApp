@@ -26,7 +26,7 @@ final class AssistantTests: XCTestCase {
         } catch { XCTAssertEqual((error as? AssistantFailure)?.code, "attachment_limit") }
         XCTAssertEqual(loaded, 2)
         do {
-            _ = try await AssistantScanPDF.shared.makeDocument(pages: Array(repeating: Data([0]), count: 31))
+            _ = try await ReceiptScanPDF.shared.makeDocument(pages: Array(repeating: Data([0]), count: 31))
             XCTFail("Too many pages must fail before decoding the invalid image bytes")
         } catch { XCTAssertEqual((error as? AssistantFailure)?.code, "scan_page_limit") }
     }
@@ -50,7 +50,7 @@ final class AssistantTests: XCTestCase {
         }
         let photo = try await ReceiptScanImage(image: portrait).jpegData()
         let secondPage = try await ReceiptScanImage(image: landscape).jpegData()
-        let pdf = try await AssistantScanPDF.shared.makeDocument(pages: [photo, secondPage])
+        let pdf = try await ReceiptScanPDF.shared.makeDocument(pages: [photo, secondPage])
         let document = try XCTUnwrap(PDFDocument(data: pdf))
         XCTAssertEqual(document.pageCount, 2)
         let firstBounds = try XCTUnwrap(document.page(at: 0)).bounds(for: .mediaBox)
@@ -118,7 +118,7 @@ final class AssistantTests: XCTestCase {
         XCTAssertEqual(uploads, 0)
         XCTAssertTrue(coordinator.error?.contains("15 MiB") == true)
         for pages in [[], [Data([0, 1, 2])]] {
-            do { _ = try await AssistantScanPDF.shared.makeDocument(pages: pages); XCTFail("Invalid scans must fail") }
+            do { _ = try await ReceiptScanPDF.shared.makeDocument(pages: pages); XCTFail("Invalid scans must fail") }
             catch { XCTAssertTrue(error is AssistantFailure) }
         }
         coordinator.dismiss()

@@ -1,10 +1,67 @@
 import XCTest
 import Combine
 import UIKit
+import PDFKit
 @testable import FinancesClone
 
 @MainActor
 final class ReceiptImportAndThumbnailTests: XCTestCase {
+    func testScannedPDFPersistsAsOneTransactionReceiptAndCancelRemovesOnlyItsUnsavedCopy() async throws {
+        let (store, _) = fixture()
+        let row = try XCTUnwrap(store.data.transactions.first { $0.attachment == nil })
+        var draft = store.draft(for: row)
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 40, height: 60)).image { context in
+            UIColor.orange.setFill(); context.fill(CGRect(x: 0, y: 0, width: 40, height: 60))
+        }
+        let page = try await ReceiptScanImage(image: image).jpegData()
+        let session = ReceiptImportSession()
+        session.configureDiscard { store.discardUnreferencedImportedAttachments($0) }
+        let generation = store.attachmentImportGeneration
+        session.start { operation in
+            let pdf = try await ReceiptScanPDF.shared.makeDocument(pages: [page, page])
+            let temporary = try await ReceiptImportIO.shared.stage(pdf, filename: "Receipt-scan.pdf")
+            do {
+                _ = try await store.importAttachmentAsync(from: temporary.url, expectedGeneration: generation) { asset in
+                    try session.accept(asset, for: operation)
+                    draft.attachments.append(asset)
+                }
+                await ReceiptImportIO.shared.remove(temporary)
+            } catch { await ReceiptImportIO.shared.remove(temporary); throw error }
+        }
+        XCTAssertFalse(session.canSave)
+        await session.waitForPendingImports()
+        XCTAssertNil(session.errorMessage)
+        XCTAssertTrue(session.canSave)
+        XCTAssertEqual(draft.attachments.count, 1)
+        let asset = try XCTUnwrap(draft.attachments.first)
+        XCTAssertEqual(asset.originalFilename, "Receipt-scan.pdf")
+        XCTAssertEqual(asset.mimeType, "application/pdf")
+        XCTAssertEqual(PDFDocument(url: store.attachmentURL(for: asset))?.pageCount, 2)
+        let saved = await store.saveTransactionAndFlushAsync(draft)
+        XCTAssertTrue(saved)
+        session.didCommit()
+        let persisted = try XCTUnwrap(SQLiteJournalStore(databaseURL: store.cloudKitSQLiteStore.databaseURL).loadData()?.transactions.first { $0.id == row.id })
+        XCTAssertEqual(persisted.attachment?.assets, [asset])
+        XCTAssertEqual(persisted.note, row.note)
+        XCTAssertEqual(persisted.postings.map(\.amount), row.postings.map(\.amount))
+
+        let cancelled = ReceiptImportSession()
+        cancelled.configureDiscard { store.discardUnreferencedImportedAttachments($0) }
+        var unsavedCopy: AttachmentAsset?
+        cancelled.start { operation in
+            _ = try await store.importAttachmentAsync(from: store.attachmentURL(for: asset)) { copy in
+                try cancelled.accept(copy, for: operation); unsavedCopy = copy
+            }
+        }
+        await cancelled.waitForPendingImports()
+        let copy = try XCTUnwrap(unsavedCopy)
+        cancelled.cancel()
+        await MobileLedgerStore.drainPersistenceQueueForTesting()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.attachmentURL(for: copy).path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.attachmentURL(for: asset).path))
+        XCTAssertEqual(store.transaction(row.id)?.attachment?.assets, [asset])
+    }
+
     private var stores: [MobileLedgerStore] = []
     private var directories: [URL] = []
 
