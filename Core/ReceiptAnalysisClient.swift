@@ -582,6 +582,7 @@ private final class ReceiptSessionObservers {
             return row
         }
         return try JSONSerialization.data(withJSONObject: [
+            "surface": "ios",
             "journalID": ledgerID.uuidString, "accounts": rows,
             "commodities": commodities.filter { $0.ledgerID == ledgerID }.map {
                 ["id": $0.id.uuidString, "symbol": $0.symbol, "name": $0.name]

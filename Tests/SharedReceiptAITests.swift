@@ -77,6 +77,7 @@ final class SharedReceiptAITests: XCTestCase {
             accounts: catalog.nativeAccounts(journalID: journal), commodities: catalog.nativeCurrencies(journalID: journal),
             metadata: [:], settings: XCTUnwrap(catalog.receiptAI?.settings))
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: context) as? [String: Any])
+        XCTAssertEqual(json["surface"] as? String, "ios")
         XCTAssertEqual(json["model"] as? String, "gpt-5.6-luna")
         XCTAssertEqual(json["effort"] as? String, "low")
         XCTAssertEqual(json["instructions"] as? String, "Preserve merchant spelling.")
