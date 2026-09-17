@@ -14,6 +14,8 @@ final class AssistantTools {
     var selectFiles: ((String) async throws -> [URL])?
     var showArtifact: ((URL) -> Void)?
     var openView: ((AssistantJSON) -> Void)?
+    var conversationTitle: (() throws -> AssistantJSON)?
+    var renameConversation: ((AssistantToolCall, String) throws -> AssistantJSON)?
     var readForModel: ((UUID, AttachmentAsset, URL) async throws -> AssistantJSON)?
     var staged: [String: URL] = [:]
     var previews: [String: PreparedBackupRestore] = [:]
@@ -50,6 +52,14 @@ final class AssistantTools {
         try AssistantContract.validate(a, schema: def.inputSchema)
         let name = call.name
         if name == "get_app_context" { return success(appContext()) }
+        if name == "get_conversation_title" {
+            guard let conversationTitle else { throw AssistantFailure("conversation_unavailable", "Reopen the current conversation.") }
+            return success(try conversationTitle())
+        }
+        if name == "rename_conversation" {
+            guard let renameConversation else { throw AssistantFailure("conversation_unavailable", "Reopen the current conversation.") }
+            return try renameConversation(call, a.required("title"))
+        }
         if name == "select_files" {
             guard let selectFiles else { throw AssistantFailure("interaction_unavailable", "Open the assistant to select files.") }
             let urls = try await selectFiles(try a.required("purpose")); try access()

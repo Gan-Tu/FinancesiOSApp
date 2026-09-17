@@ -178,8 +178,8 @@ final class AssistantTests: XCTestCase {
     }
     func testAllContractToolsHaveNativeCoverageAndStrictSchemas() throws {
         let contract = try AssistantContract.load()
-        XCTAssertEqual(contract.tools.count, 42)
-        XCTAssertEqual(Set(contract.tools.map(\.name)).count, 42)
+        XCTAssertEqual(contract.tools.count, 44)
+        XCTAssertEqual(Set(contract.tools.map(\.name)).count, 44)
         let tool = try XCTUnwrap(contract.tools.first { $0.name == "create_transaction" })
         XCTAssertThrowsError(try AssistantContract.validate(.object(["unexpected": .bool(true)]), schema: tool.inputSchema))
         XCTAssertThrowsError(try AssistantContract.validate(.object(["journal": .string("x"), "date": .string("2026-01-01"), "request_id": .string("id"), "postings": .array([])]), schema: tool.inputSchema))
@@ -320,6 +320,55 @@ final class AssistantTests: XCTestCase {
         XCTAssertEqual(coordinator.conversation.title, "九月 Spending")
         XCTAssertEqual(coordinator.history[0].title, "九月 Spending")
         try SQLiteWriteAudit.execute("DROP TRIGGER reject_assistant_rename", at: db.databaseURL)
+        coordinator.dismiss()
+    }
+    func testConversationTitleToolsSaveOnlyCurrentChatAndReplayWithoutOverwritingManualRename() async throws {
+        let fixture = try fixture(), db = fixture.store.assistantDatabase
+        let subject = "cloudkit:iCloud.fixture:development:user-a"
+        _ = try db.bindCloudKitAccount(contextKey: "iCloud.fixture|Development|Journal", accountID: "user-a")
+        let current = AssistantConversation(title: "Original", customTitle: true, context: fixture.context)
+        let other = AssistantConversation(title: "Other", context: fixture.context)
+        for conversation in [current, other] {
+            try db.saveAssistantHistory(scope: subject, id: conversation.id.uuidString, payload: JSONEncoder().encode(conversation))
+        }
+        let action = call("rename_conversation", .object(["title": .string("  九月 Budget  ")]))
+        let gateway = TestAssistantGateway(subject: subject)
+        gateway.firstCalls = [call("get_conversation_title", .object([:])), action]
+        let coordinator = AssistantCoordinator(store: fixture.store, gateway: gateway, contract: fixture.contract)
+        coordinator.consented = true; coordinator.setForeground(true); coordinator.present()
+        try await wait { coordinator.connected }
+        coordinator.selectConversation(current)
+        let tools = try XCTUnwrap(coordinator.tools)
+        let before = try db.recordCounts().outboxRows
+        XCTAssertTrue(coordinator.send("Please rename this conversation."))
+        try await wait { !coordinator.isRunning }
+        XCTAssertEqual(coordinator.conversation.activity.map(\.name), ["get_conversation_title", "rename_conversation"])
+        let read = try JSONDecoder().decode(AssistantJSON.self, from: Data(XCTUnwrap(coordinator.conversation.activity.first?.result).utf8))
+        XCTAssertEqual(read["result"]["title"].string, "Original")
+        XCTAssertEqual(read["result"]["conversation_id"].string, current.id.uuidString)
+        let saved = try JSONDecoder().decode(AssistantJSON.self, from: Data(XCTUnwrap(coordinator.conversation.activity.last?.result).utf8))
+        XCTAssertEqual(saved["result"]["title"].string, "九月 Budget")
+        XCTAssertEqual(coordinator.conversation.title, "九月 Budget")
+        XCTAssertEqual(coordinator.conversation.customTitle, true)
+        XCTAssertEqual(try db.recordCounts().outboxRows, before)
+        let history = try db.assistantHistory(scope: subject).map { try JSONDecoder().decode(AssistantConversation.self, from: $0) }
+        XCTAssertEqual(history.first { $0.id == current.id }?.title, "九月 Budget")
+        XCTAssertEqual(history.first { $0.id == other.id }?.title, "Other")
+        XCTAssertTrue(try db.assistantHistory(scope: "another-user").isEmpty)
+        try coordinator.renameConversation(current.id, title: "Manual correction")
+        let replay = try await tools.execute(action)
+        XCTAssertEqual(replay, saved)
+        XCTAssertEqual(coordinator.conversation.title, "Manual correction")
+
+        let failed = call("rename_conversation", .object(["title": .string("Must roll back")]))
+        try SQLiteWriteAudit.execute("CREATE TRIGGER reject_assistant_title BEFORE INSERT ON assistant_history BEGIN SELECT RAISE(ABORT, 'Synthetic disk failure'); END", at: db.databaseURL)
+        do { _ = try await tools.execute(failed); XCTFail("Expected history save failure") } catch { }
+        XCTAssertNil(try db.assistantAction(scope: subject, id: failed.operationID, digest: failed.digest))
+        XCTAssertEqual(coordinator.conversation.title, "Manual correction")
+        try SQLiteWriteAudit.execute("DROP TRIGGER reject_assistant_title", at: db.databaseURL)
+        for title in [" \n ", String(repeating: "x", count: 81)] {
+            do { _ = try await tools.execute(call("rename_conversation", .object(["title": .string(title)]))); XCTFail("Expected invalid title") } catch { }
+        }
         coordinator.dismiss()
     }
     private func wait(_ predicate: @MainActor () -> Bool) async throws {

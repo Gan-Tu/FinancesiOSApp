@@ -752,9 +752,18 @@ final class SQLiteJournalStore: @unchecked Sendable {
         }
     }
 
-    func saveAssistantHistory(scope: String, id: String, payload: Data, now: Date = Date()) throws {
+    func saveAssistantHistory(scope: String, id: String, payload: Data, now: Date = Date(),
+                              action: (id: String, digest: String, result: String)? = nil) throws {
         try withCloudKitDatabase { db in
             try ensureAssistantSchema(db)
+            // withCloudKitDatabase commits both writes atomically. On retry,
+            // the receipt prevents overwriting a later manual rename.
+            if let action {
+                try executePrepared("INSERT INTO assistant_actions(scope,id,digest,result) VALUES (?,?,?,?)", db) {
+                    try bind(scope, to: $0, at: 1, db); try bind(action.id, to: $0, at: 2, db)
+                    try bind(action.digest, to: $0, at: 3, db); try bind(action.result, to: $0, at: 4, db)
+                }
+            }
             try executePrepared("INSERT INTO assistant_history(scope,id,updated,payload) VALUES (?,?,?,?) ON CONFLICT(scope,id) DO UPDATE SET updated=excluded.updated,payload=excluded.payload", db) {
                 try bind(scope, to: $0, at: 1, db); try bind(id, to: $0, at: 2, db)
                 sqlite3_bind_double($0, 3, now.timeIntervalSince1970)

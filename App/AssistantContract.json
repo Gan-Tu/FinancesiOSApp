@@ -2158,6 +2158,43 @@
         "untrustedContentHint": true,
         "consequentialHint": false
       }
+    },
+    {
+      "name": "get_conversation_title",
+      "description": "Read the current conversation's saved title. This refers to the chat, not a finance journal or account.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "untrustedContentHint": true,
+        "consequentialHint": false
+      }
+    },
+    {
+      "name": "rename_conversation",
+      "description": "Rename only the current conversation when the user requests it. Saves the chat title on this device and does not change finance records. Choose a concise title of 1–80 characters.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 80,
+            "description": "The new nonempty conversation title."
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "untrustedContentHint": false,
+        "consequentialHint": false
+      }
     }
   ]
 }

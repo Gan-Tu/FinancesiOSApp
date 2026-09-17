@@ -86,13 +86,13 @@ final class AssistantInteractionTests: XCTestCase {
         app.buttons["Rename"].tap()
         let alert = app.alerts["Rename Conversation"]
         XCTAssertTrue(alert.waitForExistence(timeout: 3))
-        // SwiftUI's native alert does not preserve the field's custom identifier.
-        let field = alert.textFields.firstMatch
+        let field = alert.textFields["assistant.rename.title"]
         XCTAssertTrue(field.waitForExistence(timeout: 3))
         XCTAssertEqual(alert.textFields.count, 1)
-        field.tap()
-        let previous = field.value as? String ?? ""
-        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: previous.count) + "Rename UI Test")
+        // Typing must replace the automatically selected title, with no tap,
+        // selection gesture, or deletion needed.
+        field.typeText("Rename UI Test")
+        XCTAssertEqual(field.value as? String, "Rename UI Test")
         app.alerts.buttons["Save"].tap()
         let renamed = app.buttons[identifier]
         let titleMatches = NSPredicate(format: "label CONTAINS %@", "Rename UI Test")

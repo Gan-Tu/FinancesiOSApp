@@ -30,7 +30,7 @@ final class AssistantGateway: AssistantGatewayProtocol {
         guard (200..<300).contains(http.statusCode) else { throw AssistantFailure("request_failed", http.statusCode == 404 ? "The mobile assistant backend needs to be deployed." : "The assistant request failed (\(http.statusCode)). Tap Resume to retry.") }
     }
     func step(items: [AssistantJSON], settings: AssistantSettings, receive: @escaping @MainActor (AssistantStepEvent) throws -> Void) async throws {
-        let body = AssistantJSON.object(["version": .number(1), "items": .array(items), "settings": try .model(settings)])
+        let body = AssistantJSON.object(["version": .number(1), "capabilities": .array([.string("conversation_titles")]), "items": .array(items), "settings": try .model(settings)])
         let request = try auth.assistantRequest("mobile-assistant/step", endpoint: endpoint, data: body.encoded())
         let (bytes, response) = try await auth.assistantURLSession.bytes(for: request)
         try check(response)

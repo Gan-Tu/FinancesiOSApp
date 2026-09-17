@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import UIKit
 
 struct AssistantView: View {
     @EnvironmentObject private var assistant: AssistantCoordinator
@@ -10,7 +11,6 @@ struct AssistantView: View {
     @State private var auxiliary: AssistantAuxiliary?
     @State private var pickingUploads = false
     @State private var renameTarget: AssistantConversation?
-    @State private var renamedTitle = ""
     @State private var renameError: String?
     @FocusState private var typing: Bool
 
@@ -309,25 +309,20 @@ struct AssistantView: View {
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                         Button("Delete", systemImage: "trash", role: .destructive) { assistant.deleteConversation(conversation.id) }
                         Button("Rename", systemImage: "pencil") {
-                            renameError = nil; renamedTitle = conversation.title; renameTarget = conversation
+                            renameError = nil; renameTarget = conversation
                         }.tint(.blue)
                     }
                 }
                 if let renameError { Text(renameError).font(.footnote).foregroundStyle(.red) }
             }.overlay { if assistant.history.isEmpty { ContentUnavailableView("No Conversations", systemImage: "bubble.left.and.bubble.right", description: Text("Conversations stay on this device for 30 days.")) } }
             .navigationTitle("History").toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { auxiliary = nil } } }
-            .alert("Rename Conversation", isPresented: Binding(get: { renameTarget != nil }, set: { if !$0 { renameTarget = nil } }), presenting: renameTarget) { conversation in
-                TextField("Conversation name", text: $renamedTitle)
-                    .textInputAutocapitalization(.sentences)
-                    .accessibilityIdentifier("assistant.rename.title")
-                Button("Cancel", role: .cancel) { renameTarget = nil }
-                Button("Save") {
-                    do { try assistant.renameConversation(conversation.id, title: renamedTitle) }
+            .background {
+                AssistantRenamePrompt(target: $renameTarget) { id, title in
+                    do { try assistant.renameConversation(id, title: title) }
                     catch { renameError = error.localizedDescription }
-                    renameTarget = nil
                 }
-                .disabled(renamedTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || renamedTitle.trimmingCharacters(in: .whitespacesAndNewlines).count > 80)
-            } message: { _ in Text("Choose a name up to 80 characters.") }
+                .frame(width: 0, height: 0)
+            }
             .onChange(of: assistant.identity) { _, _ in renameTarget = nil; renameError = nil }
         }
     }
@@ -335,6 +330,74 @@ struct AssistantView: View {
         NavigationStack {
             AssistantPreferencesView()
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { auxiliary = nil } } }
+        }
+    }
+}
+
+/// UIKit provides text selection in a native alert on every supported iOS
+/// version; SwiftUI's alert TextField doesn't expose that selection on iOS 17.
+private struct AssistantRenamePrompt: UIViewControllerRepresentable {
+    @Binding var target: AssistantConversation?
+    var save: (UUID, String) -> Void
+
+    func makeUIViewController(context: Context) -> Controller { Controller() }
+    func updateUIViewController(_ controller: Controller, context: Context) {
+        controller.prompt = self
+        controller.presentIfNeeded()
+    }
+    static func dismantleUIViewController(_ controller: Controller, coordinator: ()) {
+        controller.alert?.dismiss(animated: false)
+    }
+
+    final class Controller: UIViewController {
+        var prompt: AssistantRenamePrompt?
+        weak var alert: UIAlertController?
+        private var presentedID: UUID?
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            presentIfNeeded()
+        }
+        func presentIfNeeded() {
+            if let alert, presentedID != prompt?.target?.id {
+                self.alert = nil; presentedID = nil
+                alert.dismiss(animated: true) { [weak self] in self?.presentIfNeeded() }
+                return
+            }
+            guard let target = prompt?.target, alert == nil,
+                  presentedViewController == nil, viewIfLoaded?.window != nil else { return }
+            let alert = UIAlertController(title: "Rename Conversation", message: "Choose a name up to 80 characters.", preferredStyle: .alert)
+            alert.addTextField { field in
+                field.text = target.title
+                field.placeholder = "Conversation name"
+                field.autocapitalizationType = .sentences
+                field.accessibilityIdentifier = "assistant.rename.title"
+            }
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { [weak self] _ in self?.finish(target.id) })
+            let save = UIAlertAction(title: "Save", style: .default) { [weak self, weak alert] _ in
+                guard let self, self.prompt?.target?.id == target.id else { return }
+                self.prompt?.save(target.id, alert?.textFields?.first?.text ?? "")
+                self.finish(target.id)
+            }
+            if let field = alert.textFields?.first {
+                let validate: () -> Void = { [weak field, weak save] in
+                    let title = (field?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    save?.isEnabled = !title.isEmpty && title.count <= 80
+                }
+                field.addAction(UIAction { _ in validate() }, for: .editingChanged)
+                validate()
+            }
+            alert.addAction(save)
+            self.alert = alert; presentedID = target.id
+            present(alert, animated: true) { [weak alert] in
+                guard let field = alert?.textFields?.first else { return }
+                field.becomeFirstResponder()
+                field.selectedTextRange = field.textRange(from: field.beginningOfDocument, to: field.endOfDocument)
+            }
+        }
+        private func finish(_ id: UUID) {
+            alert = nil; presentedID = nil
+            if prompt?.target?.id == id { prompt?.target = nil }
         }
     }
 }

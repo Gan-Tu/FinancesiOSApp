@@ -117,7 +117,7 @@ final class AssistantCoordinator: ObservableObject {
                 try requireActive(); guard generation == stamp else { return }
                 try verifyIdentity(subject)
                 try installIdentity(subject)
-                if contract.tools.count != 42 { throw AssistantFailure("contract_missing", "This build is missing the finance tool contract.") }
+                if contract.tools.count != 44 { throw AssistantFailure("contract_missing", "This build is missing the finance tool contract.") }
                 let options = try await gateway.options()
                 guard options["version"].int == contract.version else { throw AssistantFailure("contract_version", "Update Finances to match the assistant service.") }
                 guard generation == stamp else { return }
@@ -142,6 +142,15 @@ final class AssistantCoordinator: ObservableObject {
     }
     private func configureTools() {
         tools?.requireActive = { [weak self] in guard let self else { throw CancellationError() }; try self.requireActive() }
+        tools?.conversationTitle = { [weak self] in
+            guard let self else { throw CancellationError() }
+            try self.requireActive()
+            return .object(["conversation_id": .string(self.conversation.id.uuidString), "title": .string(self.conversation.title)])
+        }
+        tools?.renameConversation = { [weak self] call, title in
+            guard let self else { throw CancellationError() }
+            return try self.renameConversation(self.conversation.id, title: title, action: call)
+        }
         tools?.selectFiles = { [weak self] purpose in
             guard let self else { throw CancellationError() }
             return try await withCheckedThrowingContinuation { continuation in fileContinuation = continuation; filePurpose = purpose }
@@ -196,8 +205,12 @@ final class AssistantCoordinator: ObservableObject {
             history.removeAll { $0.id == id }
         } catch { self.error = error.localizedDescription }
     }
-    func renameConversation(_ id: UUID, title: String) throws {
+    @discardableResult
+    func renameConversation(_ id: UUID, title: String, action: AssistantToolCall? = nil) throws -> AssistantJSON {
         try requireActive()
+        if let action, let replay = try store.assistantDatabase.assistantAction(scope: identity, id: action.operationID, digest: action.digest) {
+            return try JSONDecoder().decode(AssistantJSON.self, from: Data(replay.utf8))
+        }
         let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, name.count <= 80 else { throw AssistantFailure("invalid_title", "Use a conversation name between 1 and 80 characters.") }
         guard !identity.isEmpty, let index = history.firstIndex(where: { $0.id == id }) else {
@@ -208,10 +221,15 @@ final class AssistantCoordinator: ObservableObject {
         var updated = conversation.id == id ? conversation : history[index]
         updated.title = name
         updated.customTitle = true
+        let result = AssistantJSON.object(["ok": .bool(true), "result": .object([
+            "conversation_id": .string(id.uuidString), "title": .string(name), "status": .string("saved_on_device")
+        ])])
         try store.assistantDatabase.saveAssistantHistory(scope: identity, id: id.uuidString,
-            payload: JSONEncoder().encode(updated), now: updated.updated)
+            payload: JSONEncoder().encode(updated), now: updated.updated,
+            action: action.map { (id: $0.operationID, digest: $0.digest, result: result.jsonString) })
         if conversation.id == id { conversation.title = name; conversation.customTitle = true }
         history[index] = updated
+        return result
     }
     @discardableResult
     func send(_ text: String, fromVoice: Bool = false, voiceRequestID: String? = nil, displayText: String? = nil) -> Bool {
