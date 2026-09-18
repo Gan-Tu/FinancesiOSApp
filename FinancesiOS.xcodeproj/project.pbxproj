@@ -73,6 +73,7 @@
 		5E7E5DA5775B2185095CAE32 /* AssistantToolMutations.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B0DD7314956DA5AB9169EEF /* AssistantToolMutations.swift */; };
 		5F16B4F9F60797C7FDA5CB86 /* AssistantApproval.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FEB261FFF021039B1C10488 /* AssistantApproval.swift */; };
 		5F5E9DA4ABA1328C41260ECE /* AssistantCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47A0C83FC9A74CFBB3A667D6 /* AssistantCoordinator.swift */; };
+		5F759ABA3C6CC4FFDDAED570 /* AccountSelectionLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA6F9DB82F08D9110138FB8C /* AccountSelectionLabel.swift */; };
 		605E1B420D2924C2DA416233 /* TransactionScheduleEditors.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77F5414AD4EB3080873A37E8 /* TransactionScheduleEditors.swift */; };
 		611A0FD222889D6981A2AD99 /* HistoricalTextSuggestionToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDC4708B5A5D820BA005DE30 /* HistoricalTextSuggestionToolbar.swift */; };
 		61A99AAC743BF4CC9D75930B /* TransactionDeletion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15B92CC9B01C0FC2447DE2CC /* TransactionDeletion.swift */; };
@@ -129,6 +130,7 @@
 		A574942B2736010ABA0A3C20 /* FinancesShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 8A18E6C73D0CD7ED7BA899BE /* FinancesShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A65B8AC46C8C95B59846F2AC /* SystemEntryUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D58450E6135DC39A7EE9E16A /* SystemEntryUITests.swift */; };
 		A6ED9B3721FC8F66A8F162FC /* BackupTransfer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2F6685EDA1D3541AFD7FD6C /* BackupTransfer.swift */; };
+		A74B96D84A51ADD041947E1F /* AccountSelectionLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA6F9DB82F08D9110138FB8C /* AccountSelectionLabel.swift */; };
 		A777B490E995DDB1893C5F7F /* TransactionScheduleEditors.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77F5414AD4EB3080873A37E8 /* TransactionScheduleEditors.swift */; };
 		A7D4CF3C710680ABD22BBC72 /* ReceiptAnalysisClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D3C6FD557E7F5E28CEDBED1 /* ReceiptAnalysisClient.swift */; };
 		A87C3018A559E1EA59BC1818 /* SystemEntryRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4167ABC9DF42427E2E311795 /* SystemEntryRouter.swift */; };
@@ -145,7 +147,6 @@
 		B6603EAA5F79BA61B70D035F /* AssistantModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACD5E405B7D284817C5F571E /* AssistantModels.swift */; };
 		B7200DC3EF48C81180A477F7 /* RegisterInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A810A2B1087ABD369EDA29D1 /* RegisterInteractionTests.swift */; };
 		B7C96CB7D580B5E0A086FA13 /* SharedReceiptEntryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0DBA75B22E9751DAC2DEAD4 /* SharedReceiptEntryTests.swift */; };
-		B80A45F69FE542E7FBA2808C /* AccountSelectionLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FFF96D5E50240B7D5141358 /* AccountSelectionLabel.swift */; };
 		B8EC2ABB7ACD59194A3DCBB7 /* SharedReceiptStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = F50689027807EE02F17BF6A3 /* SharedReceiptStorage.swift */; };
 		BC2CFEC2B20AEFEC03B23F02 /* BackupArchiveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D5403346BB22199DDE0FB93 /* BackupArchiveTests.swift */; };
 		BF90E29FF5A6F00F664E3265 /* AccountMovePlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19F24D00A92B6D0791D7A981 /* AccountMovePlan.swift */; };
@@ -338,7 +339,6 @@
 		9CC17DE372AAEEF3CABB3531 /* CloudKitRecurrenceConsistencyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitRecurrenceConsistencyTests.swift; sourceTree = "<group>"; };
 		9D3C6FD557E7F5E28CEDBED1 /* ReceiptAnalysisClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReceiptAnalysisClient.swift; sourceTree = "<group>"; };
 		9E63B9786D38FC2374CC4FE0 /* RegisterPresentationCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RegisterPresentationCache.swift; sourceTree = "<group>"; };
-		9FFF96D5E50240B7D5141358 /* AccountSelectionLabel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountSelectionLabel.swift; sourceTree = "<group>"; };
 		A28F865AE186E9BDF8486D20 /* CaptureEntryViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureEntryViews.swift; sourceTree = "<group>"; };
 		A810A2B1087ABD369EDA29D1 /* RegisterInteractionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RegisterInteractionTests.swift; sourceTree = "<group>"; };
 		A916586B55A0A3DE57B6F567 /* CloudKitPeerVerification.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitPeerVerification.swift; sourceTree = "<group>"; };
@@ -402,6 +402,7 @@
 		F6A9F2A2ABA7939904002A3F /* ReceiptAssistViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReceiptAssistViews.swift; sourceTree = "<group>"; };
 		F6F4FE5138DED8F860CEC9BF /* MobileNavigationShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileNavigationShell.swift; sourceTree = "<group>"; };
 		F8885C60EBEBC5C0A6714F69 /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
+		FA6F9DB82F08D9110138FB8C /* AccountSelectionLabel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountSelectionLabel.swift; sourceTree = "<group>"; };
 		FB51F5E0B6F2A9137AF4DD4C /* CloudKitPeerPushVerification.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitPeerPushVerification.swift; sourceTree = "<group>"; };
 		FBEB774D3AC950CDC6B21DD9 /* PostingBalance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostingBalance.swift; sourceTree = "<group>"; };
 		FD57D4F7D32FD381F1F005DC /* SQLiteCloudKitSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLiteCloudKitSyncTests.swift; sourceTree = "<group>"; };
@@ -437,7 +438,6 @@
 			children = (
 				D8062FB2C4A6969B2FA2788C /* AccountBalanceProjection.swift */,
 				CB856976C1FEAE1FDFB3877B /* AccountFormPickers.swift */,
-				9FFF96D5E50240B7D5141358 /* AccountSelectionLabel.swift */,
 				F0117BB6E878EA57F13889AB /* AppShellView.swift */,
 				B5CD3AA6662EAAD3753AF40F /* Assets.xcassets */,
 				7FEB261FFF021039B1C10488 /* AssistantApproval.swift */,
@@ -658,6 +658,7 @@
 			isa = PBXGroup;
 			children = (
 				E452C9FB3990874ED22CE41B /* AccountColors.swift */,
+				FA6F9DB82F08D9110138FB8C /* AccountSelectionLabel.swift */,
 				F2389DC638B3BD25AA173FB8 /* FinanceFormComponents.swift */,
 				006C16A110DCAEE9D8241EB0 /* SharedReceiptAI.swift */,
 				02C18AA6F4DD1210C5FF2880 /* SharedReceiptHandoff.swift */,
@@ -943,6 +944,7 @@
 			files = (
 				8893B18589DC380A4D15ED05 /* AIInferencePolicy.swift in Sources */,
 				70FB4B7AE61BC0925F27E2ED /* AccountColors.swift in Sources */,
+				A74B96D84A51ADD041947E1F /* AccountSelectionLabel.swift in Sources */,
 				5BB2CDAA5C667B27F7D902DB /* AmountExpressionEvaluator.swift in Sources */,
 				31C3FD8A0406C5876F67A1AE /* CloudKitSyncConfiguration.swift in Sources */,
 				19157E0A2709653EC70118E0 /* FinanceFormComponents.swift in Sources */,
@@ -972,7 +974,7 @@
 				48EDEBF07E3C5ECAEF6C13A5 /* AccountColors.swift in Sources */,
 				D8D5990EA28E2719501166BE /* AccountFormPickers.swift in Sources */,
 				BF90E29FF5A6F00F664E3265 /* AccountMovePlan.swift in Sources */,
-				B80A45F69FE542E7FBA2808C /* AccountSelectionLabel.swift in Sources */,
+				5F759ABA3C6CC4FFDDAED570 /* AccountSelectionLabel.swift in Sources */,
 				72112E529D976720A45E9888 /* AmountExpressionEvaluator.swift in Sources */,
 				31995C99B67C5DD75EB53FCA /* AppShellView.swift in Sources */,
 				5F16B4F9F60797C7FDA5CB86 /* AssistantApproval.swift in Sources */,

@@ -115,6 +115,68 @@ final class SharedTransactionTests: XCTestCase {
         XCTAssertTrue(locked.locked); XCTAssertTrue(locked.journals.isEmpty); XCTAssertTrue(locked.accounts.isEmpty)
     }
 
+    func testPickerPreservesSectionsHierarchySiblingOrderAndDescriptions() throws {
+        var data = DemoData.fixture()
+        let journalID = try XCTUnwrap(data.selectedLedgerID)
+        let root = try XCTUnwrap(data.accounts.first { $0.ledgerID == journalID && $0.kind == .asset && $0.isGroup })
+        let bank = Account(ledgerID: journalID, parentID: root.id, commodityID: root.commodityID,
+            name: "Bank", note: "Deposit accounts", kind: .asset, listIndex: 0)
+        let savings = Account(ledgerID: journalID, parentID: bank.id, commodityID: root.commodityID,
+            name: "Savings", kind: .asset, listIndex: 0)
+        let reserve = Account(ledgerID: journalID, parentID: savings.id, commodityID: root.commodityID,
+            name: "Reserve", kind: .asset, listIndex: 0)
+        data.accounts += [reserve, bank, savings]
+        data.accounts.reverse()
+        let catalog = SharedTransactionCatalog(data: data, hiddenLedgerIDs: [])
+        XCTAssertFalse(catalog.accounts.contains { $0.id == root.id }, "Root accounts are section headers")
+        let assets = catalog.accountPickerNodes(journalID: journalID, kind: .asset)
+        XCTAssertEqual(assets.map(\.account.name), ["Bank", "Savings", "Reserve", "Checking", "Cash"])
+        XCTAssertEqual(assets.map(\.depth), [0, 1, 2, 0, 0])
+        XCTAssertTrue(assets.allSatisfy { $0.account.ledgerID == journalID && $0.account.kind == .asset })
+        XCTAssertEqual(assets.first?.account.note, "Deposit accounts")
+        XCTAssertEqual(assets.first?.account.commodityID, root.commodityID)
+        let expenses = catalog.accountPickerNodes(journalID: journalID, kind: .expense)
+        XCTAssertEqual(expenses.map(\.account.name), ["Food & Dining", "Groceries", "Transportation"])
+        XCTAssertEqual(expenses.map(\.depth), [0, 1, 0])
+        XCTAssertEqual(expenses.map(\.account.colorName), ["blue", "blue", "orange"])
+        let search = catalog.accountPickerNodes(journalID: journalID, kind: .expense, search: "pantry")
+        XCTAssertEqual(search.map(\.account.name), ["Groceries"])
+        XCTAssertEqual(search.map(\.depth), [1], "Search preserves the account's hierarchy depth")
+        let income = catalog.accountPickerNodes(journalID: journalID, kind: .income)
+        XCTAssertEqual(income.map(\.account.name), ["Salary"])
+        XCTAssertEqual(income.first?.account.colorName, "green")
+        XCTAssertTrue(catalog.accountPickerNodes(journalID: nil, kind: .expense).isEmpty)
+    }
+
+    func testPickerReadsLegacyCatalogWithoutNewPresentationFields() throws {
+        let catalog = SharedTransactionCatalog(data: DemoData.fixture(), hiddenLedgerIDs: [])
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(catalog)) as? [String: Any])
+        json["accounts"] = try XCTUnwrap(json["accounts"] as? [[String: Any]]).map { row in
+            var row = row
+            for key in ["parentID", "colorName", "note", "listIndex"] { row.removeValue(forKey: key) }
+            return row
+        }
+        let legacy = try JSONDecoder().decode(SharedTransactionCatalog.self, from: JSONSerialization.data(withJSONObject: json))
+        let nodes = AccountKind.allCases.flatMap { legacy.accountPickerNodes(journalID: legacy.selectedJournalID, kind: $0) }
+        XCTAssertEqual(nodes.count, legacy.accounts.filter { $0.journalID == legacy.selectedJournalID }.count)
+        XCTAssertTrue(nodes.allSatisfy { $0.depth == 0 && $0.account.note.isEmpty })
+        XCTAssertEqual(try JSONDecoder().decode(SharedTransactionCatalog.self, from: JSONEncoder().encode(catalog)), catalog)
+    }
+
+    func testSharedPickerCanSaveToParentAccountLikeTheNormalPicker() async throws {
+        let (store, inbox, entry, catalog) = try await fixture()
+        let food = try XCTUnwrap(catalog.accounts.first { $0.name == "Food & Dining" })
+        var draft = SharedTransaction(catalog: catalog)
+        XCTAssertEqual(catalog.accounts.first { $0.id == draft.postings[1].accountID }?.name, "Groceries",
+            "The initial draft still defaults to a leaf account")
+        draft.postings[1].accountID = food.id
+        draft.setAmount("-12.50", at: 0)
+        try await inbox.saveTransaction(draft, for: entry)
+        let saved = try await inbox.pendingEntries()
+        try await SharedTransactionImport.save(XCTUnwrap(saved.first), inbox: inbox, store: store)
+        XCTAssertEqual(store.transaction(entry.id)?.postings.last?.accountID, food.id)
+    }
+
     func testRemovedAccountAtImportPreservesSavedEditsForReview() async throws {
         let (store, inbox, entry, catalog) = try await fixture(emptyTransactions: true)
         var draft = SharedTransaction(catalog: catalog)

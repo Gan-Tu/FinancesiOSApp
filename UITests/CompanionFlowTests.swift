@@ -1,6 +1,46 @@
 import XCTest
 
 final class CompanionFlowTests: XCTestCase {
+    @MainActor func testTransactionDetailValuesCanBeCopiedWithoutEditing() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--demo", "--reset-demo", "--mock-ai"]
+        app.launch()
+        defer { app.terminate() }
+        let journal = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Personal,")).firstMatch
+        XCTAssertTrue(journal.waitForExistence(timeout: 10)); journal.tap()
+        app.buttons["All"].tap()
+        let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@",
+            "register-row-", "Weekly groceries")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10)); row.tap()
+        XCTAssertTrue(app.navigationBars["Details"].waitForExistence(timeout: 5))
+        for field in ["date", "notes", "payee"] {
+            let value = app.staticTexts["transaction-detail-\(field)"]
+            XCTAssertTrue(value.exists)
+            value.press(forDuration: 1)
+            let copy = app.menuItems["Copy"].firstMatch
+            XCTAssertTrue(copy.waitForExistence(timeout: 5), "\(field) must expose the native Copy action in view mode")
+            if field == "notes" {
+                let shot = XCTAttachment(screenshot: app.screenshot())
+                shot.name = "Selectable transaction detail notes"; shot.lifetime = .keepAlways; add(shot)
+            }
+            copy.tap()
+            XCTAssertTrue(app.navigationBars["Details"].exists)
+            XCTAssertFalse(app.keyboards.firstMatch.exists, "Read-only selection must not open an editing keyboard")
+        }
+        XCTAssertEqual(app.staticTexts["transaction-detail-notes"].label, "Weekly groceries")
+        XCTAssertEqual(app.staticTexts["transaction-detail-payee"].label, "Market")
+        app.navigationBars["Details"].buttons["Edit"].tap()
+        let number = app.textFields["Number"]
+        XCTAssertTrue(number.waitForExistence(timeout: 5)); number.press(forDuration: 1)
+        let paste = app.menuItems["Paste"].firstMatch
+        XCTAssertTrue(paste.waitForExistence(timeout: 5)); paste.tap()
+        XCTAssertEqual(number.value as? String, "Market", "Copy must put the selected detail value on the clipboard")
+        app.navigationBars["Edit Transaction"].buttons["Cancel"].tap()
+        XCTAssertTrue(app.navigationBars["Details"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["transaction-detail-number"].exists, "Cancelling the paste must leave the transaction unchanged")
+    }
+
     @MainActor func testJournalPaddingAndChartPanelRemainStableWhileLoading() throws {
         continueAfterFailure = false
         let app = XCUIApplication()

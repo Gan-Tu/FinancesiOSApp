@@ -4,13 +4,13 @@ extension SharedTransactionCatalog {
     init(data: JournalData, hiddenLedgerIDs: Set<UUID>) {
         let visible = data.ledgers.filter { !hiddenLedgerIDs.contains($0.id) }.sorted { $0.listIndex < $1.listIndex }
         let ids = Set(visible.map(\.id))
-        let parentIDs = Set(data.accounts.compactMap(\.parentID))
         self.init(journals: visible.map { .init(id: $0.id, name: $0.name) },
-                  accounts: data.accounts.filter { ids.contains($0.ledgerID) && !$0.isGroup && !parentIDs.contains($0.id) }
+                  accounts: data.accounts.filter { ids.contains($0.ledgerID) && !$0.isGroup }
                     .sorted { $0.listIndex < $1.listIndex }
                     .map { account in .init(id: account.id, journalID: account.ledgerID, name: account.name, kind: account.kind.rawValue,
                                  currencyID: account.commodityID ?? data.commodities.first { $0.ledgerID == account.ledgerID }?.id,
-                                 parentID: account.parentID, colorName: account.colorName) },
+                                 parentID: account.parentID, colorName: account.colorName,
+                                 note: account.note, listIndex: account.listIndex) },
                   currencies: data.commodities.filter { ids.contains($0.ledgerID) }
                     .map { .init(id: $0.id, journalID: $0.ledgerID, symbol: $0.symbol, name: $0.name) },
                   selectedJournalID: data.selectedLedgerID, locked: data.security.passwordLockEnabled)

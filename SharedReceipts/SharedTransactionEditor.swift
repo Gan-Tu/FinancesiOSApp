@@ -231,22 +231,39 @@ struct SharedTransactionEditor: View {
 
 private struct ShareAccountPicker: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dismissSearch) private var dismissSearch
     let catalog: SharedTransactionCatalog
     let journalID: UUID?
     let selected: UUID?
     let select: (UUID) -> Void
     @State private var search = ""
     var body: some View {
-        List(catalog.accounts.filter { $0.journalID == journalID && (search.isEmpty || $0.name.localizedCaseInsensitiveContains(search)) }) { account in
-            Button { select(account.id); dismiss() } label: {
-                HStack {
-                    Circle().fill(AppColors.color(account.colorName ?? "gray")).frame(width: 18, height: 18)
-                    Text(account.name).foregroundStyle(.primary)
-                    Spacer()
-                    if selected == account.id { Image(systemName: "checkmark") }
-                }.contentShape(Rectangle())
-            }.buttonStyle(.plain)
-        }.navigationTitle("Accounts").navigationBarTitleDisplayMode(.inline).searchable(text: $search, prompt: "Search Accounts")
+        ScrollViewReader { proxy in
+            List {
+                ForEach(AccountKind.allCases) { kind in
+                    let rows = catalog.accountPickerNodes(journalID: journalID, kind: kind, search: search)
+                    if !rows.isEmpty {
+                        Section(kind.title) {
+                            ForEach(rows) { node in
+                                Button { dismissSearch(); select(node.id); dismiss() } label: {
+                                    AccountSelectionLabel(account: node.account, depth: node.depth,
+                                        currency: catalog.currencies.first { $0.id == node.account.commodityID }?.symbol ?? "",
+                                        selected: selected == node.id)
+                                }
+                                .buttonStyle(.plain)
+                                .id(node.id)
+                                .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
+                            }
+                        }
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .compactGroupedForm(sectionSpacing: 0)
+            .onAppear { if let selected { proxy.scrollTo(selected, anchor: .center) } }
+            .navigationTitle("Choose Account").navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $search, prompt: "Find an account")
+        }
     }
 }
 

@@ -13,7 +13,7 @@ final class ShareTransactionUITests: XCTestCase {
         app.launch()
         let bar = app.navigationBars["Journals"]
         XCTAssertTrue(bar.waitForExistence(timeout: 10))
-        let title = bar.staticTexts["Journals"]
+        let title = bar.staticTexts["Journals"].firstMatch
         XCTAssertTrue(title.exists)
         XCTAssertFalse(title.frame.isEmpty)
         XCTAssertLessThan(bar.frame.height, 100, "The root should not reserve an empty large-title region")
@@ -69,6 +69,43 @@ final class ShareTransactionUITests: XCTestCase {
         assertReturnedToHost(app)
     }
 
+    func testShareAccountPickerUsesSectionsHierarchySearchAndSelection() {
+        let app = launchShare(hierarchy: true)
+        openExtension(app)
+        app.buttons["shared-transaction-account-0"].tap()
+        XCTAssertTrue(app.navigationBars["Choose Account"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Assets"].exists)
+        XCTAssertLessThan(app.staticTexts["Checking"].frame.minY, app.staticTexts["Cash"].frame.minY)
+        let search = app.searchFields.firstMatch
+        search.tap(); search.typeText("Wells")
+        let parent = app.staticTexts["Wells Fargo"]
+        let child = app.staticTexts["Wells Fargo Cash Wise"]
+        XCTAssertTrue(child.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Liabilities"].exists)
+        XCTAssertFalse(app.staticTexts["Checking"].exists)
+        XCTAssertLessThan(parent.frame.minY, child.frame.minY)
+        XCTAssertEqual(child.frame.minX - parent.frame.minX, 22, accuracy: 2)
+        child.tap()
+        XCTAssertTrue(app.buttons["shared-transaction-account-0"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["shared-transaction-account-0"].label.contains("Wells Fargo Cash Wise"))
+        app.buttons["shared-transaction-account-1"].tap()
+        let food = app.staticTexts["Food & Dining"]
+        let groceries = app.staticTexts["Groceries"]
+        XCTAssertTrue(groceries.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Expenses"].exists)
+        XCTAssertLessThan(food.frame.minY, groceries.frame.minY)
+        XCTAssertEqual(groceries.frame.minX - food.frame.minX, 22, accuracy: 2)
+        XCTAssertTrue(app.staticTexts["Pantry essentials and everyday food."].exists)
+        XCTAssertTrue(app.staticTexts["USD"].firstMatch.exists)
+        XCTAssertTrue(app.images["account-selection-checkmark"].exists)
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "Share account sections and nested expense rows"; shot.lifetime = .keepAlways; add(shot)
+        food.tap()
+        XCTAssertTrue(app.buttons["shared-transaction-account-1"].label.contains("Food & Dining"))
+        app.buttons["receipt-share-cancel"].tap()
+        assertReturnedToHost(app)
+    }
+
     func testReceiptAIAutofillsPopupAndPreservesEditedNotes() {
         let app = launchShare(ai: true)
         let baseline = Int(app.staticTexts["share-qa-transaction-count"].label.split(separator: " ").first!)!
@@ -118,11 +155,12 @@ final class ShareTransactionUITests: XCTestCase {
         XCTAssertFalse(app.cells.matching(identifier: "shareCell").firstMatch.exists, "No second share menu should remain")
     }
 
-    private func launchShare(ai: Bool = false, failure: Bool = false) -> XCUIApplication {
+    private func launchShare(ai: Bool = false, failure: Bool = false, hierarchy: Bool = false) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchArguments = ["--demo", "--reset-demo", "--demo-native-share", "--demo-share-sheet"]
             + (ai ? ["--demo-share-ai"] : []) + (failure ? ["--demo-share-ai-failure"] : [])
+            + (hierarchy ? ["--demo-hierarchy"] : [])
         app.launch()
         XCTAssertTrue(app.buttons["Share Unsaved QA Screenshot"].waitForExistence(timeout: 10))
         return app

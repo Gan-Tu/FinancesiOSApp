@@ -60,3 +60,18 @@ struct FinanceFormLabel: View {
         }.contentShape(Rectangle())
     }
 }
+
+struct CompactGroupedFormStyle: ViewModifier {
+    var sectionSpacing: CGFloat = 20
+    func body(content: Content) -> some View {
+        content
+            .contentMargins(.horizontal, 22, for: .scrollContent)
+            .environment(\.defaultMinListRowHeight, 47)
+            .listRowSpacing(0)
+            .listSectionSpacing(.custom(sectionSpacing))
+    }
+}
+
+extension View {
+    func compactGroupedForm(sectionSpacing: CGFloat = 20) -> some View { modifier(CompactGroupedFormStyle(sectionSpacing: sectionSpacing)) }
+}

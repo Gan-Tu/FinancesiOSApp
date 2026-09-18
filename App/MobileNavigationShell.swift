@@ -1032,6 +1032,8 @@ private struct DetailValueRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Text(value).fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+                .accessibilityIdentifier("transaction-detail-\(label.lowercased())")
         }
         .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
         .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }

@@ -15,6 +15,8 @@ struct SharedTransactionCatalog: Codable, Equatable, Sendable {
         var currencyID: UUID?
         var parentID: UUID? = nil
         var colorName: String? = nil
+        var note: String? = nil
+        var listIndex: Int? = nil
     }
     struct Currency: Codable, Equatable, Identifiable, Sendable {
         var id: UUID
@@ -64,8 +66,10 @@ struct SharedTransaction: Codable, Equatable, Sendable {
     mutating func selectJournal(_ id: UUID?, catalog: SharedTransactionCatalog) {
         journalID = id
         let accounts = catalog.accounts.filter { $0.journalID == id }
-        let funding = accounts.first { $0.kind == 0 || $0.kind == 1 }
-        let expense = accounts.first { $0.kind == 3 }
+        let parentIDs = Set(accounts.compactMap(\.parentID))
+        let leaves = accounts.filter { !parentIDs.contains($0.id) }
+        let funding = leaves.first { $0.kind == 0 || $0.kind == 1 }
+        let expense = leaves.first { $0.kind == 3 }
         let currency = funding?.currencyID ?? catalog.currencies.first { $0.journalID == id }?.id
         postings = [.init(accountID: funding?.id, currencyID: currency, amount: "-"),
                     .init(accountID: expense?.id, currencyID: currency)]
