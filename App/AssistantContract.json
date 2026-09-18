@@ -95,7 +95,7 @@
           },
           "snapshot_revision": {
             "type": "string",
-            "description": "Copy the previous page snapshot_revision when offset > 0. If data changes, restart at offset 0.",
+            "description": "After page 1 copy snapshot_revision; restart at 0 if data changes.",
             "maxLength": 64
           }
         },
@@ -222,7 +222,7 @@
           },
           "snapshot_revision": {
             "type": "string",
-            "description": "Copy the previous page snapshot_revision when offset > 0. If data changes, restart at offset 0.",
+            "description": "After page 1 copy snapshot_revision; restart at 0 if data changes.",
             "maxLength": 64
           }
         },
@@ -275,7 +275,7 @@
           },
           "snapshot_revision": {
             "type": "string",
-            "description": "Copy the previous page snapshot_revision when offset > 0. If data changes, restart at offset 0.",
+            "description": "After page 1 copy snapshot_revision; restart at 0 if data changes.",
             "maxLength": 64
           }
         },
@@ -544,7 +544,7 @@
           },
           "snapshot_revision": {
             "type": "string",
-            "description": "Copy the previous page snapshot_revision when offset > 0. If data changes, restart at offset 0.",
+            "description": "After page 1 copy snapshot_revision; restart at 0 if data changes.",
             "maxLength": 64
           }
         },
@@ -713,7 +713,7 @@
           },
           "snapshot_revision": {
             "type": "string",
-            "description": "Copy the previous page snapshot_revision when offset > 0. If data changes, restart at offset 0.",
+            "description": "After page 1 copy snapshot_revision; restart at 0 if data changes.",
             "maxLength": 64
           }
         },
@@ -922,12 +922,12 @@
           },
           "from": {
             "type": "string",
-            "description": "YYYY-MM-DD (browser timezone) or ISO 8601 with Z/offset. No relative dates.",
+            "description": "YYYY-MM-DD in browser timezone, or ISO 8601 with Z/offset.",
             "maxLength": 40
           },
           "to": {
             "type": "string",
-            "description": "YYYY-MM-DD (browser timezone) or ISO 8601 with Z/offset. No relative dates.",
+            "description": "YYYY-MM-DD in browser timezone, or ISO 8601 with Z/offset.",
             "maxLength": 40
           },
           "cleared": {
@@ -976,7 +976,7 @@
           },
           "snapshot_revision": {
             "type": "string",
-            "description": "Copy the previous page snapshot_revision when offset > 0. If data changes, restart at offset 0.",
+            "description": "After page 1 copy snapshot_revision; restart at 0 if data changes.",
             "maxLength": 64
           }
         },
@@ -991,7 +991,7 @@
     },
     {
       "name": "search_entries",
-      "description": "Search entries by payee, note, reference or account name. Same results and snapshot pagination as list_transactions; use that tool for date/amount/status filters. Does not change the view.",
+      "description": "Search entries by payee, note, reference or account name. Defaults to entries through today; from/to are inclusive device-calendar dates. Set include_future=true for scheduled entries. Same results and pagination as list_transactions; use it for account/amount/status filters. Does not change the view.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1004,6 +1004,20 @@
             "type": "string",
             "description": "Journal UUID or exact case-insensitive name; ambiguous matches return candidate IDs. Defaults to active journal for reads.",
             "maxLength": 256
+          },
+          "from": {
+            "type": "string",
+            "description": "YYYY-MM-DD in browser timezone, or ISO 8601 with Z/offset.",
+            "maxLength": 40
+          },
+          "to": {
+            "type": "string",
+            "description": "YYYY-MM-DD in browser timezone, or ISO 8601 with Z/offset.",
+            "maxLength": 40
+          },
+          "include_future": {
+            "type": "boolean",
+            "description": "Allow future dates. Default false, also when from/to are supplied."
           },
           "offset": {
             "type": "integer",
@@ -1019,7 +1033,7 @@
           },
           "snapshot_revision": {
             "type": "string",
-            "description": "Copy the previous page snapshot_revision when offset > 0. If data changes, restart at offset 0.",
+            "description": "After page 1 copy snapshot_revision; restart at 0 if data changes.",
             "maxLength": 64
           }
         },
@@ -1059,7 +1073,7 @@
     },
     {
       "name": "create_transaction",
-      "description": "Saves in this iPhone; iCloud delivery is separate. Sample edits are temporary. Create an expense, income, transfer or arbitrary balanced split transaction. Supply the journal, date and explicit postings. No automatic guessing of amounts or categories.",
+      "description": "Saves in this iPhone; iCloud delivery is separate. Sample edits are temporary. Create an expense, income, transfer or balanced split. Supply journal and postings; date defaults to now. Never guess amounts or categories.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1075,7 +1089,7 @@
           },
           "date": {
             "type": "string",
-            "description": "YYYY-MM-DD (browser timezone) or ISO 8601 with Z/offset. No relative dates.",
+            "description": "ISO timestamp with HH:mm and Z/offset, or \"now\" (default). No date-only values.",
             "maxLength": 40
           },
           "payee": {
@@ -1158,7 +1172,7 @@
               },
               "end_date": {
                 "type": "string",
-                "description": "YYYY-MM-DD (browser timezone) or ISO 8601 with Z/offset. No relative dates.",
+                "description": "YYYY-MM-DD in browser timezone, or ISO 8601 with Z/offset.",
                 "maxLength": 40
               },
               "on_workdays": {
@@ -1176,7 +1190,6 @@
         "required": [
           "request_id",
           "journal",
-          "date",
           "postings"
         ],
         "additionalProperties": false
@@ -1210,7 +1223,7 @@
           },
           "date": {
             "type": "string",
-            "description": "YYYY-MM-DD (browser timezone) or ISO 8601 with Z/offset. No relative dates.",
+            "description": "YYYY-MM-DD in browser timezone, or ISO 8601 with Z/offset.",
             "maxLength": 40
           },
           "payee": {
@@ -1293,7 +1306,7 @@
               },
               "end_date": {
                 "type": "string",
-                "description": "YYYY-MM-DD (browser timezone) or ISO 8601 with Z/offset. No relative dates.",
+                "description": "YYYY-MM-DD in browser timezone, or ISO 8601 with Z/offset.",
                 "maxLength": 40
               },
               "on_workdays": {
@@ -1317,7 +1330,7 @@
           },
           "snapshot_revision": {
             "type": "string",
-            "description": "Copy the previous page snapshot_revision when offset > 0. If data changes, restart at offset 0.",
+            "description": "After page 1 copy snapshot_revision; restart at 0 if data changes.",
             "maxLength": 64
           }
         },
@@ -1365,7 +1378,7 @@
           },
           "snapshot_revision": {
             "type": "string",
-            "description": "Copy the previous page snapshot_revision when offset > 0. If data changes, restart at offset 0.",
+            "description": "After page 1 copy snapshot_revision; restart at 0 if data changes.",
             "maxLength": 64
           }
         },
@@ -1384,7 +1397,7 @@
     },
     {
       "name": "duplicate_transaction",
-      "description": "Saves in this iPhone; iCloud delivery is separate. Sample edits are temporary. Save a new independent copy of a transaction with new receipt identities. Uses the original date unless date is supplied. Default repeat=false creates ONE entry, even if the source repeats. repeat=true creates an independent repeat series using the source schedule. Requires receipt bytes; failure never silently drops receipts.",
+      "description": "Saves in this iPhone; iCloud delivery is separate. Sample edits are temporary. Save an independent copy with new receipt identities. Date defaults to now. Default repeat=false creates ONE entry; repeat=true creates an independent series using the source schedule. Requires receipt bytes; failure never silently drops receipts.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1405,7 +1418,7 @@
           },
           "date": {
             "type": "string",
-            "description": "YYYY-MM-DD (browser timezone) or ISO 8601 with Z/offset. No relative dates.",
+            "description": "ISO timestamp with HH:mm and Z/offset, or \"now\" (default). No date-only values.",
             "maxLength": 40
           },
           "repeat": {
@@ -1449,7 +1462,7 @@
           },
           "date": {
             "type": "string",
-            "description": "YYYY-MM-DD (browser timezone) or ISO 8601 with Z/offset. No relative dates.",
+            "description": "ISO timestamp with HH:mm and Z/offset, or \"now\" (default). No date-only values.",
             "maxLength": 40
           },
           "amounts": {
@@ -1482,7 +1495,6 @@
           "request_id",
           "id",
           "if_revision",
-          "date",
           "amounts"
         ],
         "additionalProperties": false
@@ -1549,12 +1561,12 @@
           },
           "from": {
             "type": "string",
-            "description": "YYYY-MM-DD (browser timezone) or ISO 8601 with Z/offset. No relative dates.",
+            "description": "YYYY-MM-DD in browser timezone, or ISO 8601 with Z/offset.",
             "maxLength": 40
           },
           "to": {
             "type": "string",
-            "description": "YYYY-MM-DD (browser timezone) or ISO 8601 with Z/offset. No relative dates.",
+            "description": "YYYY-MM-DD in browser timezone, or ISO 8601 with Z/offset.",
             "maxLength": 40
           },
           "currency": {
@@ -1866,12 +1878,12 @@
           },
           "from": {
             "type": "string",
-            "description": "YYYY-MM-DD (browser timezone) or ISO 8601 with Z/offset. No relative dates.",
+            "description": "YYYY-MM-DD in browser timezone, or ISO 8601 with Z/offset.",
             "maxLength": 40
           },
           "to": {
             "type": "string",
-            "description": "YYYY-MM-DD (browser timezone) or ISO 8601 with Z/offset. No relative dates.",
+            "description": "YYYY-MM-DD in browser timezone, or ISO 8601 with Z/offset.",
             "maxLength": 40
           },
           "cleared": {
@@ -2046,7 +2058,7 @@
           },
           "snapshot_revision": {
             "type": "string",
-            "description": "Copy the previous page snapshot_revision when offset > 0. If data changes, restart at offset 0.",
+            "description": "After page 1 copy snapshot_revision; restart at 0 if data changes.",
             "maxLength": 64
           }
         },
@@ -2139,12 +2151,12 @@
           },
           "from": {
             "type": "string",
-            "description": "YYYY-MM-DD (browser timezone) or ISO 8601 with Z/offset. No relative dates.",
+            "description": "YYYY-MM-DD in browser timezone, or ISO 8601 with Z/offset.",
             "maxLength": 40
           },
           "to": {
             "type": "string",
-            "description": "YYYY-MM-DD (browser timezone) or ISO 8601 with Z/offset. No relative dates.",
+            "description": "YYYY-MM-DD in browser timezone, or ISO 8601 with Z/offset.",
             "maxLength": 40
           }
         },

@@ -4,6 +4,7 @@ struct RegisterMoney: Identifiable, Equatable {
     let commodityID: UUID
     let symbol: String
     var amount: Decimal
+    var showsCashFlowSign = false
     var id: UUID { commodityID }
 }
 
@@ -186,6 +187,10 @@ struct RegisterPresentation {
                 changed = old != scopedAccounts.count
             }
         }
+        let categoryScope: Bool = {
+            guard case .account(let id) = scope, let kind = accounts[id]?.kind else { return false }
+            return kind == .income || kind == .expense
+        }()
         let rowIDs = Set(rows.map(\.id))
         let ledgerIDs = Set(rows.map(\.ledgerID))
         var amounts: [UUID: [RegisterMoney]] = [:]
@@ -242,8 +247,15 @@ struct RegisterPresentation {
                     running = rowBalances(for: first.accountID, using: rowCurrencies)
                 }
             }
+            // Change only the selected account's presentation, never its postings or reports.
+            if categoryScope {
+                displayed = displayed.mapValues { -$0 }
+                running = running.mapValues { -$0 }
+            }
             if case .currency(let id) = scope { displayed = displayed.filter { $0.key == id }; running = running.filter { $0.key == id } }
-            amounts[transaction.id] = money(displayed)
+            amounts[transaction.id] = money(displayed).map { value in
+                var value = value; value.showsCashFlowSign = categoryScope; return value
+            }
             balances[transaction.id] = money(running)
         }
         // Month headers need currency totals, not per-account buckets with a

@@ -694,7 +694,11 @@ struct RegisterRow: View, Equatable {
             }
             Spacer(minLength: 4)
             VStack(alignment: .trailing, spacing: 3) {
-                ForEach(amounts) { value in Text(moneyString(value.amount, symbol: value.symbol)).foregroundStyle(value.amount < 0 ? .red : .primary).monospacedDigit() }
+                ForEach(amounts) { value in
+                    Text((value.showsCashFlowSign && value.amount > 0 ? "+" : "") + moneyString(value.amount, symbol: value.symbol))
+                        .foregroundStyle(value.amount < 0 ? Color.red : value.showsCashFlowSign && value.amount > 0 ? Color.green : Color.primary)
+                        .monospacedDigit()
+                }
                 ForEach(balances) { value in Text(moneyString(value.amount, symbol: value.symbol)).font(.subheadline).foregroundStyle(.secondary).monospacedDigit() }
             }.lineLimit(1).minimumScaleFactor(0.8).layoutPriority(1)
         }

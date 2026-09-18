@@ -272,7 +272,7 @@ final class AssistantTools {
     }
     func read(_ name: String, _ a: AssistantJSON) throws -> AssistantJSON {
         if name == "get_transaction" { return try transactionValue(transaction(a["id"])) }
-        if name == "list_transactions" || name == "search_entries" { return try page(filtered(a).map(transactionValue), a) }
+        if name == "list_transactions" || name == "search_entries" { return try page(filtered(a, defaultFuture: name != "search_entries").map(transactionValue), a) }
         if name == "list_attachments" {
             let tx = try transaction(a["transaction"])
             return .object(["transaction": .string(tx.id.uuidString), "revision": .string(try AssistantJSON.modelDigest(tx)), "items": .array(try (tx.attachment?.assets ?? []).map(entity))])

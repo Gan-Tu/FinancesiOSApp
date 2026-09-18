@@ -831,6 +831,47 @@ final class AssistantTests: XCTestCase {
         coordinator.dismiss()
     }
 
+    func testSearchEntriesDefaultsToOccurredDatesAndAcceptsInclusiveDateRanges() async throws {
+        let tools = try fixture(), source = tools.store.data.transactions[0]
+        let calendar = Calendar.current, today = calendar.startOfDay(for: Date())
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: today)!
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: today)!
+        let distant = calendar.date(byAdding: .year, value: 5, to: today)!
+        for date in [yesterday, today, tomorrow.addingTimeInterval(-1), tomorrow, distant] {
+            let args: AssistantJSON = .object([
+                "journal": .string(source.ledgerID.uuidString), "payee": .string("Search Boundary"),
+                "date": .string(ISO8601DateFormatter().string(from: date)), "cleared": .bool(false),
+                "postings": .array(source.postings.map { .object(["account": .string($0.accountID.uuidString), "amount": .string(NSDecimalNumber(decimal: $0.amount).stringValue)]) })
+            ])
+            _ = try await tools.execute(call("create_transaction", args))
+        }
+        let query: AssistantJSON = .object(["query": .string("Search Boundary"), "limit": .number(1)])
+        let first = try await tools.execute(call("search_entries", query))["result"]
+        XCTAssertEqual(first["total"].int, 3, "Past and all of today, including uncleared entries, are included")
+        let next = query.setting("offset", first["next_offset"]).setting("snapshot_revision", first["snapshot_revision"])
+        let second = try await tools.execute(call("search_entries", next))["result"]
+        XCTAssertEqual(second["total"].int, 3)
+        XCTAssertNotEqual(first["items"].array.first?["id"], second["items"].array.first?["id"])
+        let future = try await tools.execute(call("search_entries", query.setting("include_future", .bool(true))))["result"]
+        XCTAssertEqual(future["total"].int, 5)
+        let listed = try await tools.execute(call("list_transactions", query))["result"]
+        XCTAssertEqual(listed["total"].int, 5)
+        let todayRange = query.setting("from", .string(tools.day(today))).setting("to", .string(tools.day(today)))
+        let todayResult = try await tools.execute(call("search_entries", todayRange))["result"]
+        XCTAssertEqual(todayResult["total"].int, 2, "Date-only upper bounds include the entire local day")
+        let openEnded = try await tools.execute(call("search_entries", query.setting("from", .string(tools.day(today)))))["result"]
+        XCTAssertEqual(openEnded["total"].int, 2)
+        let futureRange = query.setting("from", .string(tools.day(tomorrow))).setting("to", .string(tools.day(tomorrow)))
+        let excluded = try await tools.execute(call("search_entries", futureRange))["result"]
+        XCTAssertEqual(excluded["total"].int, 0)
+        let included = try await tools.execute(call("search_entries", futureRange.setting("include_future", .bool(true))))["result"]
+        XCTAssertEqual(included["total"].int, 1)
+        do {
+            _ = try await tools.execute(call("search_entries", todayRange.setting("from", .string(tools.day(tomorrow)))))
+            XCTFail("Reversed ranges must fail")
+        } catch { XCTAssertEqual((error as? AssistantFailure)?.code, "invalid_range") }
+    }
+
     func testTransactionTimestampsPreserveMinuteAndOffsetWhileDateOnlyQueriesStillWork() throws {
         let tools = try fixture()
         let now = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-09-17T21:35:42Z"))

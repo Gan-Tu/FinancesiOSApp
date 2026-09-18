@@ -47,6 +47,36 @@ final class RegisterPresentationCacheTests: XCTestCase {
         XCTAssertEqual(cache.entryCount, 0)
     }
 
+    func testCategoryRegistersReverseAmountsAndBalancesWithoutChangingPostings() throws {
+        for kind in AccountKind.allCases {
+            let ledger = Ledger(name: "Display QA"), usd = Commodity(ledgerID: ledger.id, symbol: "USD", name: "Dollar")
+            let eur = Commodity(ledgerID: ledger.id, symbol: "EUR", name: "Euro")
+            let bank = Account(ledgerID: ledger.id, name: "Bank", kind: .asset)
+            let parent = Account(ledgerID: ledger.id, name: "Group", kind: kind)
+            let category = Account(ledgerID: ledger.id, parentID: parent.id, name: "Category", kind: kind)
+            let raw: [Decimal] = kind == .income ? [-100, 20] : [100, -20]
+            let transactions = raw.enumerated().map { index, value in
+                LedgerTransaction(ledgerID: ledger.id, date: Date(timeIntervalSince1970: Double(index + 1)), payee: "QA", note: "", number: "", cleared: true,
+                    postings: [Posting(accountID: bank.id, commodityID: usd.id, amount: -value), Posting(accountID: category.id, commodityID: usd.id, amount: value), Posting(accountID: bank.id, commodityID: eur.id, amount: -value * 2), Posting(accountID: category.id, commodityID: eur.id, amount: value * 2)])
+            }
+            let data = JournalData(ledgers: [ledger], commodities: [usd, eur], accounts: [bank, parent, category], transactions: transactions, selectedLedgerID: ledger.id)
+            let original = try AssistantJSON.modelDigest(data)
+            let multiplier: Decimal = kind == .income || kind == .expense ? -1 : 1
+            for account in [parent, category] {
+                let presentation = RegisterPresentation.build(data: data, rows: Array(transactions.reversed()), scope: .account(account.id))
+                for (index, tx) in transactions.enumerated() {
+                    let amounts = Dictionary(uniqueKeysWithValues: (presentation.amounts[tx.id] ?? []).map { ($0.commodityID, $0.amount) })
+                    XCTAssertEqual(amounts, [usd.id: raw[index] * multiplier, eur.id: raw[index] * multiplier * 2])
+                    let balances = Dictionary(uniqueKeysWithValues: (presentation.balances[tx.id] ?? []).map { ($0.commodityID, $0.amount) })
+                    let total = raw.prefix(index + 1).reduce(Decimal.zero, +) * multiplier
+                    XCTAssertEqual(balances, [usd.id: total, eur.id: total * 2])
+                    XCTAssertEqual(presentation.amounts[tx.id]?.first?.showsCashFlowSign, multiplier == -1)
+                }
+            }
+            XCTAssertEqual(try AssistantJSON.modelDigest(data), original)
+        }
+    }
+
     func testRenderingConcurrencyIsBoundedAndCancelledQueueEntriesAreRemoved() async throws {
         let gate = Gate()
         let started = expectation(description: "Two active renders"); started.expectedFulfillmentCount = 2
