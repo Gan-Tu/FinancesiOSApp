@@ -114,11 +114,13 @@ struct SettingsView: View {
                 } header: {
                     Text("Journals")
                 }
+                .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
+                .environment(\.defaultMinListRowHeight, 44)
 
                 Section {
                     ForEach(store.selectedLedgerCurrencies) { currency in
                         HStack {
-                            VStack(alignment: .leading) {
+                            VStack(alignment: .leading, spacing: 2) {
                                 Text(currency.symbol)
                                     .font(.body.weight(.semibold))
                                 Text(currency.name)
@@ -143,6 +145,7 @@ struct SettingsView: View {
                             }
                             .accessibilityLabel("Actions for currency \(currency.symbol)")
                         }
+                        .padding(.vertical, 8)
                     }
                     Button {
                         editorRoute = .currency(store.draft(for: nil))
@@ -152,18 +155,24 @@ struct SettingsView: View {
                 } header: {
                     Text("Currencies")
                 }
+                .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
+                .environment(\.defaultMinListRowHeight, 44)
 
                 Section {
                     ForEach(store.selectedLedgerTransactionTemplates) { template in
                         HStack {
-                            VStack(alignment: .leading) {
+                            VStack(alignment: .leading, spacing: 2) {
                                 Text(template.name)
                                     .font(.body.weight(.medium))
-                                Text(template.payee.isEmpty ? template.note : template.payee)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
+                                let subtitle = template.payee.isEmpty ? template.note : template.payee
+                                if !subtitle.isEmpty {
+                                    Text(subtitle)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
                             }
+                            .padding(.vertical, 4)
                             Spacer()
                             Menu {
                                 Button {
@@ -186,6 +195,8 @@ struct SettingsView: View {
                 } header: {
                     Text("Templates")
                 }
+                .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
+                .environment(\.defaultMinListRowHeight, 44)
             }
             .navigationTitle("Settings")
             .listStyle(.insetGrouped).compactGroupedForm()
