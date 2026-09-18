@@ -49,6 +49,9 @@ final class AssistantTools {
         let def = try definition(call.name)
         var a = call.args
         if def.inputSchema["properties"].object["request_id"] != nil { a = a.setting("request_id", .string(call.operationID)) }
+        if ["create_transaction", "create_from_template", "duplicate_transaction"].contains(call.name), a.object["date"] == nil {
+            a = a.setting("date", .string("now"))
+        }
         try AssistantContract.validate(a, schema: def.inputSchema)
         let name = call.name
         if name == "get_app_context" { return success(appContext()) }
@@ -124,14 +127,16 @@ final class AssistantTools {
         invalidateSnapshot()
         return saved
     }
-    func appContext() -> AssistantJSON {
+    func appContext(now: Date = Date(), timeZone: TimeZone = .current) -> AssistantJSON {
         let progress = store.cloudSyncProgress
         let binding = try? store.assistantDatabase.assistantBoundIdentity()
         let pending = binding.flatMap { try? store.assistantDatabase.remainingCloudKitChangeCount(contextKey: $0.context) }
         return .object([
             "mode": .string(mode), "journal": .text((context.journalID ?? store.selectedLedgerID)?.uuidString),
             "account": .text(context.accountID?.uuidString), "transaction": .text(context.transactionID?.uuidString),
-            "timezone": .string(TimeZone.current.identifier), "today": .string(day(Date())),
+            "timezone": .string(timeZone.identifier), "today": .string(String(AssistantTimeContext.timestamp(now, timeZone: timeZone).prefix(10))),
+            "current_local_time": .string(AssistantTimeContext.timestamp(now, timeZone: timeZone)),
+            "transaction_time_guidance": .string(AssistantTimeContext.transactionGuidance),
             "storage": .string("Reads include local pending edits. Writes commit on this iPhone; iCloud delivery is separate."),
             "sync": .object(["enabled": .bool(store.data.syncEnabled), "running": .bool(progress.isRunning),
                 "pending_changes": pending.map { .number(Double($0)) } ?? .null, "synced": .bool(progress.state == .succeeded && pending == 0), "message": .string(progress.message),
@@ -209,6 +214,17 @@ final class AssistantTools {
             if let result = formatter.date(from: text) { return result }
         }
         throw AssistantFailure("invalid_date", "Use a valid YYYY-MM-DD or ISO timestamp with timezone.")
+    }
+    func transactionDate(_ value: AssistantJSON, now: Date = Date()) throws -> Date {
+        if value == .null || value.string?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "now" { return now }
+        guard var text = value.string, text.range(of: #"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$"#, options: .regularExpression) != nil else {
+            throw AssistantFailure("invalid_date", "For a transaction, use 'now' or an ISO timestamp with hours, minutes and a timezone, such as 2026-09-17T14:35:00-07:00. Date-only values would lose the time.")
+        }
+        // ISO8601DateFormatter expects seconds; minute precision is also valid.
+        if text.range(of: #"T\d{2}:\d{2}(Z|[+-])"#, options: .regularExpression) != nil {
+            text.insert(contentsOf: ":00", at: text.index(text.startIndex, offsetBy: 16))
+        }
+        return try date(.string(text))
     }
     func day(_ date: Date) -> String {
         let f = DateFormatter(); f.calendar = Calendar(identifier: .gregorian); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"; return f.string(from: date)

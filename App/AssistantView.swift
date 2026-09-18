@@ -113,7 +113,7 @@ struct AssistantView: View {
     }
     private var transcript: some View {
         Group {
-            if assistant.conversation.messages.isEmpty && assistant.conversation.activity.isEmpty && assistant.streamingText.isEmpty {
+            if assistant.conversation.messages.isEmpty && assistant.streamingText.isEmpty {
                 VStack(spacing: 0) {
                     GeometryReader { geometry in
                         ScrollView {
@@ -133,14 +133,6 @@ struct AssistantView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
-                    if !assistant.conversation.activity.isEmpty {
-                        DisclosureGroup("Actions · \(assistant.conversation.activity.count)") {
-                            ForEach(assistant.conversation.activity) { action in actionRow(action) }
-                        }
-                        .disclosureGroupStyle(AssistantActionsStyle())
-                        .font(.subheadline)
-                        .foregroundStyle(Color(uiColor: .secondaryLabel))
-                    }
                     ForEach(assistant.conversation.messages) { message in
                         messageBubble(message.text, isUser: message.role == "user", identifier: "assistant.message.\(message.role)")
                             .id(message.id)
@@ -179,19 +171,6 @@ struct AssistantView: View {
                 .background(isUser ? Color.accentColor.opacity(0.10) : Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
             if !isUser { Spacer(minLength: 16) }
         }
-    }
-    private func actionRow(_ call: AssistantToolCall) -> some View {
-        let output = call.result.flatMap { try? JSONDecoder().decode(AssistantJSON.self, from: Data($0.utf8)) }
-        return VStack(alignment: .leading, spacing: 3) {
-            Label(call.label, systemImage: output?["ok"].bool == true ? "checkmark.circle" : "exclamationmark.circle")
-            if let output, output["ok"].bool == false { Text(output["error"]["message"].string ?? "Action did not finish.") }
-            if let output, output["result"]["status"].string == "saved_locally" { Text("Saved on this iPhone · iCloud delivery is separate") }
-            if let raw = output?["result"]["id"].string, let id = UUID(uuidString: raw), assistant.store.transaction(id) != nil {
-                Button { assistant.navigationRequest = .object(["view": .string("register"), "transaction": .string(id.uuidString)]) } label: {
-                    Text("View Transaction").frame(minHeight: 44).contentShape(Rectangle())
-                }
-            }
-        }.padding(.vertical, 2)
     }
     private var resumeBar: some View {
         HStack {
@@ -473,35 +452,6 @@ private struct AssistantBrandMark: View {
             .scaledToFit()
             .frame(width: size, height: size)
             .accessibilityHidden(true)
-    }
-}
-
-private struct AssistantActionsStyle: DisclosureGroupStyle {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    func makeBody(configuration: Configuration) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Button {
-                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { configuration.isExpanded.toggle() }
-            } label: {
-                HStack(spacing: 10) {
-                    configuration.label
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .rotationEffect(.degrees(configuration.isExpanded ? 90 : 0))
-                }
-                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityValue(configuration.isExpanded ? "Expanded" : "Collapsed")
-            .accessibilityIdentifier("assistant.actions")
-            if configuration.isExpanded {
-                configuration.content
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
-            }
-        }
     }
 }
 

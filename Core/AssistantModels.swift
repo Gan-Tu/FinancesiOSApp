@@ -1,5 +1,19 @@
 import Foundation
 
+enum AssistantTimeContext {
+    static let transactionGuidance = "For new transactions (including duplicates and entries from templates), provide a specific ISO 8601 timestamp with hours, minutes and a timezone offset when the intended time is known. Otherwise use date: \"now\"; the iPhone resolves it to its current local time when saving. Never use a date-only YYYY-MM-DD value or invent midnight. For a past date with no known time, ask for the time or explain the use of the current local time. Date-only bounds remain valid for searches and reports."
+
+    static func timestamp(_ date: Date, timeZone: TimeZone = .current) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.timeZone = timeZone
+        return formatter.string(from: date)
+    }
+
+    static func message(now: Date, timeZone: TimeZone = .current) -> AssistantJSON {
+        .object(["type": .string("message"), "role": .string("user"), "text": .string("Current iPhone local time: \(timestamp(now, timeZone: timeZone)). Time zone: \(timeZone.identifier). Refresh this context on each step; older tool results may show an earlier time. \(transactionGuidance)")])
+    }
+}
+
 struct AssistantModelChoice: Decodable, Sendable, Identifiable {
     var id: String
     var label: String
@@ -44,6 +58,8 @@ struct AssistantConversation: Identifiable, Codable, Sendable {
     /// Optional for older on-device history checkpoints.
     var customTitle: Bool?
     var updated = Date()
+    /// Separate from edits so reopening an older chat makes it the active chat.
+    var lastActiveAt: Date?
     var messages: [AssistantMessage] = []
     var items: [AssistantJSON] = []
     /// Follow-ups are durable before the interrupted worker finishes settling.

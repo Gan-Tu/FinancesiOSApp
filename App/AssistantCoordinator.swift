@@ -37,6 +37,8 @@ final class AssistantCoordinator: ObservableObject {
     private(set) var tools: AssistantTools?
     private var foreground = false
     private var presented = false
+    private var restoreRecentOnConnect = false
+    private let now: () -> Date
     private var task: Task<Void, Never>?
     // New work waits for a cancelled worker to finish before reconciling its
     // action receipts. Cancellation alone does not prove a save rolled back.
@@ -47,8 +49,9 @@ final class AssistantCoordinator: ObservableObject {
     private var voiceRequestID: String?
     private let logger = Logger(subsystem: "dev.gan.FinancesApp.iOS", category: "Assistant")
 
-    init(store: MobileLedgerStore, gateway: (any AssistantGatewayProtocol)? = nil, contract: AssistantContract? = nil, preferences: AssistantPreferencesStore? = nil) {
+    init(store: MobileLedgerStore, gateway: (any AssistantGatewayProtocol)? = nil, contract: AssistantContract? = nil, preferences: AssistantPreferencesStore? = nil, now: @escaping () -> Date = Date.init) {
         self.store = store
+        self.now = now
         self.preferences = preferences
         self.gateway = gateway ?? (AIInferencePolicy.blocksNetwork ? AssistantMockGateway() : AssistantGateway())
         self.contract = contract ?? (try? AssistantContract.load()) ?? AssistantContract(version: 1, tools: [])
@@ -62,6 +65,7 @@ final class AssistantCoordinator: ObservableObject {
     }
 
     func setForeground(_ active: Bool) {
+        if foreground && !active && presented { conversation.lastActiveAt = now() }
         foreground = active
         if !active { pause() }
         else if let preferences { Task { await preferences.refresh() } }
@@ -76,14 +80,17 @@ final class AssistantCoordinator: ObservableObject {
         if tools != nil { tools?.context = conversation.context }
         if consented { prepare() }
     }
-    func dismiss() { presented = false; pause() }
+    func dismiss() {
+        if presented && foreground { conversation.lastActiveAt = now() }
+        presented = false; pause()
+    }
     func requireActive() throws {
         guard foreground, presented, !store.requiresUnlock else { throw CancellationError() }
         try store.assistantRequireAccess()
     }
     func invalidateIdentity() {
         pause(); tools?.clearPreviews(); connected = false; identity = ""; tools = nil
-        history = []; conversation = AssistantConversation(); uploadedFiles = []; artifact = nil
+        history = []; conversation = AssistantConversation(); uploadedFiles = []; artifact = nil; restoreRecentOnConnect = false
         error = "Your iCloud account changed. Reopen the assistant after Finances refreshes its account."
     }
     private func verifyIdentity(_ subject: String) throws {
@@ -129,11 +136,16 @@ final class AssistantCoordinator: ObservableObject {
         let saved = try store.assistantDatabase.assistantHistory(scope: subject)
         let loaded = try saved.map { try JSONDecoder().decode(AssistantConversation.self, from: $0) }
         identity = subject; history = loaded
-        // Restore this user's preferences, not their last transcript or scope.
         conversation.settings = preferences?.settings(for: subject) ?? history.first?.settings ?? AssistantSettings()
         if let preferences { Task { await preferences.refresh() } }
         tools = AssistantTools(store: store, scope: subject, context: conversation.context, contract: contract)
         configureTools()
+        if restoreRecentOnConnect {
+            restoreRecentOnConnect = false
+            if let recent = history.max(by: { ($0.lastActiveAt ?? $0.updated) < ($1.lastActiveAt ?? $1.updated) }), isRecent(recent) {
+                restoreConversation(recent)
+            }
+        }
     }
     private func configureTools() {
         tools?.requireActive = { [weak self] in guard let self else { throw CancellationError() }; try self.requireActive() }
@@ -164,15 +176,28 @@ final class AssistantCoordinator: ObservableObject {
     }
     private func persist(_ value: AssistantConversation) throws {
         guard !identity.isEmpty else { throw AssistantFailure("not_connected", "Connect before saving assistant history.") }
-        var saved = value; saved.updated = Date()
-        try store.assistantDatabase.saveAssistantHistory(scope: identity, id: saved.id.uuidString, payload: JSONEncoder().encode(saved))
+        var saved = value; saved.updated = now()
+        if presented && foreground { saved.lastActiveAt = saved.updated }
+        try store.assistantDatabase.saveAssistantHistory(scope: identity, id: saved.id.uuidString, payload: JSONEncoder().encode(saved), now: saved.updated)
         conversation = saved
         history.removeAll { $0.id == saved.id }; history.insert(saved, at: 0)
     }
-    /// The launcher owns this boundary. View appearances also occur when
-    /// returning from History, Settings, or a file picker and must not reset chat.
+    private func isRecent(_ value: AssistantConversation) -> Bool {
+        let elapsed = now().timeIntervalSince(value.lastActiveAt ?? value.updated)
+        return elapsed >= 0 && elapsed <= 10 * 60
+    }
+    /// Only the launcher checks expiry; auxiliary sheets must never reset chat.
+    func openConversation(context: AssistantContext) throws {
+        if !identity.isEmpty && isRecent(conversation) && history.contains(where: { $0.id == conversation.id }) {
+            tools?.context = conversation.context
+            return
+        }
+        try beginFreshConversation(context: context)
+        restoreRecentOnConnect = identity.isEmpty
+    }
     func beginFreshConversation(context: AssistantContext) throws {
         try pauseAndCheckpoint()
+        restoreRecentOnConnect = false
         let settings = preferences?.settings(for: identity) ?? conversation.settings
         tools?.clearPreviews()
         conversation = AssistantConversation(context: context, settings: settings)
@@ -193,9 +218,18 @@ final class AssistantCoordinator: ObservableObject {
         needsAttachmentRecovery = false; navigationRequest = nil; voiceRequestID = nil
     }
     func selectConversation(_ value: AssistantConversation) {
-        pause(); tools?.clearPreviews(); conversation = value
+        pause(); tools?.clearPreviews()
+        restoreConversation(value)
+    }
+    private func restoreConversation(_ value: AssistantConversation) {
+        conversation = value
         conversation.paused = value.hasPendingInference || !value.calls.isEmpty
+        conversation.lastActiveAt = now()
         tools?.context = value.context; uploadedFiles = []; error = nil
+        do {
+            try store.assistantDatabase.saveAssistantHistory(scope: identity, id: value.id.uuidString, payload: JSONEncoder().encode(conversation), now: value.updated)
+            if let index = history.firstIndex(where: { $0.id == value.id }) { history[index] = conversation }
+        } catch { self.error = "Could not save the active conversation: \(error.localizedDescription)" }
     }
     func deleteConversation(_ id: UUID) {
         do {
@@ -299,7 +333,7 @@ final class AssistantCoordinator: ObservableObject {
                                 finishCall(call, result: tools.failure(error)); try persist(); continue
                             }
                         }
-                        activity = call.label + "…"
+                        activity = "Thinking…"
                         // The in-memory call may come from a failed checkpoint
                         // write. No new action starts until its intent is durable.
                         try persist()
@@ -324,7 +358,8 @@ final class AssistantCoordinator: ObservableObject {
                     conversation.turnSteps += 1; try persist()
                     activity = "Thinking…"; streamingText = ""
                     var completed = false
-                    try await gateway.step(items: conversation.items, settings: conversation.settings) { [weak self] event in
+                    let timeContext = AssistantTimeContext.message(now: now())
+                    try await gateway.step(items: [timeContext] + conversation.items, settings: conversation.settings) { [weak self] event in
                         guard let self, self.generation == stamp else { throw CancellationError() }
                         try self.requireActive()
                         if event.type == "text_delta" { self.streamingText += event.text ?? "" }
@@ -521,7 +556,8 @@ final class AssistantCoordinator: ObservableObject {
         guard connected, consented, !conversation.canResume else { return }
         do { _ = try settingsForNewRequest() }
         catch { self.error = error.localizedDescription; return }
-        let context = conversation.messages.suffix(10).map { "\($0.role): \($0.text)" }.joined(separator: "\n")
+        let timeContext = AssistantTimeContext.message(now: now())["text"].string ?? ""
+        let context = timeContext + "\n" + conversation.messages.suffix(10).map { "\($0.role): \($0.text)" }.joined(separator: "\n")
         let stamp = generation
         Task {
             do { try requireActive(); try await voice.start(gateway: gateway, context: context, requireActive: { [weak self] in guard let self else { throw CancellationError() }; try self.requireActive() }) }

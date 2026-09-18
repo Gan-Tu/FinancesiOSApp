@@ -104,7 +104,7 @@ final class AssistantTests: XCTestCase {
         XCTAssertEqual(try f.store.assistantDatabase.recordCounts().outboxRows, outboxBefore)
         XCTAssertTrue(coordinator.send("Read these attachments"))
         try await wait { !coordinator.isRunning }
-        XCTAssertEqual(gateway.itemsSeen.first?.first?["attachments"].array.count, 2)
+        XCTAssertEqual(gateway.itemsSeen.first?.dropFirst().first?["attachments"].array.count, 2)
         coordinator.dismiss()
     }
 
@@ -185,7 +185,7 @@ final class AssistantTests: XCTestCase {
         gate.release()
         try await wait { !coordinator.isRunning }
         XCTAssertEqual(gateway.steps, 2)
-        XCTAssertEqual(gateway.itemsSeen.last?.filter { $0["type"].string == "message" }.compactMap { $0["text"].string }, ["Explain this month", "Only groceries", "And use Chinese"])
+        XCTAssertEqual(gateway.itemsSeen.last?.dropFirst().filter { $0["type"].string == "message" }.compactMap { $0["text"].string }, ["Explain this month", "Only groceries", "And use Chinese"])
         XCTAssertNil(coordinator.conversation.pendingSteering)
         XCTAssertFalse(coordinator.conversation.messages.contains { $0.text == "Obsolete answer" })
         XCTAssertNotEqual(coordinator.conversation.title, "Obsolete title")
@@ -301,7 +301,7 @@ final class AssistantTests: XCTestCase {
         gate.release()
         coordinator.resume()
         try await wait { !coordinator.isRunning }
-        XCTAssertEqual(gateway.itemsSeen.last?.filter { $0["type"].string == "message" }.compactMap { $0["text"].string }, ["Original request"])
+        XCTAssertEqual(gateway.itemsSeen.last?.dropFirst().filter { $0["type"].string == "message" }.compactMap { $0["text"].string }, ["Original request"])
         coordinator.dismiss()
     }
 
@@ -326,7 +326,7 @@ final class AssistantTests: XCTestCase {
         XCTAssertEqual(gateway.steps, 1)
         gate.release()
         try await wait { !coordinator.isRunning }
-        XCTAssertEqual(gateway.itemsSeen.last?.compactMap { $0["text"].string }, ["Separate chat request"])
+        XCTAssertEqual(gateway.itemsSeen.last?.dropFirst().compactMap { $0["text"].string }, ["Separate chat request"])
         XCTAssertNotEqual(coordinator.conversation.id, originalID)
         let original = try db.assistantHistory(scope: subject).map { try JSONDecoder().decode(AssistantConversation.self, from: $0) }.first { $0.id == originalID }
         XCTAssertEqual(original?.pendingSteering?.first?["text"].string, "Original chat correction")
@@ -452,7 +452,7 @@ final class AssistantTests: XCTestCase {
     func testCommittedCreateSurvivesMissingReplyAndReopen() async throws {
         let tools = try fixture(), data = tools.store.data
         let cash = data.accounts.first { $0.name == "Cash" }!, food = data.accounts.first { $0.name == "Food" }!
-        let action = call("create_transaction", .object(["journal": .string(data.ledgers[0].id.uuidString), "date": .string("2026-01-02"), "payee": .string("Retry fixture"), "postings": .array([.object(["account": .string(cash.id.uuidString), "amount": .string("-0.123456789012345678")]), .object(["account": .string(food.id.uuidString), "amount": .string("0.123456789012345678")])])]))
+        let action = call("create_transaction", .object(["journal": .string(data.ledgers[0].id.uuidString), "date": .string("2026-01-02T12:34:00-08:00"), "payee": .string("Retry fixture"), "postings": .array([.object(["account": .string(cash.id.uuidString), "amount": .string("-0.123456789012345678")]), .object(["account": .string(food.id.uuidString), "amount": .string("0.123456789012345678")])])]))
         let result = try await tools.execute(action)
         let persisted = try XCTUnwrap(tools.store.assistantDatabase.loadData())
         XCTAssertEqual(persisted.transactions.count, 2)
@@ -487,7 +487,7 @@ final class AssistantTests: XCTestCase {
         let tools = try fixture(), tx = tools.store.data.transactions[0]
         let stale = call("update_transaction", .object(["id": .string(tx.id.uuidString), "if_revision": .string("stale"), "note": .string("bad")]))
         do { _ = try await tools.execute(stale); XCTFail("Stale write must fail") } catch { XCTAssertEqual((error as? AssistantFailure)?.code, "revision_conflict") }
-        let action = call("create_transaction", .object(["journal": .string(tx.ledgerID.uuidString), "date": .string("2026-02-01"), "postings": .array(tx.postings.map { .object(["account": .string($0.accountID.uuidString), "amount": .string("1.00")]) })]))
+        let action = call("create_transaction", .object(["journal": .string(tx.ledgerID.uuidString), "date": .string("2026-02-01T12:34:00-08:00"), "postings": .array(tx.postings.map { .object(["account": .string($0.accountID.uuidString), "amount": .string("1.00")]) })]))
         do { _ = try await tools.execute(action); XCTFail("Unbalanced transaction must fail") } catch {}
         XCTAssertEqual(tools.store.data.transactions.count, 1)
         XCTAssertEqual(tools.store.transaction(tx.id)?.note, tx.note)
@@ -727,6 +727,154 @@ final class AssistantTests: XCTestCase {
         XCTAssertEqual(stored.title, "My Budget")
         XCTAssertEqual(stored.customTitle, true)
         coordinator.dismiss()
+    }
+
+    func testLauncherResumesForTenMinutesThenStartsFreshWithoutLosingPausedWork() async throws {
+        let f = try fixture(), subject = "cloudkit:iCloud.fixture:development:user-a"
+        _ = try f.store.assistantDatabase.bindCloudKitAccount(contextKey: "iCloud.fixture|Development|Journal", accountID: "user-a")
+        var clock = Date()
+        let gateway = TestAssistantGateway(subject: subject)
+        let coordinator = AssistantCoordinator(store: f.store, gateway: gateway, contract: f.contract, now: { clock })
+        try coordinator.openConversation(context: f.context)
+        coordinator.consented = true; coordinator.setForeground(true); coordinator.present()
+        try await wait { coordinator.connected }
+        let pending = call("get_balances", .object([:]))
+        coordinator.conversation.messages = [AssistantMessage(role: "user", text: "Check balances")]
+        coordinator.conversation.calls = [pending]
+        coordinator.conversation.hasPendingInference = true
+        let originalID = coordinator.conversation.id
+        coordinator.dismiss()
+        let differentContext = AssistantContext(journalID: UUID())
+        clock.addTimeInterval(600)
+        try coordinator.openConversation(context: differentContext)
+        XCTAssertEqual(coordinator.conversation.id, originalID)
+        XCTAssertEqual(coordinator.conversation.context, f.context)
+        XCTAssertEqual(coordinator.tools?.context, f.context)
+        XCTAssertEqual(coordinator.conversation.calls, [pending])
+        XCTAssertTrue(coordinator.conversation.canResume)
+        XCTAssertEqual(gateway.steps, 0, "Reopening must not automatically execute paused actions")
+        coordinator.present()
+        try await wait { !coordinator.isConnecting }
+        coordinator.dismiss()
+        clock.addTimeInterval(601)
+        // Background notifications while chat is closed must not extend its life.
+        coordinator.setForeground(false); coordinator.setForeground(true)
+        try coordinator.openConversation(context: differentContext)
+        XCTAssertNotEqual(coordinator.conversation.id, originalID)
+        XCTAssertTrue(coordinator.conversation.messages.isEmpty)
+        XCTAssertEqual(coordinator.conversation.context, differentContext)
+        XCTAssertEqual(coordinator.history.first { $0.id == originalID }?.calls, [pending])
+    }
+
+    func testColdLauncherRestoresLastActiveChatInsteadOfMostRecentlyEditedChat() async throws {
+        let f = try fixture(), db = f.store.assistantDatabase, subject = "cloudkit:iCloud.fixture:development:user-a"
+        _ = try db.bindCloudKitAccount(contextKey: "iCloud.fixture|Development|Journal", accountID: "user-a")
+        var clock = Date()
+        let recent = AssistantConversation(title: "Recent edit", updated: clock.addingTimeInterval(-60), lastActiveAt: clock.addingTimeInterval(-60), context: f.context)
+        let selected = AssistantConversation(title: "Reading older chat", updated: clock.addingTimeInterval(-3600), lastActiveAt: clock.addingTimeInterval(-30), messages: [AssistantMessage(role: "user", text: "Older message")], context: f.context)
+        let foreign = AssistantConversation(title: "Foreign account", lastActiveAt: clock)
+        for chat in [recent, selected] {
+            try db.saveAssistantHistory(scope: subject, id: chat.id.uuidString, payload: JSONEncoder().encode(chat), now: chat.updated)
+        }
+        try db.saveAssistantHistory(scope: "other-user", id: foreign.id.uuidString, payload: JSONEncoder().encode(foreign))
+        let gateway = TestAssistantGateway(subject: subject)
+        let coordinator = AssistantCoordinator(store: f.store, gateway: gateway, contract: f.contract, now: { clock })
+        try coordinator.openConversation(context: AssistantContext(journalID: UUID()))
+        coordinator.consented = true; coordinator.setForeground(true); coordinator.present()
+        try await wait { coordinator.connected }
+        XCTAssertEqual(coordinator.conversation.id, selected.id)
+        XCTAssertEqual(coordinator.conversation.context, selected.context)
+        XCTAssertEqual(coordinator.tools?.context, selected.context)
+        XCTAssertEqual(gateway.steps, 0)
+        // Explicit New Chat still wins over a recent saved chat.
+        coordinator.newConversation()
+        try await wait { !coordinator.isConnecting }
+        XCTAssertNotEqual(coordinator.conversation.id, selected.id)
+        XCTAssertTrue(coordinator.conversation.messages.isEmpty)
+        coordinator.dismiss()
+        clock.addTimeInterval(601)
+        let restarted = AssistantCoordinator(store: f.store, gateway: TestAssistantGateway(subject: subject), contract: f.contract, now: { clock })
+        let context = AssistantContext(journalID: UUID())
+        try restarted.openConversation(context: context)
+        restarted.consented = true; restarted.setForeground(true); restarted.present()
+        try await wait { restarted.connected }
+        XCTAssertTrue(restarted.conversation.messages.isEmpty)
+        XCTAssertEqual(restarted.conversation.context, context)
+        XCTAssertFalse(restarted.history.contains { $0.id == foreign.id })
+        restarted.dismiss()
+    }
+
+    func testEveryModelStepReceivesFreshLocalTimeWithoutPersistingItAsAMessage() async throws {
+        let f = try fixture(), subject = "cloudkit:iCloud.fixture:development:user-a"
+        _ = try f.store.assistantDatabase.bindCloudKitAccount(contextKey: "iCloud.fixture|Development|Journal", accountID: "user-a")
+        var clock = Date()
+        let initialTime = AssistantTimeContext.timestamp(clock)
+        let gateway = TestAssistantGateway(subject: subject)
+        gateway.stepOverride = { step, _, receive in
+            clock.addTimeInterval(65)
+            try receive(AssistantStepEvent(type: "step_completed", text: step == 1 ? nil : "Done", continuation: "time-fixture", calls: [], needsFollowUp: step == 1))
+        }
+        let coordinator = AssistantCoordinator(store: f.store, gateway: gateway, contract: f.contract, now: { clock })
+        coordinator.consented = true; coordinator.setForeground(true); coordinator.present()
+        try await wait { coordinator.connected }
+        XCTAssertTrue(coordinator.send("Add lunch"))
+        try await wait { !coordinator.isRunning }
+        XCTAssertEqual(gateway.itemsSeen.count, 2)
+        let first = try XCTUnwrap(gateway.itemsSeen.first?.first?["text"].string)
+        let second = try XCTUnwrap(gateway.itemsSeen.last?.first?["text"].string)
+        XCTAssertTrue(first.contains(initialTime))
+        XCTAssertTrue(second.contains(AssistantTimeContext.timestamp(clock.addingTimeInterval(-65))))
+        XCTAssertTrue(first.contains(TimeZone.current.identifier))
+        XCTAssertTrue(first.contains("date: \"now\""))
+        XCTAssertFalse(coordinator.conversation.items.contains { $0["text"].string?.contains("Current iPhone local time:") == true })
+        XCTAssertEqual(coordinator.conversation.messages.map(\.text), ["Add lunch", "Done"])
+        coordinator.dismiss()
+    }
+
+    func testTransactionTimestampsPreserveMinuteAndOffsetWhileDateOnlyQueriesStillWork() throws {
+        let tools = try fixture()
+        let now = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-09-17T21:35:42Z"))
+        XCTAssertEqual(try tools.transactionDate(.string("now"), now: now), now)
+        XCTAssertEqual(try tools.transactionDate(.null, now: now), now)
+        XCTAssertEqual(try tools.transactionDate(.string("2026-09-17T14:35-07:00")), now.addingTimeInterval(-42))
+        XCTAssertEqual(try tools.transactionDate(.string("2026-09-18T03:20:42+05:45")), now)
+        for invalid in ["2026-09-17", "2026-09-17T14:35", "yesterday"] {
+            XCTAssertThrowsError(try tools.transactionDate(.string(invalid)))
+        }
+        XCTAssertNoThrow(try tools.date(.string("2026-09-17")))
+        let zone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        let context = tools.appContext(now: now, timeZone: zone)
+        XCTAssertEqual(context["current_local_time"].string, "2026-09-17T14:35:42-07:00")
+        XCTAssertEqual(context["today"].string, "2026-09-17")
+        XCTAssertEqual(context["timezone"].string, zone.identifier)
+        let winter = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-01-17T21:35:00Z"))
+        XCTAssertEqual(AssistantTimeContext.timestamp(winter, timeZone: zone), "2026-01-17T13:35:00-08:00")
+    }
+
+    func testNewTransactionUsesNowAndReplaysTheOriginalTimestamp() async throws {
+        let tools = try fixture(), tx = tools.store.data.transactions[0]
+        let args = AssistantJSON.object(["journal": .string(tx.ledgerID.uuidString), "date": .string("2026-09-17"), "postings": .array(tx.postings.map { .object(["account": .string($0.accountID.uuidString), "amount": .string(NSDecimalNumber(decimal: $0.amount).stringValue)]) })])
+        do { _ = try await tools.execute(call("create_transaction", args)); XCTFail("Date-only creation must not save midnight") }
+        catch { XCTAssertEqual((error as? AssistantFailure)?.code, "invalid_date") }
+        XCTAssertEqual(tools.store.data.transactions.count, 1)
+        let action = call("create_transaction", args.setting("date", .string("now")))
+        let before = Date()
+        let result = try await tools.execute(action)
+        let saved = try XCTUnwrap(tools.store.transaction(UUID(uuidString: action.operationID)))
+        XCTAssertGreaterThanOrEqual(saved.date, before)
+        XCTAssertLessThanOrEqual(saved.date, Date())
+        let replay = try await tools.execute(action)
+        XCTAssertEqual(replay, result)
+        XCTAssertEqual(tools.store.transaction(saved.id)?.date, saved.date)
+        var withoutDate = args.object
+        withoutDate.removeValue(forKey: "date")
+        let defaultDate = call("create_transaction", .object(withoutDate))
+        _ = try await tools.execute(defaultDate)
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(tools.store.transaction(UUID(uuidString: defaultDate.operationID))).date, before)
+        let duplicate = call("duplicate_transaction", .object(["id": .string(tx.id.uuidString), "if_revision": .string(try AssistantJSON.modelDigest(tx))]))
+        _ = try await tools.execute(duplicate)
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(tools.store.transaction(UUID(uuidString: duplicate.operationID))).date, before)
+        XCTAssertEqual(tools.store.transaction(tx.id)?.date, tx.date)
     }
 
     func testFreshLauncherKeepsPausedActionsInHistoryAndUsesNewScope() async throws {

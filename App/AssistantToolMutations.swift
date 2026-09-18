@@ -115,7 +115,11 @@ extension AssistantTools {
             } else { draft = store.draft(for: old!) }
         }
         if let id = UUID(uuidString: try a.required("request_id")) { draft.saveOperationID = id }
-        if a["date"].string != nil { draft.date = try date(a["date"]) }
+        if name != "update_transaction" {
+            draft.date = try transactionDate(a["date"])
+        } else if let text = a["date"].string {
+            draft.date = try text.lowercased() == "now" ? transactionDate(a["date"]) : date(a["date"])
+        }
         if let text = a["payee"].string { draft.payee = text }
         if let text = a["note"].string { draft.note = text }
         if let text = a["number"].string { draft.number = text }

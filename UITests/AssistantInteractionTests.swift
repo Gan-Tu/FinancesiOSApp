@@ -43,8 +43,13 @@ final class AssistantInteractionTests: XCTestCase {
         XCTAssertFalse(chip.exists)
         attach.tap(); app.buttons["Choose Files"].tap()
         let cancel = app.buttons["Cancel"]
-        XCTAssertTrue(cancel.waitForExistence(timeout: 5)); cancel.tap()
+        // The system Files service can still be loading a blank sheet after
+        // five seconds on a newly booted Simulator. Wait for its actual control.
+        XCTAssertTrue(cancel.waitForExistence(timeout: 30), app.debugDescription)
+        XCTAssertTrue(cancel.isHittable)
+        cancel.tap()
         XCTAssertTrue(attach.waitForExistence(timeout: 5))
+        XCTAssertTrue(attach.isHittable)
         app.buttons["Close"].tap()
     }
 
@@ -221,8 +226,9 @@ final class AssistantInteractionTests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.buttons["assistant.stop"])], timeout: 60), .completed)
         app.buttons["Close"].tap()
         XCTAssertTrue(open.waitForExistence(timeout: 5)); open.tap()
-        XCTAssertTrue(app.staticTexts["What do you need help with?"].waitForExistence(timeout: 5))
-        XCTAssertFalse(reply.exists)
+        XCTAssertTrue(balanceText.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["What do you need help with?"].exists)
+        XCTAssertFalse(app.buttons["assistant.actions"].exists)
         app.buttons["Assistant Options"].tap(); app.buttons["History"].tap()
         let saved = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "assistant.history.")).firstMatch
         XCTAssertTrue(saved.waitForExistence(timeout: 5))
@@ -230,22 +236,20 @@ final class AssistantInteractionTests: XCTestCase {
         XCTAssertTrue(saved.label.hasPrefix("Use the finance tools to report the Checking"))
         saved.tap()
         XCTAssertTrue(balanceText.waitForExistence(timeout: 5))
-        let actions = app.buttons["assistant.actions"]
-        XCTAssertTrue(actions.waitForExistence(timeout: 5))
-        actions.tap()
-        XCTAssertEqual(actions.value as? String, "Expanded")
-        actions.tap()
-        XCTAssertEqual(actions.value as? String, "Collapsed")
         let capture = XCTAttachment(screenshot: app.screenshot()); capture.name = "Native assistant mock answer"; capture.lifetime = .keepAlways; add(capture)
-        // Relaunch opens fresh, while History restores the saved conversation.
+        // A recent active chat also survives an app relaunch.
         app.terminate(); app.launch()
         XCTAssertTrue(open.waitForExistence(timeout: 10)); open.tap()
+        XCTAssertTrue(reply.waitForExistence(timeout: 15))
+        XCTAssertTrue(balanceText.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["assistant.actions"].exists)
+        // Explicit New Chat remains available and History retains the old one.
+        app.buttons["Assistant Options"].tap(); app.buttons["New Chat"].tap()
         XCTAssertTrue(app.staticTexts["What do you need help with?"].waitForExistence(timeout: 5))
         XCTAssertFalse(reply.exists)
         app.buttons["Assistant Options"].tap(); app.buttons["History"].tap()
         XCTAssertTrue(app.buttons[savedIdentifier].waitForExistence(timeout: 5))
         app.buttons[savedIdentifier].tap()
-        XCTAssertTrue(reply.waitForExistence(timeout: 15))
         XCTAssertTrue(balanceText.waitForExistence(timeout: 10))
     }
 }

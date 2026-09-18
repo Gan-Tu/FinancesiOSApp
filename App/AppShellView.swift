@@ -233,7 +233,7 @@ struct AppShellView: View {
                 openAssistant: {
                     let context = AssistantContext(journalID: currentLedgerID, accountID: currentAccountID, transactionID: currentTransactionID)
                     do {
-                        try assistant.beginFreshConversation(context: context)
+                        try assistant.openConversation(context: context)
                         presentedSheet = .assistant
                     } catch {
                         store.validationError = ValidationError(message: "Could not save the previous conversation: \(error.localizedDescription). Its progress has been kept; please try again.")
