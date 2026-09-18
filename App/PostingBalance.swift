@@ -23,22 +23,38 @@ enum PostingBalance {
         return updated
     }
 
-    static func amount(forLastPostingIn draft: TransactionDraft, accounts: [Account], commodities: [Commodity] = []) throws -> Decimal {
-        guard let last = draft.postings.last, draft.postings.count >= 2 else {
+    static func balancing(_ draft: TransactionDraft, focusedPostingID: UUID? = nil, accounts: [Account], commodities: [Commodity] = []) throws -> TransactionDraft {
+        guard draft.postings.count >= 2 else {
             throw ValidationError(message: "Add at least two postings before balancing.")
         }
+        // A single missing amount is the intended balancing leg, even if the
+        // keyboard is still on the deduction the user just finished entering.
+        let missing = draft.postings.indices.filter { index in
+            let text = draft.postings[index].amount.trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty || text == "-" || text == "−" || decimalFromInput(text) == 0
+        }
+        let focused = draft.postings.firstIndex { $0.id == focusedPostingID }
+        let index = missing.count == 1 ? missing[0] : (focused ?? draft.postings.count - 1)
+        let amount = try amount(forPostingAt: index, in: draft, accounts: accounts, commodities: commodities)
+        var updated = draft
+        updated.postings[index].amount = decimalInputString(amount)
+        return updated
+    }
+
+    private static func amount(forPostingAt index: Int, in draft: TransactionDraft, accounts: [Account], commodities: [Commodity]) throws -> Decimal {
+        let target = draft.postings[index]
         let byID = Dictionary(uniqueKeysWithValues: accounts.map { ($0.id, $0) })
         let defaults = Dictionary(grouping: commodities, by: \.ledgerID).compactMapValues { $0.first?.id }
         func currency(_ posting: PostingDraft) -> UUID? {
             let account = posting.accountID.flatMap { byID[$0] }
             return posting.commodityID ?? account?.commodityID ?? account.flatMap { defaults[$0.ledgerID] }
         }
-        guard let lastCurrency = currency(last) else {
-            throw ValidationError(message: "Choose an account and currency for the last posting.")
+        guard let targetCurrency = currency(target) else {
+            throw ValidationError(message: "Choose an account and currency for the posting to balance.")
         }
         var total = Decimal.zero
         var matchingCount = 0
-        for posting in draft.postings.dropLast() where currency(posting) == lastCurrency {
+        for (otherIndex, posting) in draft.postings.enumerated() where otherIndex != index && currency(posting) == targetCurrency {
             guard let amount = decimalFromInput(posting.amount) else {
                 throw ValidationError(message: "Enter a valid amount for each posting in this currency.")
             }

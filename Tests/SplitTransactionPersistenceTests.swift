@@ -60,6 +60,26 @@ final class SplitTransactionPersistenceTests: XCTestCase {
         try await verify(f, expected: [original.id: expected], queuedIDs: [original.id])
     }
 
+    func testBalancingPaycheckDepositPersistsEveryDeductionAndPostingIdentity() async throws {
+        let f = fixture(amounts: [Decimal(603981) / 100, -12500, Decimal(-3462) / 100, Decimal(486404) / 100, Decimal(13077) / 100, 1500], nilCurrencyIndices: [2])
+        let original = f.initial[0]
+        var draft = f.store.draft(for: original)
+        draft.postings[0].amount = ""
+        draft.postings[1].amount = "-12501.00"
+        draft = try PostingBalance.balancing(draft, focusedPostingID: draft.postings.last?.id,
+            accounts: f.store.data.accounts, commodities: f.store.data.commodities)
+        var expected = original.postings
+        expected[0].amount = Decimal(604081) / 100
+        expected[1].amount = -12501
+        assertDraft(draft, matches: expected)
+        let saved = await f.store.saveTransactionAndFlushAsync(draft)
+        XCTAssertTrue(saved)
+        try await verify(f, expected: [original.id: expected], queuedIDs: [original.id])
+        let reopened = reopen(f.directory)
+        await reopened.waitForCloudKitSyncIdle()
+        XCTAssertEqual(reopened.transaction(original.id)?.postings, expected)
+    }
+
     func testSixLegMulticurrencySplitPreservesOtherCurrencyAndLiteralNilCurrency() async throws {
         let f = fixture(amounts: [-140, 125, 15, -90, 80, 10], euroIndices: [3, 4, 5], nilCurrencyIndices: [2])
         let original = f.initial[0]

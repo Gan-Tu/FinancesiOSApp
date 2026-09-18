@@ -2,6 +2,85 @@ import XCTest
 @testable import FinancesClone
 
 @MainActor
+final class PostingBalanceTests: XCTestCase {
+    func testPaycheckBalancesTheOnlyMissingAmountAtAnyPosition() throws {
+        let ledger = UUID(), currency = Commodity(ledgerID: ledger, symbol: "USD", name: "Dollar")
+        let accounts = (0..<6).map { Account(ledgerID: ledger, name: "Posting \($0)", kind: .asset) }
+        var original = TransactionDraft(ledgerID: ledger)
+        original.postings = zip(accounts, ["6039.81", "-12500.00", "-34.62", "4864.04", "130.77", "1500.00"])
+            .map { PostingDraft(accountID: $0.0.id, amount: $0.1) }
+        for index in original.postings.indices {
+            for missing in ["", "  ", "-", "−", "0.00"] {
+                var draft = original
+                draft.postings[index].amount = missing
+                let result = try PostingBalance.balancing(draft,
+                    focusedPostingID: draft.postings[(index + 1) % draft.postings.count].id,
+                    accounts: accounts, commodities: [currency])
+                XCTAssertEqual(result, original, "Only the missing posting should change, including its position and metadata")
+                XCTAssertEqual(result.postings.compactMap { decimalFromInput($0.amount) }.reduce(0, +), 0)
+            }
+        }
+    }
+
+    func testNonzeroFocusedPostingIsRecalculatedWithoutChangingOtherExpressions() throws {
+        let ledger = UUID(), currency = UUID()
+        let account = Account(ledgerID: ledger, commodityID: currency, name: "Account", kind: .asset)
+        var draft = TransactionDraft(ledgerID: ledger)
+        draft.postings = ["-27215", "27200 + 5", "20"].map { PostingDraft(accountID: account.id, amount: $0) }
+        var expected = draft
+        expected.postings[0].amount = "-27225.00"
+        XCTAssertEqual(try PostingBalance.balancing(draft, focusedPostingID: draft.postings[0].id, accounts: [account]), expected)
+    }
+
+    func testNoFocusedOrMissingAmountKeepsLastPostingFallback() throws {
+        let ledger = UUID(), currency = UUID()
+        let account = Account(ledgerID: ledger, commodityID: currency, name: "Account", kind: .asset)
+        var draft = TransactionDraft(ledgerID: ledger)
+        draft.postings = ["-140", "125", "20"].map { PostingDraft(accountID: account.id, amount: $0) }
+        var expected = draft
+        expected.postings[2].amount = "15.00"
+        for focus in [nil, UUID()] as [UUID?] {
+            XCTAssertEqual(try PostingBalance.balancing(draft, focusedPostingID: focus, accounts: [account]), expected)
+        }
+    }
+
+    func testMultipleZeroAmountsUseFocusWithoutChangingOtherZeroLegs() throws {
+        let ledger = UUID(), currency = UUID()
+        let account = Account(ledgerID: ledger, commodityID: currency, name: "Account", kind: .asset)
+        var draft = TransactionDraft(ledgerID: ledger)
+        draft.postings = ["0.00", "125", "0.00"].map { PostingDraft(accountID: account.id, amount: $0) }
+        var expected = draft
+        expected.postings[0].amount = "-125.00"
+        XCTAssertEqual(try PostingBalance.balancing(draft, focusedPostingID: draft.postings[0].id, accounts: [account]), expected)
+    }
+
+    func testMissingFirstAmountUsesCurrencyOverridesAndPreservesOtherCurrency() throws {
+        let ledger = UUID(), usd = UUID(), eur = UUID()
+        let account = Account(ledgerID: ledger, commodityID: usd, name: "Account", kind: .asset)
+        var draft = TransactionDraft(ledgerID: ledger)
+        draft.postings = [PostingDraft(accountID: account.id, amount: ""), PostingDraft(accountID: account.id, amount: "100"),
+            PostingDraft(accountID: account.id, amount: "-80", commodityID: eur), PostingDraft(accountID: account.id, amount: "80", commodityID: eur)]
+        var expected = draft
+        expected.postings[0].amount = "-100.00"
+        XCTAssertEqual(try PostingBalance.balancing(draft, focusedPostingID: draft.postings[3].id, accounts: [account]), expected)
+    }
+
+    func testIncompleteAmountsAreNotSilentlyTreatedAsZero() throws {
+        let ledger = UUID(), currency = UUID()
+        let account = Account(ledgerID: ledger, commodityID: currency, name: "Account", kind: .asset)
+        for amounts in [["", "", "15"], ["", "1 +", "15"], ["", "invalid", "15"]] {
+            var draft = TransactionDraft(ledgerID: ledger)
+            draft.postings = amounts.map { PostingDraft(accountID: account.id, amount: $0) }
+            XCTAssertThrowsError(try PostingBalance.balancing(draft, focusedPostingID: draft.postings[0].id, accounts: [account]))
+        }
+        XCTAssertThrowsError(try PostingBalance.balancing(TransactionDraft(ledgerID: ledger), accounts: [account]))
+        var missingCurrency = TransactionDraft(ledgerID: ledger)
+        missingCurrency.postings = [PostingDraft(amount: ""), PostingDraft(accountID: account.id, amount: "15")]
+        XCTAssertThrowsError(try PostingBalance.balancing(missingCurrency, accounts: [account]))
+    }
+}
+
+@MainActor
 final class CompanionParityTests: XCTestCase {
     func testCashFlowSeparatesRefundsFromSpendingAndUsesDefaultCurrency() throws {
         var data = DemoData.fixture()
@@ -53,7 +132,7 @@ final class CompanionParityTests: XCTestCase {
         draft.postings = transaction.postings.map { PostingDraft(accountID: $0.accountID, amount: "") }
         draft = PostingBalance.settingAmount("25", at: 0, in: draft, accounts: data.accounts, commodities: data.commodities)
         XCTAssertEqual(decimalFromInput(draft.postings[1].amount), -25)
-        XCTAssertEqual(try PostingBalance.amount(forLastPostingIn: draft, accounts: data.accounts, commodities: data.commodities), -25)
+        XCTAssertEqual(try PostingBalance.balancing(draft, accounts: data.accounts, commodities: data.commodities).postings[1].amount, "-25.00")
     }
 
     func testReopeningEmptyTemplatesDoesNotManufactureNewRecords() throws {
@@ -89,11 +168,11 @@ final class CompanionParityTests: XCTestCase {
         let c = Account(ledgerID: ledger, commodityID: usd, name: "USD Expense", kind: .expense)
         var draft = TransactionDraft(ledgerID: ledger)
         draft.postings = [PostingDraft(accountID: a.id, amount: "-100"), PostingDraft(accountID: b.id, amount: "80"), PostingDraft(accountID: c.id, amount: "")]
-        XCTAssertEqual(try PostingBalance.amount(forLastPostingIn: draft, accounts: [a,b,c]), 100)
+        XCTAssertEqual(try PostingBalance.balancing(draft, accounts: [a,b,c]).postings[2].amount, "100.00")
         draft.postings = [draft.postings[0], draft.postings[1]]
-        XCTAssertThrowsError(try PostingBalance.amount(forLastPostingIn: draft, accounts: [a,b,c]))
+        XCTAssertThrowsError(try PostingBalance.balancing(draft, accounts: [a,b,c]))
         draft.postings = [PostingDraft(accountID: a.id, amount: "bad amount"), PostingDraft(accountID: c.id, amount: "")]
-        XCTAssertThrowsError(try PostingBalance.amount(forLastPostingIn: draft, accounts: [a,b,c]))
+        XCTAssertThrowsError(try PostingBalance.balancing(draft, accounts: [a,b,c]))
     }
 
     func testAccountReorderingAndGroupingPersistAndRejectCycles() throws {

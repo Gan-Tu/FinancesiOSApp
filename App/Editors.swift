@@ -188,7 +188,7 @@ struct TransactionEditorView: View {
                     }
                     .accessibilityLabel("Posting")
                     Spacer()
-                    Button("Balance") { balanceLastPosting() }.font(.footnote).foregroundStyle(.tint)
+                    Button("Balance") { balancePosting() }.font(.footnote).foregroundStyle(.tint)
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, 8)
@@ -445,10 +445,10 @@ struct TransactionEditorView: View {
         }
     }
 
-    private func balanceLastPosting() {
+    private func balancePosting() {
         do {
-            let amount = try PostingBalance.amount(forLastPostingIn: draft, accounts: store.data.accounts, commodities: store.data.commodities)
-            draft.postings[draft.postings.count - 1].amount = decimalInputString(amount)
+            draft = try PostingBalance.balancing(draft, focusedPostingID: focusedAmountID,
+                accounts: store.data.accounts, commodities: store.data.commodities)
         } catch { store.validationError = ValidationError(message: error.localizedDescription) }
     }
 

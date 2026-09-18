@@ -13,8 +13,8 @@ final class SplitEditorIntegrityUITests: XCTestCase {
     private func id(_ value: Int) -> String {
         String(format: "00000000-0000-0000-0000-%012llX", Int64(value))
     }
-    private func leg(_ account: Int, _ currency: Int?, _ amount: Int) -> Leg {
-        Leg(account: id(account), currency: currency.map(id) ?? "nil", amount: Decimal(amount))
+    private func leg(_ account: Int, _ currency: Int?, _ amount: Decimal) -> Leg {
+        Leg(account: id(account), currency: currency.map(id) ?? "nil", amount: amount)
     }
     private var unequal: [Leg] { [leg(20, 2, -27215), leg(21, 2, 27200), leg(22, nil, 15)] }
     private var mixed: [Leg] { [leg(20, 2, -100), leg(21, nil, 100), leg(23, 3, -80), leg(24, nil, 80)] }
@@ -96,6 +96,45 @@ final class SplitEditorIntegrityUITests: XCTestCase {
         XCTAssertTrue(fee.isHittable); fee.press(forDuration: 1)
         let remove = app.buttons["Remove Posting"]
         XCTAssertTrue(remove.waitForExistence(timeout: 5)); remove.tap()
+    }
+
+    func testBalanceFillsMissingPaycheckDepositWithoutChangingDeductions() throws {
+        let app = XCUIApplication(); defer { app.terminate() }
+        launch(app); open(app, transaction: 104)
+        let expected = [leg(20, 2, Decimal(603981) / 100), leg(26, 2, -12500), leg(27, 2, Decimal(-3462) / 100),
+            leg(28, 2, Decimal(486404) / 100), leg(29, 2, Decimal(13077) / 100), leg(30, 2, 1500)]
+        let originalIDs = try assertLegs(app, expected)
+        enter("", into: fields(app).element(boundBy: 0))
+        XCTAssertFalse(app.navigationBars["Edit Transaction"].buttons["Save"].isEnabled)
+        // Reproduce tapping Balance while the last deduction still has focus.
+        fields(app).element(boundBy: 5).tap()
+        app.buttons["Balance"].tap()
+        XCTAssertEqual(try assertLegs(app, expected), originalIDs)
+        XCTAssertTrue(app.navigationBars["Edit Transaction"].buttons["Save"].isEnabled)
+        dismissKeyboard(app)
+        try assertLegs(app, expected)
+
+        enter("0.00", into: fields(app).element(boundBy: 0))
+        dismissKeyboard(app)
+        app.buttons["Balance"].tap()
+        try assertLegs(app, expected)
+        appendNote(" balanced deposit", in: app)
+        save(app); reload(app, transaction: 104)
+        XCTAssertEqual(try assertLegs(app, expected), originalIDs)
+    }
+
+    func testBalanceRecalculatesFocusedNonzeroPostingAndPersistsIt() throws {
+        let app = XCUIApplication(); defer { app.terminate() }
+        launch(app); open(app, transaction: 100)
+        enter("20", into: fields(app).element(boundBy: 2))
+        fields(app).element(boundBy: 0).tap()
+        app.buttons["Balance"].tap()
+        let expected = [leg(20, 2, -27220), leg(21, 2, 27200), leg(22, nil, 20)]
+        try assertLegs(app, expected)
+        dismissKeyboard(app)
+        try assertLegs(app, expected)
+        save(app); reload(app, transaction: 100)
+        try assertLegs(app, expected)
     }
 
     func testRemovingFeeThenEqualsDoesNotRewriteUntouchedAmount() throws {

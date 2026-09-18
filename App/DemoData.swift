@@ -214,6 +214,12 @@ enum DemoData {
         let euroBank = Account(id: id(23), ledgerID: ledger.id, parentID: assets.id, commodityID: eur.id, name: "SYNTHETIC Euro Bank", kind: .asset, listIndex: 1)
         let euroExpense = Account(id: id(24), ledgerID: ledger.id, parentID: expenses.id, commodityID: eur.id, name: "SYNTHETIC Euro Expense", kind: .expense, listIndex: 2)
         let alternate = Account(id: id(25), ledgerID: ledger.id, parentID: expenses.id, commodityID: usd.id, name: "SYNTHETIC Alternate", kind: .expense, listIndex: 3)
+        let income = Account(id: id(12), ledgerID: ledger.id, commodityID: usd.id, name: "Income", kind: .income, listIndex: 2)
+        let salary = Account(id: id(26), ledgerID: ledger.id, parentID: income.id, commodityID: usd.id, name: "SYNTHETIC Salary", kind: .income)
+        let bonus = Account(id: id(27), ledgerID: ledger.id, parentID: income.id, commodityID: usd.id, name: "SYNTHETIC Bonus", kind: .income, listIndex: 1)
+        let tax = Account(id: id(28), ledgerID: ledger.id, parentID: expenses.id, commodityID: usd.id, name: "SYNTHETIC Tax", kind: .expense, listIndex: 4)
+        let hsa = Account(id: id(29), ledgerID: ledger.id, parentID: assets.id, commodityID: usd.id, name: "SYNTHETIC HSA", kind: .asset, listIndex: 2)
+        let retirement = Account(id: id(30), ledgerID: ledger.id, parentID: assets.id, commodityID: usd.id, name: "SYNTHETIC Retirement", kind: .asset, listIndex: 3)
         let today = Calendar.current.startOfDay(for: Date()).addingTimeInterval(12 * 3600)
         func transaction(_ index: Int, _ note: String, _ values: [(Int, Int?, Int)], date: Date? = nil, rule: RecurrenceRule? = nil) -> LedgerTransaction {
             LedgerTransaction(id: id(index), ledgerID: ledger.id, date: date ?? today,
@@ -229,12 +235,18 @@ enum DemoData {
             transaction(102, "SYNTHETIC Two Leg", [(20, 2, -100), (21, 2, 100)]),
             transaction(103, "SYNTHETIC Remove Fee", [(20, 2, -100), (21, 2, 90), (22, 2, 10)])
         ]
+        rows.append(LedgerTransaction(id: id(104), ledgerID: ledger.id, date: today,
+            payee: "SYNTHETIC Employer", note: "SYNTHETIC Paycheck", number: "SYN-104", cleared: true,
+            postings: zip([20, 26, 27, 28, 29, 30], [603981, -1250000, -3462, 486404, 13077, 150000]).enumerated().map { index, value in
+                Posting(id: id(1040 + index), accountID: id(value.0), commodityID: usd.id,
+                    amount: Decimal(value.1) / 100, listIndex: index)
+            }))
         let rule = RecurrenceRule(id: id(200), frequency: .daily, occurrenceCount: 3)
         for offset in 0..<3 {
             rows.append(transaction(110 + offset, "SYNTHETIC Recurrence", unequal,
                 date: Calendar.current.date(byAdding: .day, value: offset - 2, to: today)!, rule: rule))
         }
-        return JournalData(ledgers: [ledger], commodities: [usd, eur], accounts: [assets, expenses, bank, expense, fee, euroBank, euroExpense, alternate],
+        return JournalData(ledgers: [ledger], commodities: [usd, eur], accounts: [assets, expenses, bank, expense, fee, euroBank, euroExpense, alternate, income, salary, bonus, tax, hsa, retirement],
             transactions: rows, selectedLedgerID: ledger.id, syncEnabled: false)
     }
 
