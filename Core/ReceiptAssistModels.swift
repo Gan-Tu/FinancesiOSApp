@@ -112,6 +112,7 @@ struct ReceiptAnalysisResponse: Decodable, Sendable {
     }
     struct Suggestion: Decodable, Sendable {
         var date: String?
+        var dateTime: String? = nil
         var payee: String?
         var note: String?
         var invoiceNumber: String?
@@ -129,6 +130,7 @@ enum ReceiptProposalField: String, CaseIterable, Identifiable {
 }
 struct ReceiptDraftProposal {
     var date: Date?
+    var dateIncludesTime = true
     var note: String?
     var payee: String?
     var number: String?
@@ -169,17 +171,43 @@ struct ReceiptDraftProposal {
         if hasCounter && !suggestion.postings.contains(where: { $0.role == "source" }) {
             postings.insert(PostingDraft(), at: 0)
         }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd"
-        formatter.isLenient = false
-        let date = suggestion.date.flatMap { formatter.date(from: $0) }.flatMap {
-            Calendar.current.date(bySettingHour: 12, minute: 0, second: 0, of: $0)
-        }
+        let rawDate = suggestion.dateTime ?? suggestion.date
+        let parsed = rawDate.flatMap(Self.receiptDate)
+        if rawDate != nil && parsed == nil { throw AssistError.message("Receipt date or time is invalid.") }
         return Self(
-            date: date, note: suggestion.note, payee: suggestion.payee,
+            date: parsed?.date, dateIncludesTime: parsed?.includesTime ?? false, note: suggestion.note, payee: suggestion.payee,
             number: suggestion.invoiceNumber ?? suggestion.orderNumber,
             postings: response.postingsApplicable || hasCounter ? postings : nil)
+    }
+    static func receiptDate(_ value: String) -> (date: Date, includesTime: Bool)? {
+        let pattern = #"^(\d{4})-(\d{2})-(\d{2})(?:T([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d)(?:\.(\d{1,9}))?)?(Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)?)?$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: value, range: NSRange(value.startIndex..., in: value)) else { return nil }
+        func part(_ index: Int) -> String? {
+            guard let range = Range(match.range(at: index), in: value) else { return nil }
+            return String(value[range])
+        }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        if let zone = part(8) {
+            let seconds: Int
+            if zone == "Z" { seconds = 0 }
+            else {
+                let pieces = zone.dropFirst().split(separator: ":").compactMap { Int($0) }
+                guard pieces.count == 2 else { return nil }
+                seconds = (pieces[0] * 3600 + pieces[1] * 60) * (zone.first == "-" ? -1 : 1)
+            }
+            guard let timeZone = TimeZone(secondsFromGMT: seconds) else { return nil }
+            calendar.timeZone = timeZone
+        }
+        let components = DateComponents(year: Int(part(1)!), month: Int(part(2)!), day: Int(part(3)!),
+            hour: Int(part(4) ?? "0"), minute: Int(part(5) ?? "0"), second: Int(part(6) ?? "0"))
+        guard let date = calendar.date(from: components) else { return nil }
+        let actual = calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
+        guard actual.year == components.year, actual.month == components.month, actual.day == components.day,
+              actual.hour == components.hour, actual.minute == components.minute, actual.second == components.second else { return nil }
+        let fraction = part(7).flatMap { Double("0." + $0) } ?? 0
+        return (date.addingTimeInterval(fraction), part(4) != nil)
     }
     mutating func keepCurrentAccountsForReview(
         response: ReceiptAnalysisResponse, current: TransactionDraft, accounts: [Account]
@@ -221,7 +249,17 @@ struct ReceiptDraftProposal {
     }
     func apply(_ field: ReceiptProposalField, to draft: inout TransactionDraft) {
         switch field {
-        case .date: if let date { draft.date = date }
+        case .date:
+            if let date {
+                if dateIncludesTime { draft.date = date }
+                else {
+                    let clock = Calendar.current.dateComponents([.hour, .minute, .second], from: draft.date)
+                    let fraction = draft.date.timeIntervalSinceReferenceDate - floor(draft.date.timeIntervalSinceReferenceDate)
+                    if let combined = Calendar.current.date(bySettingHour: clock.hour!, minute: clock.minute!, second: clock.second!, of: date) {
+                        draft.date = combined.addingTimeInterval(fraction)
+                    }
+                }
+            }
         case .note: if let note { draft.note = note }
         case .payee: if let payee { draft.payee = payee }
         case .number: if let number { draft.number = number }
@@ -230,7 +268,7 @@ struct ReceiptDraftProposal {
     }
     static func equal(_ field: ReceiptProposalField, _ a: TransactionDraft, _ b: TransactionDraft) -> Bool {
         switch field {
-        case .date: Calendar.current.isDate(a.date, inSameDayAs: b.date)
+        case .date: a.date == b.date
         case .note: a.note == b.note
         case .payee: a.payee == b.payee
         case .number: a.number == b.number

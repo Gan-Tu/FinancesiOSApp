@@ -493,7 +493,7 @@ struct ReceiptAnalysisPanel: View {
     }
     private func text(_ field: ReceiptProposalField, draft: TransactionDraft) -> String {
         switch field {
-        case .date: draft.date.formatted(date: .abbreviated, time: .omitted)
+        case .date: draft.date.formatted(date: .abbreviated, time: .shortened)
         case .note: draft.note
         case .payee: draft.payee
         case .number: draft.number

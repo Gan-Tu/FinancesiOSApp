@@ -98,6 +98,43 @@ private actor AssistTestTransport: CloudKitSyncTransport {
         await restored.refresh()
         XCTAssertTrue(restored.metadata.isEmpty)
     }
+    private func datedReceipt(_ date: String, dateTime: String? = nil) throws -> ReceiptAnalysisResponse {
+        var suggestion: [String: Any] = ["date": date, "postings": [], "warnings": []]
+        suggestion["dateTime"] = dateTime
+        let data = try JSONSerialization.data(withJSONObject: ["suggestion": suggestion, "postingsApplicable": false])
+        return try JSONDecoder().decode(ReceiptAnalysisResponse.self, from: data)
+    }
+    func testReceiptTimeIsAppliedAndSameDayManualEditsRemainProtected() throws {
+        let response = try datedReceipt("2026-09-19", dateTime: "2026-09-19T19:22:00")
+        let proposal = try ReceiptDraftProposal.make(response, accounts: [], commodities: [])
+        var initial = TransactionDraft()
+        initial.date = try XCTUnwrap(ReceiptDraftProposal.receiptDate("2026-09-19T12:00:00")?.date)
+        var draft = initial
+        XCTAssertTrue(proposal.autofill(&draft, initial: initial, protected: []).isEmpty)
+        let clock = Calendar.current.dateComponents([.hour, .minute], from: draft.date)
+        XCTAssertEqual(clock.hour, 19); XCTAssertEqual(clock.minute, 22)
+        XCTAssertFalse(ReceiptDraftProposal.equal(.date, initial, draft))
+        var edited = initial
+        edited.date = initial.date.addingTimeInterval(3600)
+        XCTAssertEqual(proposal.autofill(&edited, initial: initial, protected: [.date]), [.date])
+        XCTAssertEqual(edited.date, initial.date.addingTimeInterval(3600))
+    }
+    func testDateOnlyReceiptPreservesTheDraftClock() throws {
+        let proposal = try ReceiptDraftProposal.make(datedReceipt("2026-09-19"), accounts: [], commodities: [])
+        var draft = TransactionDraft()
+        draft.date = try XCTUnwrap(ReceiptDraftProposal.receiptDate("2026-09-20T08:17:26.125")?.date)
+        proposal.apply(.date, to: &draft)
+        let expected = try XCTUnwrap(ReceiptDraftProposal.receiptDate("2026-09-19T08:17:26.125")?.date)
+        XCTAssertEqual(draft.date.timeIntervalSinceReferenceDate, expected.timeIntervalSinceReferenceDate, accuracy: 0.001)
+    }
+    func testReceiptTimestampOffsetsAndInvalidClocks() throws {
+        let offset = try XCTUnwrap(ReceiptDraftProposal.receiptDate("2026-09-19T00:22:00+14:00")?.date)
+        let utc = try XCTUnwrap(ReceiptDraftProposal.receiptDate("2026-09-18T10:22:00Z")?.date)
+        XCTAssertEqual(offset, utc)
+        for invalid in ["2026-02-30T19:22:00", "2026-09-19T25:22:00", "2026-09-19T19:60:00", "2026-09-19 trailing"] {
+            XCTAssertNil(ReceiptDraftProposal.receiptDate(invalid))
+        }
+    }
     func testPartialCategoriesAndUserEditsArePreserved() throws {
         let ledger = UUID()
         let parent = UUID()
