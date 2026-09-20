@@ -31,7 +31,7 @@ enum ShellSheet: Identifiable {
     case settings
     case cloudSync
     case quickSearch
-    case newTransaction(UUID)
+    case newTransaction(UUID, accountID: UUID?)
     case templates(UUID)
 
     var id: String {
@@ -40,7 +40,7 @@ enum ShellSheet: Identifiable {
         case .settings: "settings"
         case .cloudSync: "cloud-sync"
         case .quickSearch: "quick-search"
-        case .newTransaction(let id): "new-transaction-\(id.uuidString)"
+        case .newTransaction(let id, let accountID): "new-transaction-\(id.uuidString)-\(accountID?.uuidString ?? "")"
         case .templates(let id): "templates-\(id.uuidString)"
         }
     }

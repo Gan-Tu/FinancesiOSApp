@@ -5,6 +5,60 @@ import SQLite3
 
 @MainActor
 final class TemplateAndNavigationPerformanceTests: XCTestCase {
+
+    @MainActor
+    func testNewDraftAccountContextOverridesDefaultsByRoleAndPreservesOtherFields() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let ledger = Ledger(name: "Context journal")
+        let otherLedger = Ledger(name: "Other journal")
+        let currencyID = UUID()
+        let roots = AccountKind.allCases.map { Account(ledgerID: ledger.id, name: $0.title, kind: $0) }
+        let bank = Account(ledgerID: ledger.id, parentID: roots.first { $0.kind == .asset }?.id,
+            commodityID: currencyID, name: "Default bank", kind: .asset)
+        let food = Account(ledgerID: ledger.id, parentID: roots.first { $0.kind == .expense }?.id,
+            commodityID: currencyID, name: "Default category", kind: .expense)
+        let contexts = AccountKind.allCases.map {
+            kind in Account(ledgerID: ledger.id, parentID: roots.first { $0.kind == kind }?.id,
+                commodityID: currencyID, name: "Selected \(kind.title)", kind: kind)
+        }
+        let foreign = Account(ledgerID: otherLedger.id, name: "Foreign", kind: .asset)
+        let data = JournalData(ledgers: [ledger, otherLedger],
+            commodities: [Commodity(id: currencyID, ledgerID: ledger.id, symbol: "USD", name: "Dollar")],
+            accounts: roots + [bank, food, foreign] + contexts, transactions: [], selectedLedgerID: ledger.id)
+        let store = MobileLedgerStore(supportDirectory: directory, initialData: data)
+        XCTAssertFalse(store.requiresJournalRecovery)
+        var draft = TransactionDraft(ledgerID: ledger.id)
+        draft.note = "Template note"; draft.payee = "Template payee"; draft.cleared = false
+        // Category-first templates must retain their posting order.
+        draft.postings = [PostingDraft(accountID: food.id, amount: "0.00"), PostingDraft(accountID: bank.id, amount: "0.00")]
+        for context in contexts {
+            let result = store.applyingAccountContext(context.id, to: draft)
+            let category = context.kind == .income || context.kind == .expense
+            XCTAssertEqual(result.postings.map(\.accountID), category ? [context.id, bank.id] : [food.id, context.id])
+            XCTAssertEqual(result.postings[category ? 0 : 1].commodityID, currencyID)
+            XCTAssertEqual(result.postings.map(\.id), draft.postings.map(\.id))
+            XCTAssertEqual(result.note, draft.note)
+            XCTAssertEqual(result.payee, draft.payee)
+            XCTAssertEqual(result.cleared, draft.cleared)
+            var blank = draft
+            blank.postings = [PostingDraft(accountID: nil, amount: "0.00"), PostingDraft(accountID: nil, amount: "0.00")]
+            let filled = store.applyingAccountContext(context.id, to: blank)
+            XCTAssertEqual(filled.postings.map(\.accountID), category ? [nil, context.id] : [context.id, nil])
+        }
+        XCTAssertEqual(store.applyingAccountContext(nil, to: draft), draft)
+        XCTAssertEqual(store.applyingAccountContext(UUID(), to: draft), draft)
+        XCTAssertEqual(store.applyingAccountContext(foreign.id, to: draft), draft)
+        var existing = draft; existing.id = UUID()
+        XCTAssertEqual(store.applyingAccountContext(contexts[0].id, to: existing), existing)
+        var duplicate = draft; duplicate.isDuplicate = true
+        XCTAssertEqual(store.applyingAccountContext(contexts[0].id, to: duplicate), duplicate)
+        let selectedBank = try XCTUnwrap(contexts.first { $0.kind == .asset })
+        var transfer = draft
+        transfer.postings = [PostingDraft(accountID: bank.id, amount: "0.00"), PostingDraft(accountID: selectedBank.id, amount: "0.00")]
+        let swapped = store.applyingAccountContext(selectedBank.id, to: transfer)
+        XCTAssertEqual(swapped.postings.map(\.accountID), [selectedBank.id, bank.id])
+    }
     func testTemplateExclusionRestorationAndPermanentDeletionSurviveReload() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

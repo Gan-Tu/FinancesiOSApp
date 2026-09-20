@@ -3,7 +3,7 @@ import UIKit
 
 enum EditorRoute: Identifiable {
     case transaction(TransactionDraft, String, scanInvoice: Bool = false)
-    case newFromTemplate(TransactionTemplate, String)
+    case newFromTemplate(TransactionTemplate, String, accountID: UUID? = nil)
     case incoming(IncomingTransactionRequest)
     case account(MobileAccountDraft)
     case currency(CurrencyDraft)
@@ -15,8 +15,8 @@ enum EditorRoute: Identifiable {
         switch self {
         case .transaction(let draft, let title, let scanInvoice):
             "transaction-\(draft.id?.uuidString ?? "new")-\(title)-\(scanInvoice)"
-        case .newFromTemplate(let template, let title):
-            "template-transaction-\(template.id)-\(title)"
+        case .newFromTemplate(let template, let title, let accountID):
+            "template-transaction-\(template.id)-\(title)-\(accountID?.uuidString ?? "")"
         case .incoming(let request): "incoming-\(request.id)"
         case .account(let draft):
             "account-\(draft.id?.uuidString ?? "new")"
@@ -124,8 +124,8 @@ struct AppShellView: View {
                 MobileCloudSyncSheet()
             case .templates(let ledgerID):
                 TemplateManagementSheet(ledgerID: ledgerID)
-            case .newTransaction(let ledgerID):
-                TransactionTemplatePicker(ledgerID: ledgerID, selection: $templateSelection)
+            case .newTransaction(let ledgerID, let accountID):
+                TransactionTemplatePicker(ledgerID: ledgerID, accountID: accountID, selection: $templateSelection)
             case .quickSearch:
                 QuickSearchSheet(navigationPath: $navigationPath, presentedSheet: $presentedSheet, route: $route, contextLedgerID: currentLedgerID, contextScope: currentRegisterScope, initialQuery: currentSearchQuery)
             }
@@ -210,8 +210,8 @@ struct AppShellView: View {
         templateSelection = nil
         guard systemEntries.requests.isEmpty else { handleSystemEntry(); return }
         switch selection {
-        case .template(let template):
-            route = .newFromTemplate(template, "New Transaction")
+        case .template(let template, let accountID):
+            route = .newFromTemplate(template, "New Transaction", accountID: accountID)
         case .customize(let ledgerID):
             presentedSheet = .templates(ledgerID)
         case nil:
@@ -228,7 +228,7 @@ struct AppShellView: View {
                 newTransaction: {
                     guard let ledgerID = currentLedgerID else { return }
                     FinancePerformanceTrace.begin("template-menu")
-                    presentedSheet = .newTransaction(ledgerID)
+                    presentedSheet = .newTransaction(ledgerID, accountID: currentAccountID)
                 },
                 openAssistant: {
                     let context = AssistantContext(journalID: currentLedgerID, accountID: currentAccountID, transactionID: currentTransactionID)
@@ -285,7 +285,7 @@ struct AppShellView: View {
     }
 
     private var currentAccountID: UUID? {
-        if case .account(let id) = navigationPath.last { return id }
+        if case .account(let id) = currentRegisterScope { return id }
         return nil
     }
     private var currentTransactionID: UUID? {
@@ -318,7 +318,7 @@ struct AppShellView: View {
 }
 
 private enum TemplatePickerSelection {
-    case template(TransactionTemplate)
+    case template(TransactionTemplate, accountID: UUID?)
     case customize(UUID)
 }
 
@@ -328,6 +328,7 @@ private struct TransactionTemplatePicker: View {
     @ScaledMetric(relativeTo: .title3) private var rowHeight = 56.0
     @State private var actionsHeight = 0.0
     let ledgerID: UUID
+    let accountID: UUID?
     @Binding var selection: TemplatePickerSelection?
 
     private var templates: [TransactionTemplate] {
@@ -348,7 +349,7 @@ private struct TransactionTemplatePicker: View {
                         Divider()
                         action(template.name) {
                             FinancePerformanceTrace.begin("template-editor")
-                            selection = .template(template)
+                            selection = .template(template, accountID: accountID)
                             dismiss()
                         }
                     }
@@ -533,10 +534,13 @@ struct EditorSheet: View {
         switch route {
         case .transaction(let draft, let title, let scanInvoice):
             NavigationStack { TransactionEditorView(title: title, initialDraft: draft, scanInvoice: scanInvoice) }
-        case .newFromTemplate(let template, let title):
-            let draft = store.draft(for: template)
+        case .newFromTemplate(let template, let title, let accountID):
+            let draft = store.applyingAccountContext(accountID, to: store.draft(for: template))
             TemplateTransactionEntryView(title: title, initialDraft: draft,
-                accountPostingIDs: store.templateAccountSelectionPostingIDs(in: draft), scanInvoice: template.scanInvoice)
+                accountPostingIDs: store.templateAccountSelectionPostingIDs(in: draft).filter { id in
+                    // An explicitly viewed category is already chosen, even when it has children.
+                    accountID == nil || draft.postings.first(where: { $0.id == id })?.accountID != accountID
+                }, scanInvoice: template.scanInvoice)
         case .incoming(let request): IncomingTransactionView(request: request)
         case .account(let draft): AccountEditorView(initialDraft: draft)
         case .currency(let draft): CurrencyEditorView(initialDraft: draft)

@@ -1,6 +1,31 @@
 import XCTest
 
 final class CompanionFlowTests: XCTestCase {
+    @MainActor func testNewTransactionUsesViewedAccountThroughTemplatePicker() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--demo", "--reset-demo"]
+        app.launch()
+        defer { app.terminate() }
+        let personal = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Personal,")).firstMatch
+        XCTAssertTrue(personal.waitForExistence(timeout: 10)); personal.tap()
+        for (name, kind, template) in [("Cash", 0, "Income"), ("Salary", 2, "Income"), ("Food & Dining", 3, "Expense")] {
+            app.buttons["account-kind-title-\(kind)"].tap()
+            let account = app.staticTexts[name].firstMatch
+            for _ in 0..<4 {
+                if account.exists && account.isHittable { break }
+                app.swipeUp()
+            }
+            XCTAssertTrue(account.waitForExistence(timeout: 5), name); account.tap()
+            app.buttons["New Transaction"].tap()
+            app.buttons[template].tap()
+            XCTAssertTrue(app.navigationBars["New Transaction"].waitForExistence(timeout: 5), "The current category must not require selecting it again")
+            XCTAssertTrue(app.textFields["Amount for \(name)"].exists, "The draft must inherit \(name)")
+            app.navigationBars["New Transaction"].buttons["Cancel"].tap()
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+        }
+    }
+
     @MainActor func testTransactionDetailValuesCanBeCopiedWithoutEditing() throws {
         continueAfterFailure = false
         let app = XCUIApplication()

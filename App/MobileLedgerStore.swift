@@ -2086,15 +2086,7 @@ final class MobileLedgerStore: ObservableObject {
                 PostingDraft(accountID: secondAsset ?? asset, amount: "0.00")
             ]
         }
-        if let accountID, let context = account(accountID), context.ledgerID == ledgerID {
-            let index = draft.postings.firstIndex { posting in
-                guard let candidate = account(posting.accountID) else { return false }
-                return candidate.kind == context.kind || ([AccountKind.asset, .liability].contains(candidate.kind) && [AccountKind.asset, .liability].contains(context.kind))
-            } ?? 0
-            draft.postings[index].accountID = accountID
-            draft.postings[index].commodityID = context.commodityID
-        }
-        return draft
+        return applyingAccountContext(accountID, to: draft)
     }
 
     func draft(for transaction: LedgerTransaction?) -> TransactionDraft {
@@ -2124,6 +2116,32 @@ final class MobileLedgerStore: ObservableObject {
         draft.attachmentContainer = transaction.attachment
         draft.attachments = transaction.attachment?.assets ?? []
         return draft
+    }
+
+    /// The visible account wins over new-entry defaults, including template defaults.
+    /// Match the posting's role so templates keep their ordering and other splits.
+    func applyingAccountContext(_ accountID: UUID?, to draft: TransactionDraft) -> TransactionDraft {
+        guard draft.id == nil, !draft.isDuplicate,
+              let context = account(accountID), context.ledgerID == draft.ledgerID,
+              !draft.postings.isEmpty else { return draft }
+        let isCategory = context.kind == .income || context.kind == .expense
+        let existingIndex = draft.postings.firstIndex { $0.accountID == context.id }
+        if isCategory, existingIndex != nil { return draft }
+        let fallbackIndex = isCategory ? min(1, draft.postings.count - 1) : 0
+        let unspecifiedIndex = draft.postings[fallbackIndex].accountID == nil
+            ? fallbackIndex : draft.postings.firstIndex { $0.accountID == nil }
+        let index = draft.postings.firstIndex { posting in
+            guard let candidate = account(posting.accountID) else { return false }
+            return (candidate.kind == .income || candidate.kind == .expense) == isCategory
+        } ?? unspecifiedIndex ?? fallbackIndex
+        var result = draft
+        if let existingIndex, existingIndex != index {
+            result.postings[existingIndex].accountID = draft.postings[index].accountID
+            result.postings[existingIndex].commodityID = draft.postings[index].commodityID
+        }
+        result.postings[index].accountID = context.id
+        result.postings[index].commodityID = context.commodityID
+        return result
     }
 
     func draft(for template: TransactionTemplate) -> TransactionDraft {
