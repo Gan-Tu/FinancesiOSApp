@@ -92,9 +92,10 @@ final class SplitEditorIntegrityUITests: XCTestCase {
         app.terminate(); launch(app, reset: false); open(app, transaction: transaction)
     }
     private func removeFee(_ app: XCUIApplication) {
+        let feeID = fields(app).element(boundBy: 2).identifier.components(separatedBy: "|")[1]
         let fee = app.buttons["SYNTHETIC Fee"]
-        XCTAssertTrue(fee.isHittable); fee.press(forDuration: 1)
-        let remove = app.buttons["Remove Posting"]
+        XCTAssertTrue(fee.isHittable); fee.swipeLeft()
+        let remove = app.buttons["delete-posting-\(feeID)"]
         XCTAssertTrue(remove.waitForExistence(timeout: 5)); remove.tap()
     }
 
@@ -158,6 +159,34 @@ final class SplitEditorIntegrityUITests: XCTestCase {
         alert.buttons["OK"].tap(); app.navigationBars["Edit Transaction"].buttons["Cancel"].tap()
         reload(app, transaction: 103)
         try assertLegs(app, [leg(20, 2, -100), leg(21, 2, 90), leg(22, 2, 10)])
+    }
+
+    func testSwipeDeletesMiddleAccountAndPersistsRemainingPostings() throws {
+        let app = XCUIApplication(); defer { app.terminate() }
+        launch(app); open(app, transaction: 103)
+        let originalIDs = try assertLegs(app, [leg(20, 2, -100), leg(21, 2, 90), leg(22, 2, 10)])
+        fields(app).element(boundBy: 1).tap()
+        app.buttons["SYNTHETIC Expense"].swipeLeft()
+        let delete = app.buttons["delete-posting-\(originalIDs[1])"]
+        XCTAssertTrue(delete.waitForExistence(timeout: 5))
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "Transaction account swipe deletion"; shot.lifetime = .keepAlways; add(shot)
+        delete.tap()
+        let remainingIDs = [originalIDs[0], originalIDs[2]]
+        XCTAssertEqual(try assertLegs(app, [leg(20, 2, -100), leg(22, 2, 10)]), remainingIDs)
+        app.buttons["SYNTHETIC Fee"].swipeLeft()
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "delete-posting-")).firstMatch.exists, "Keep the two required transaction accounts")
+        app.buttons["Balance"].tap()
+        let balanced = [leg(20, 2, -100), leg(22, 2, 100)]
+        try assertLegs(app, balanced)
+        enter("-125", into: fields(app).element(boundBy: 0))
+        try assertLegs(app, [leg(20, 2, -125), leg(22, 2, 125)])
+        enter("150", into: fields(app).element(boundBy: 1))
+        let edited = [leg(20, 2, -150), leg(22, 2, 150)]
+        try assertLegs(app, edited)
+        dismissKeyboard(app)
+        save(app); reload(app, transaction: 103)
+        XCTAssertEqual(try assertLegs(app, edited), remainingIDs)
     }
 
     func testUnequalThreeLegFocusEquivalentWritebackAccountPickerAndNoteSave() throws {

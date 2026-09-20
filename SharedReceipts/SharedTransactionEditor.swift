@@ -58,7 +58,12 @@ struct SharedTransactionEditor: View {
                 VStack(spacing: 7) {
                     FinanceFormCard {
                         ForEach(draft.postings) { posting in
-                            FinanceFormRow(last: posting.id == draft.postings.last?.id) { postingRow(posting) }
+                            FinanceDeletableFormRow(last: posting.id == draft.postings.last?.id,
+                                canDelete: draft.postings.count > 2,
+                                deleteIdentifier: "shared-transaction-delete-\(draft.postings.firstIndex { $0.id == posting.id } ?? 0)",
+                                delete: { removePosting(posting.id) }) {
+                                postingRow(posting)
+                            }
                         }
                     }
                     HStack {
@@ -178,6 +183,12 @@ struct SharedTransactionEditor: View {
         }
     }
     private func finishTyping() { focusedAmount = nil; textFocus = nil; ShareAmountKeyboard.field?.resignFirstResponder() }
+    private func removePosting(_ id: UUID) {
+        guard draft.postings.count > 2 else { return }
+        finishTyping()
+        if accountPostingID == id { accountPostingID = nil }
+        draft.postings.removeAll { $0.id == id }
+    }
     private func postingRow(_ posting: SharedTransaction.Posting) -> some View {
         let account = catalog.accounts.first { $0.id == posting.accountID }
         let amount = AmountExpressionEvaluator.evaluate(posting.amount) ?? 0
@@ -212,9 +223,6 @@ struct SharedTransactionEditor: View {
             }.buttonStyle(.plain).tint(.secondary).accessibilityLabel("Currency")
                 .accessibilityValue(catalog.currencies.first { $0.id == catalog.currencyID(for: posting, journalID: draft.journalID) }?.symbol ?? "Not selected")
                 .accessibilityIdentifier("shared-transaction-currency-\(index)")
-        }
-        .contextMenu {
-            if draft.postings.count > 2 { Button("Remove Posting", role: .destructive) { draft.postings.removeAll { $0.id == posting.id } } }
         }
     }
     private func balance() {

@@ -51,6 +51,39 @@ final class ShareTransactionUITests: XCTestCase {
         XCTAssertFalse(app.navigationBars["New Transaction"].exists)
     }
 
+    func testSwipeDeletesFocusedSplitPostingAndSavesRemainingAccounts() {
+        let app = launchShare()
+        let baseline = Int(app.staticTexts["share-qa-transaction-count"].label.split(separator: " ").first!)!
+        openExtension(app)
+        let amount = app.textFields["shared-transaction-amount-0"]
+        amount.tap(); amount.typeText("12.50")
+        app.buttons["Posting"].tap()
+        let addedAmount = app.textFields["shared-transaction-amount-2"]
+        XCTAssertTrue(addedAmount.waitForExistence(timeout: 5))
+        addedAmount.tap(); addedAmount.typeText("7.25")
+        app.buttons["shared-transaction-account-2"].swipeLeft()
+        let delete = app.buttons["shared-transaction-delete-2"]
+        XCTAssertTrue(delete.waitForExistence(timeout: 5))
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "Share posting swipe deletion"; shot.lifetime = .keepAlways; add(shot)
+        delete.tap()
+        XCTAssertTrue(addedAmount.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(amount.value as? String, "-12.50")
+        XCTAssertEqual(app.textFields["shared-transaction-amount-1"].value as? String, "12.5")
+        app.buttons["shared-transaction-account-1"].swipeLeft()
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "shared-transaction-delete-")).firstMatch.exists, "Keep the two required transaction accounts")
+        replaceAmount("-20", in: amount)
+        let otherAmount = app.textFields["shared-transaction-amount-1"]
+        XCTAssertEqual(otherAmount.value as? String, "20", "Auto-balance must resume after deleting a split")
+        replaceAmount("15", in: otherAmount)
+        XCTAssertEqual(amount.value as? String, "-15", "Either remaining account can drive auto-balance")
+        XCTAssertTrue(app.buttons["receipt-share-save"].isEnabled)
+        app.buttons["receipt-share-save"].tap()
+        assertReturnedToHost(app)
+        let saved = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "\(baseline + 1) transactions"), object: app.staticTexts["share-qa-transaction-count"])
+        XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 10), .completed)
+    }
+
     func testCompactAccountAmountAndCurrencyShareOneRow() {
         let app = launchShare()
         openExtension(app)
@@ -153,6 +186,12 @@ final class ShareTransactionUITests: XCTestCase {
         XCTAssertTrue(app.buttons["receipt-share-save"].waitForNonExistence(timeout: 10))
         XCTAssertTrue(app.buttons["Share Unsaved QA Screenshot"].isHittable)
         XCTAssertFalse(app.cells.matching(identifier: "shareCell").firstMatch.exists, "No second share menu should remain")
+    }
+
+    private func replaceAmount(_ value: String, in field: XCUIElement) {
+        field.coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.5)).tap()
+        let oldValue = field.value as? String ?? ""
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: oldValue.count) + value)
     }
 
     private func launchShare(ai: Bool = false, failure: Bool = false, hierarchy: Bool = false) -> XCUIApplication {

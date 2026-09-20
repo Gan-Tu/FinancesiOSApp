@@ -163,17 +163,15 @@ struct TransactionEditorView: View {
             VStack(spacing: 7) {
                 FinanceFormCard {
                     ForEach($draft.postings) { $posting in
-                        FinanceFormRow(last: posting.id == draft.postings.last?.id) {
+                        FinanceDeletableFormRow(last: posting.id == draft.postings.last?.id,
+                            canDelete: draft.postings.count > 2, deleteIdentifier: "delete-posting-\(posting.id)",
+                            delete: { removePosting(posting.id) }) {
                             PostingEditorRow(posting: $posting, ledgerID: draft.ledgerID,
                                 allowsCurrencySelection: !missingCaptureJournal && !missingCaptureCurrency,
-                                focusedField: $focusedField, canRemove: draft.postings.count > 2,
+                                focusedField: $focusedField,
                                 changeAmount: { text in
                                     if let index = draft.postings.firstIndex(where: { $0.id == posting.id }) { updateAmount(text, at: index) }
-                                }, chooseAccount: { focusedField = nil; accountPostingID = posting.id }) {
-                                    withAnimation(FinanceMotion.disclosure(reduceMotion: reduceMotion)) {
-                                        draft.postings.removeAll { $0.id == posting.id }
-                                    }
-                                }
+                                }, chooseAccount: { focusedField = nil; accountPostingID = posting.id })
                         }
                         .transition(.opacity)
                     }
@@ -445,6 +443,15 @@ struct TransactionEditorView: View {
         }
     }
 
+    private func removePosting(_ id: UUID) {
+        guard draft.postings.count > 2 else { return }
+        if focusedAmountID == id { focusedField = nil }
+        if accountPostingID == id { accountPostingID = nil }
+        withAnimation(FinanceMotion.disclosure(reduceMotion: reduceMotion)) {
+            draft.postings.removeAll { $0.id == id }
+        }
+    }
+
     private func balancePosting() {
         do {
             draft = try PostingBalance.balancing(draft, focusedPostingID: focusedAmountID,
@@ -501,10 +508,8 @@ struct PostingEditorRow: View {
     let ledgerID: UUID?
     var allowsCurrencySelection = true
     var focusedField: FocusState<TransactionEditorField?>.Binding
-    let canRemove: Bool
     let changeAmount: (String) -> Void
     let chooseAccount: () -> Void
-    let remove: () -> Void
 
     private var postingSymbol: String {
         let amount = decimalFromInput(posting.amount) ?? 0
@@ -552,9 +557,6 @@ struct PostingEditorRow: View {
             .tint(.secondary)
             .disabled(!allowsCurrencySelection)
             .accessibilityLabel("Currency")
-        }
-        .contextMenu {
-            if canRemove { Button("Remove Posting", role: .destructive, action: remove) }
         }
     }
 

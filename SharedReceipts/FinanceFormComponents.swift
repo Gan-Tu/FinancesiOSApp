@@ -47,6 +47,55 @@ struct FinanceFormRow<Content: View>: View {
     }
 }
 
+/// Form cards live in a ScrollView, where SwiftUI's List-only swipeActions
+/// do not run. A horizontal scroller lets the system arbitrate vertical form
+/// scrolling and horizontal reveals without a competing drag recognizer.
+struct FinanceDeletableFormRow<Content: View>: View {
+    var last = false
+    let canDelete: Bool
+    let deleteIdentifier: String
+    let delete: () -> Void
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 0) {
+                FinanceFormRow(last: last) { content }
+                    .containerRelativeFrame(.horizontal)
+                if canDelete {
+                    Button(role: .destructive, action: delete) {
+                        Text("Delete")
+                            .foregroundStyle(.white)
+                            .frame(width: 80)
+                            .frame(maxHeight: .infinity)
+                            .background(Color.red)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier(deleteIdentifier)
+                }
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .contentShape(Rectangle())
+        .scrollBounceBehavior(.basedOnSize)
+        .scrollTargetBehavior(PostingDeleteScrollBehavior())
+        .accessibilityActions {
+            if canDelete { Button("Remove Posting", role: .destructive, action: delete) }
+        }
+        .contextMenu {
+            if canDelete { Button("Remove Posting", role: .destructive, action: delete) }
+        }
+    }
+}
+
+private struct PostingDeleteScrollBehavior: ScrollTargetBehavior {
+    func updateTarget(_ target: inout ScrollTarget, context: TargetContext) {
+        let revealWidth = max(0, context.contentSize.width - context.containerSize.width)
+        target.rect.origin.x = target.rect.minX > revealWidth / 2 ? revealWidth : 0
+    }
+}
+
 struct FinanceFormLabel: View {
     let title: String
     let value: String
