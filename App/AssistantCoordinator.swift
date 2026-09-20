@@ -119,7 +119,7 @@ final class AssistantCoordinator: ObservableObject {
                 try requireActive(); guard generation == stamp else { return }
                 try verifyIdentity(subject)
                 try installIdentity(subject)
-                if contract.tools.count != 44 { throw AssistantFailure("contract_missing", "This build is missing the finance tool contract.") }
+                if contract.tools.count != 45 { throw AssistantFailure("contract_missing", "This build is missing the finance tool contract.") }
                 let options = try await gateway.options()
                 guard options["version"].int == contract.version else { throw AssistantFailure("contract_version", "Update Finances to match the assistant service.") }
                 guard generation == stamp else { return }
@@ -139,6 +139,7 @@ final class AssistantCoordinator: ObservableObject {
         conversation.settings = preferences?.settings(for: subject) ?? history.first?.settings ?? AssistantSettings()
         if let preferences { Task { await preferences.refresh() } }
         tools = AssistantTools(store: store, scope: subject, context: conversation.context, contract: contract)
+        tools?.receiptPreferences = { (PaymentMetadataStore.shared.metadata, ReceiptPreferencesStore.shared.settings.instructions) }
         configureTools()
         if restoreRecentOnConnect {
             restoreRecentOnConnect = false

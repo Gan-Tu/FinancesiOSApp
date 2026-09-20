@@ -31,7 +31,7 @@ final class AssistantGateway: AssistantGatewayProtocol {
     }
     func step(items: [AssistantJSON], settings: AssistantSettings, receive: @escaping @MainActor (AssistantStepEvent) throws -> Void) async throws {
         try AIInferencePolicy.requireNetworkInference()
-        let body = AssistantJSON.object(["version": .number(1), "capabilities": .array([.string("conversation_titles")]), "items": .array(items), "settings": try .model(settings)])
+        let body = AssistantJSON.object(["version": .number(1), "capabilities": .array([.string("conversation_titles"), .string("receipt_context")]), "items": .array(items), "settings": try .model(settings)])
         let request = try auth.assistantRequest("mobile-assistant/step", endpoint: endpoint, data: body.encoded())
         let (bytes, response) = try await auth.assistantURLSession.bytes(for: request)
         try check(response)

@@ -17,6 +17,7 @@ final class AssistantTools {
     var conversationTitle: (() throws -> AssistantJSON)?
     var renameConversation: ((AssistantToolCall, String) throws -> AssistantJSON)?
     var readForModel: ((UUID, AttachmentAsset, URL) async throws -> AssistantJSON)?
+    var receiptPreferences: () -> (metadata: [UUID: PaymentAccountMetadata], instructions: String) = { ([:], "") }
     var staged: [String: URL] = [:]
     var previews: [String: PreparedBackupRestore] = [:]
     var preparedImports: [String: JournalData] = [:]
@@ -55,6 +56,7 @@ final class AssistantTools {
         try AssistantContract.validate(a, schema: def.inputSchema)
         let name = call.name
         if name == "get_app_context" { return success(appContext()) }
+        if name == "get_receipt_context" { return success(try compactReceiptContext(a)) }
         if name == "get_conversation_title" {
             guard let conversationTitle else { throw AssistantFailure("conversation_unavailable", "Reopen the current conversation.") }
             return success(try conversationTitle())
@@ -158,8 +160,46 @@ final class AssistantTools {
     }
     func account(_ value: AssistantJSON, ledger: UUID? = nil) throws -> Account {
         let rows = store.data.accounts.filter { ledger == nil || $0.ledgerID == ledger }
-        let id = try resolve(value, rows: rows.map { ($0.id, $0.name) }, kind: "account")
-        return rows.first { $0.id == id }!
+        guard let text = value.string else { throw AssistantFailure("invalid_reference", "Supply an account name or path.") }
+        if let row = rows.first(where: { $0.id.uuidString.caseInsensitiveCompare(text) == .orderedSame }) { return row }
+        let matches = rows.filter { $0.name.caseInsensitiveCompare(text) == .orderedSame || accountPath($0, rows: rows).caseInsensitiveCompare(text) == .orderedSame }
+        guard matches.count == 1 else { throw AssistantFailure(matches.isEmpty ? "not_found" : "ambiguous_reference", "Choose an exact account name or qualified path.") }
+        return matches[0]
+    }
+    func accountPath(_ account: Account, rows: [Account]) -> String {
+        let byID = Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0) })
+        var names = [account.name], seen: Set<UUID> = [account.id], parent = account.parentID
+        while let id = parent, !seen.contains(id), let row = byID[id] {
+            seen.insert(id); names.insert(row.name, at: 0); parent = row.parentID
+        }
+        return names.joined(separator: " / ")
+    }
+    func compactReceiptContext(_ a: AssistantJSON) throws -> AssistantJSON {
+        let ledger = try journal(a), preferences = receiptPreferences()
+        let accounts = store.data.accounts.filter { $0.ledgerID == ledger }.sorted { $0.name < $1.name }
+        let currencies = store.data.commodities.filter { $0.ledgerID == ledger }
+        var lines: [String] = [], visited = Set<UUID>()
+        func append(_ account: Account, depth: Int) {
+            guard visited.insert(account.id).inserted else { return }
+            let duplicate = accounts.filter { $0.name.caseInsensitiveCompare(account.name) == .orderedSame }.count > 1
+            let cards = (preferences.metadata[account.id]?.identities ?? []).map { identity in
+                [identity.network, identity.last4, identity.label.lowercased() != identity.network ? identity.label : nil].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " ")
+            }.joined(separator: ", ")
+            let currency = currencies.count > 1 ? currencies.first { $0.id == account.commodityID }?.symbol : nil
+            lines.append(String(repeating: "  ", count: depth) + (duplicate ? accountPath(account, rows: accounts) : account.name)
+                + (account.parentID == nil ? " (group)" : "") + (cards.isEmpty ? "" : " [\(cards)]") + (currency.map { " (\($0))" } ?? ""))
+            for child in accounts where child.parentID == account.id && child.kind == account.kind { append(child, depth: depth + 1) }
+        }
+        for kind in AccountKind.allCases {
+            let group = accounts.filter { $0.kind == kind }
+            guard !group.isEmpty else { continue }
+            lines.append(kind.title + ":")
+            for account in group where !group.contains(where: { $0.id == account.parentID }) { append(account, depth: 0) }
+            for account in group { append(account, depth: 0) }
+        }
+        return .object(["accounts": .string(lines.joined(separator: "\n")),
+            "currencies": .array(Array(Set(currencies.map(\.symbol))).sorted().map(AssistantJSON.string)),
+            "instructions": .string(preferences.instructions)])
     }
     func currency(_ value: AssistantJSON, ledger: UUID? = nil) throws -> Commodity {
         let rows = store.data.commodities.filter { ledger == nil || $0.ledgerID == ledger }

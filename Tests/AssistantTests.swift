@@ -507,11 +507,25 @@ final class AssistantTests: XCTestCase {
     }
     func testAllContractToolsHaveNativeCoverageAndStrictSchemas() throws {
         let contract = try AssistantContract.load()
-        XCTAssertEqual(contract.tools.count, 44)
-        XCTAssertEqual(Set(contract.tools.map(\.name)).count, 44)
+        XCTAssertEqual(contract.tools.count, 45)
+        XCTAssertEqual(Set(contract.tools.map(\.name)).count, 45)
         let tool = try XCTUnwrap(contract.tools.first { $0.name == "create_transaction" })
         XCTAssertThrowsError(try AssistantContract.validate(.object(["unexpected": .bool(true)]), schema: tool.inputSchema))
         XCTAssertThrowsError(try AssistantContract.validate(.object(["journal": .string("x"), "date": .string("2026-01-01"), "request_id": .string("id"), "postings": .array([])]), schema: tool.inputSchema))
+    }
+    func testReceiptContextUsesNamesCardSuffixesAndSavedInstructionsWithoutIDs() async throws {
+        let tools = try fixture(), ledger = tools.store.data.ledgers[0].id
+        let cash = try XCTUnwrap(tools.store.data.accounts.first { $0.name == "Cash" })
+        tools.receiptPreferences = { ([cash.id: PaymentAccountMetadata(id: cash.id, ledgerID: ledger,
+            identities: [PaymentIdentity(label: "Joint Visa", network: "visa", last4: "0007")])], "Uber: Cash.") }
+        let result = try await tools.execute(call("get_receipt_context", .object([:])))
+        XCTAssertEqual(result["ok"].bool, true)
+        XCTAssertTrue(result["result"]["accounts"].string?.contains("Cash [visa 0007 Joint Visa]") == true)
+        XCTAssertEqual(result["result"]["instructions"].string, "Uber: Cash.")
+        XCTAssertFalse(result.jsonString.contains(cash.id.uuidString))
+        XCTAssertFalse(result.jsonString.contains(ledger.uuidString))
+        XCTAssertEqual(try tools.account(.string("Assets / Cash"), ledger: ledger).id, cash.id)
+        XCTAssertEqual(try tools.currency(.string("USD"), ledger: ledger).symbol, "USD")
     }
     func testLiveAppendChunksPreserveChineseAndEmojiWithinTheTokenByteBound() {
         let text = String(repeating: "已保存十五美元的午餐 🍜👨‍👩‍👧‍👦。", count: 90)
