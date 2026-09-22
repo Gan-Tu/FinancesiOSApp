@@ -86,7 +86,15 @@ struct ReceiptAISettings: Codable, Equatable, Sendable {
     var model = "gpt-5.6-terra"
     var effort = "medium"
     var instructions = ""
-    static let models = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra"]
+    static let models = ["gpt-6-sol", "gpt-5.6-terra", "gpt-6-luna", "gpt-6-astra"]
+    /// Preserve the selected tier when restoring settings from before GPT-6.
+    static func upgradeModel(_ model: String) -> String {
+        switch model {
+        case "gpt-5.6-sol": return "gpt-6-sol"
+        case "gpt-5.6-luna": return "gpt-6-luna"
+        default: return model
+        }
+    }
     var efforts: [String] {
         (model == "gpt-6-astra" ? [] : ["none"]) + ["low", "medium", "high", "xhigh", "max"]
     }
@@ -101,6 +109,15 @@ struct ReceiptAISettings: Codable, Equatable, Sendable {
             UserDefaults.standard.set(data, forKey: "receipt-ai-settings-v1")
             NotificationCenter.default.post(name: Self.changeNotification, object: nil)
         }
+    }
+}
+extension ReceiptAISettings {
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        endpoint = try values.decode(String.self, forKey: .endpoint)
+        model = Self.upgradeModel(try values.decode(String.self, forKey: .model))
+        effort = try values.decode(String.self, forKey: .effort)
+        instructions = try values.decode(String.self, forKey: .instructions)
     }
 }
 struct ReceiptAnalysisResponse: Decodable, Sendable {

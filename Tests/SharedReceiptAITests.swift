@@ -7,7 +7,7 @@ final class SharedReceiptAITests: XCTestCase {
     private func fixture() -> (SharedTransactionCatalog, SharedTransaction, ReceiptAnalysisResponse) {
         let data = DemoData.fixture()
         var catalog = SharedTransactionCatalog(data: data, hiddenLedgerIDs: [])
-        var settings = ReceiptAISettings(); settings.model = "gpt-5.6-luna"; settings.effort = "low"
+        var settings = ReceiptAISettings(); settings.model = "gpt-6-luna"; settings.effort = "low"
         settings.instructions = "Preserve merchant spelling."
         catalog.receiptAI = .init(settings: settings)
         let draft = SharedTransaction(catalog: catalog)
@@ -78,7 +78,7 @@ final class SharedReceiptAITests: XCTestCase {
             metadata: [:], settings: XCTUnwrap(catalog.receiptAI?.settings))
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: context) as? [String: Any])
         XCTAssertEqual(json["surface"] as? String, "ios")
-        XCTAssertEqual(json["model"] as? String, "gpt-5.6-luna")
+        XCTAssertEqual(json["model"] as? String, "gpt-6-luna")
         XCTAssertEqual(json["effort"] as? String, "low")
         XCTAssertEqual(json["instructions"] as? String, "Preserve merchant spelling.")
         let rows = try XCTUnwrap(json["accounts"] as? [[String: Any]])

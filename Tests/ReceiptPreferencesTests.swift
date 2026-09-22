@@ -46,7 +46,7 @@ private actor PreferencesTestCloud: CloudKitSyncTransport {
         let cloud = PreferencesTestCloud(), first = make(cloud)
         first.legacySettings = { _ in AssistantSettings(customInstructions: "Old chat instructions") }
         await first.refresh()
-        let desired = AssistantSettings(model: "gpt-5.6-sol", effort: "high", customInstructions: "My app preferences")
+        let desired = AssistantSettings(model: "gpt-6-sol", effort: "high", customInstructions: "My app preferences")
         try first.edit(desired, expected: first.value)
         await first.refresh()
         XCTAssertFalse(first.pending)
@@ -84,11 +84,11 @@ private actor PreferencesTestCloud: CloudKitSyncTransport {
     func testConcurrentPreferencesMergeAndConflict() async throws {
         let cloud = PreferencesTestCloud(), a = make(cloud), b = make(cloud)
         await a.refresh(); await b.refresh()
-        try a.edit(AssistantSettings(model: "gpt-5.6-sol", effort: "high"), expected: a.value)
+        try a.edit(AssistantSettings(model: "gpt-6-sol", effort: "high"), expected: a.value)
         try b.edit(AssistantSettings(customInstructions: "Use English"), expected: b.value)
         await a.refresh(); await b.refresh(); await a.refresh()
         XCTAssertEqual(a.settings, b.settings)
-        XCTAssertEqual(a.settings.model, "gpt-5.6-sol")
+        XCTAssertEqual(a.settings.model, "gpt-6-sol")
         XCTAssertEqual(a.settings.customInstructions, "Use English")
         var local = a.settings; local.customInstructions = "Local"
         var remote = b.settings; remote.customInstructions = "Remote"

@@ -7,6 +7,22 @@ import UIKit
 
 @MainActor
 final class AssistantTests: XCTestCase {
+    func testLegacyConversationAndCloudSettingsUpgradeModelOnly() throws {
+        for (old, current) in [("gpt-5.6-sol", "gpt-6-sol"), ("gpt-5.6-luna", "gpt-6-luna")] {
+            let legacy = AssistantSettings(model: old, effort: "max", customInstructions: "Keep my preferences")
+            let restored = try JSONDecoder().decode(AssistantSettings.self, from: JSONEncoder().encode(legacy))
+            XCTAssertEqual(restored.model, current)
+            XCTAssertEqual(restored.effort, "max")
+            XCTAssertEqual(restored.customInstructions, legacy.customInstructions)
+            let preferences = try JSONDecoder().decode(AssistantPreferences.self, from: JSONEncoder().encode(AssistantPreferences(legacy)))
+            XCTAssertEqual(preferences.model, current)
+            XCTAssertEqual(preferences.effort, "max")
+            XCTAssertEqual(preferences.instructions, legacy.customInstructions)
+            XCTAssertNoThrow(try preferences.validate())
+            XCTAssertEqual(try AssistantPreferences.decode(preferences.record(previous: nil)), preferences)
+        }
+    }
+
     func testTerraDefaultsPreserveExplicitModelOverrides() throws {
         XCTAssertEqual(AssistantSettings().model, "gpt-5.6-terra")
         XCTAssertEqual(AssistantPreferences().model, "gpt-5.6-terra")

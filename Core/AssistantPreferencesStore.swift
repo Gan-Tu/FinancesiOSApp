@@ -286,3 +286,15 @@ struct AssistantPreferences: Codable, Equatable, Sendable {
         }
     }
 }
+
+// Normalize decoded cloud records and pending local edits without changing their wire format.
+extension AssistantPreferences {
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        version = try values.decode(Int.self, forKey: .version)
+        model = ReceiptAISettings.upgradeModel(try values.decode(String.self, forKey: .model))
+        effort = try values.decode(String.self, forKey: .effort)
+        instructions = try values.decode(String.self, forKey: .instructions)
+    }
+}

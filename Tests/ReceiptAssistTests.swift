@@ -34,6 +34,28 @@ private actor AssistTestTransport: CloudKitSyncTransport {
     nonisolated func cancel() {}
 }
 @MainActor final class ReceiptAssistTests: XCTestCase {
+    func testLegacySolAndLunaSettingsUpgradeWithoutLosingPreferences() throws {
+        for (old, current) in [("gpt-5.6-sol", "gpt-6-sol"), ("gpt-5.6-luna", "gpt-6-luna")] {
+            var legacy = ReceiptAISettings()
+            legacy.model = old; legacy.effort = "high"; legacy.instructions = "Keep merchant names"
+            let data = try JSONEncoder().encode(legacy)
+            let restored = try JSONDecoder().decode(ReceiptAISettings.self, from: data)
+            XCTAssertEqual(restored.model, current)
+            XCTAssertEqual(restored.effort, legacy.effort)
+            XCTAssertEqual(restored.instructions, legacy.instructions)
+            XCTAssertEqual(restored.endpoint, legacy.endpoint)
+            XCTAssertTrue(ReceiptAISettings.models.contains(current))
+            XCTAssertFalse(ReceiptAISettings.models.contains(old))
+            let cloudData = try JSONEncoder().encode(ReceiptPreferences(legacy))
+            let preferences = try JSONDecoder().decode(ReceiptPreferences.self, from: cloudData)
+            XCTAssertEqual(preferences.model, current)
+            XCTAssertEqual(preferences.effort, legacy.effort)
+            XCTAssertEqual(preferences.instructions, legacy.instructions)
+            XCTAssertNoThrow(try preferences.validate())
+            XCTAssertEqual(try ReceiptPreferences.decode(preferences.record(previous: nil)), preferences)
+        }
+    }
+
     private func metadata() -> PaymentAccountMetadata {
         .init(
             id: UUID(), ledgerID: UUID(),

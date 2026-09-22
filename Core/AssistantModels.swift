@@ -27,6 +27,15 @@ struct AssistantSettings: Codable, Equatable, Sendable {
     var customInstructions = ""
 }
 
+extension AssistantSettings {
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        model = ReceiptAISettings.upgradeModel(try values.decode(String.self, forKey: .model))
+        effort = try values.decode(String.self, forKey: .effort)
+        customInstructions = try values.decode(String.self, forKey: .customInstructions)
+    }
+}
+
 struct AssistantMessage: Identifiable, Codable, Equatable, Sendable {
     var id = UUID()
     var role: String
