@@ -136,7 +136,7 @@ private struct MobileLedgerDerivedCache {
     var transactionsByCommodityDateDescending: [UUID: [LedgerTransaction]] = [:]
     var balanceRowsByAccount: [UUID: [MobileBalanceRow]] = [:]
     var ledgerTotalsByKind: [UUID: [AccountKind: [MobileBalanceRow]]] = [:]
-    var registerAmountInfoByTransactionID: [UUID: MobileBalanceRow] = [:]
+    var registerAmountsByTransactionID: [UUID: [RegisterMoney]] = [:]
     var accountFlowDisplayByTransactionID: [UUID: MobileAccountFlowDisplay] = [:]
     var transactionSearchTextByID: [UUID: String] = [:]
     var ledgerSearchTextByID: [UUID: String] = [:]
@@ -288,24 +288,11 @@ private struct MobileLedgerDerivedCache {
         return nodes
     }
 
-    private func registerAmountInfo(for transaction: LedgerTransaction) -> MobileBalanceRow {
-        let incomeExpense = transaction.postings.filter { posting in
-            guard let account = accountsByID[posting.accountID] else { return false }
-            return account.kind == .income || account.kind == .expense
-        }
-        let total = incomeExpense.reduce(Decimal.zero) { $0 + $1.amount }
-        let commodityID = incomeExpense.first.flatMap { postingCommodityID($0, ledgerID: transaction.ledgerID) }
-            ?? transaction.postings.first.flatMap { postingCommodityID($0, ledgerID: transaction.ledgerID) }
-        if total != .zero {
-            return MobileBalanceRow(commodityID: commodityID, symbol: symbol(for: commodityID), amount: -total)
-        }
-        let positive = transaction.postings.first { $0.amount > .zero } ?? transaction.postings.first
-        let positiveCommodityID = positive.flatMap { postingCommodityID($0, ledgerID: transaction.ledgerID) } ?? commodityID
-        return MobileBalanceRow(
-            commodityID: positiveCommodityID,
-            symbol: symbol(for: positiveCommodityID),
-            amount: positive?.amount ?? .zero
-        )
+    func registerAmounts(for transaction: LedgerTransaction) -> [RegisterMoney] {
+        RegisterTransactionAmounts.build(postings: transaction.postings,
+            accountKind: { accountsByID[$0]?.kind },
+            commodityID: { postingCommodityID($0, ledgerID: transaction.ledgerID) },
+            symbol: { symbol(for: $0) })
     }
 
     func accountFlowDisplay(for transaction: LedgerTransaction) -> MobileAccountFlowDisplay {
@@ -683,7 +670,7 @@ final class MobileLedgerStore: ObservableObject {
 
         applyBalanceDelta(for: transaction, multiplier: -1)
         refreshLedgerTotalsByKind(ledgerID: transaction.ledgerID)
-        derivedCache.registerAmountInfoByTransactionID.removeValue(forKey: transaction.id)
+        derivedCache.registerAmountsByTransactionID.removeValue(forKey: transaction.id)
         derivedCache.accountFlowDisplayByTransactionID.removeValue(forKey: transaction.id)
         derivedCache.transactionSearchTextByID.removeValue(forKey: transaction.id)
         clearTransactionListCaches()
@@ -733,7 +720,7 @@ final class MobileLedgerStore: ObservableObject {
 
         applyBalanceDelta(for: transaction, multiplier: 1)
         refreshLedgerTotalsByKind(ledgerID: transaction.ledgerID)
-        derivedCache.registerAmountInfoByTransactionID[transaction.id] = registerAmountInfo(for: transaction)
+        derivedCache.registerAmountsByTransactionID[transaction.id] = registerAmounts(for: transaction)
         derivedCache.accountFlowDisplayByTransactionID[transaction.id] = derivedCache.accountFlowDisplay(for: transaction)
         derivedCache.transactionSearchTextByID[transaction.id] = transactionSearchText(for: transaction)
         clearTransactionListCaches()
@@ -929,7 +916,7 @@ final class MobileLedgerStore: ObservableObject {
         }
         for transactionID in removedTransactionIDs {
             derivedCache.transactionsByID.removeValue(forKey: transactionID)
-            derivedCache.registerAmountInfoByTransactionID.removeValue(forKey: transactionID)
+            derivedCache.registerAmountsByTransactionID.removeValue(forKey: transactionID)
             derivedCache.accountFlowDisplayByTransactionID.removeValue(forKey: transactionID)
             derivedCache.transactionSearchTextByID.removeValue(forKey: transactionID)
         }
@@ -1035,7 +1022,7 @@ final class MobileLedgerStore: ObservableObject {
                     .sorted { $0.symbol < $1.symbol }
             }
         }
-        derivedCache.registerAmountInfoByTransactionID.removeAll(keepingCapacity: true)
+        derivedCache.registerAmountsByTransactionID.removeAll(keepingCapacity: true)
         refreshLedgerTotalsByKind(ledgerID: ledgerID)
 
         clearTransactionListCaches()
@@ -1732,31 +1719,11 @@ final class MobileLedgerStore: ObservableObject {
         }
     }
 
-    func registerAmountInfo(for transaction: LedgerTransaction) -> MobileBalanceRow {
-        if let cached = derivedCache.registerAmountInfoByTransactionID[transaction.id] {
-            return cached
-        }
-        let incomeExpense = transaction.postings.filter { posting in
-            guard let account = account(posting.accountID) else { return false }
-            return account.kind == .income || account.kind == .expense
-        }
-        let total = incomeExpense.reduce(Decimal.zero) { $0 + $1.amount }
-        let commodityID = incomeExpense.first.flatMap { postingCommodityID($0, ledgerID: transaction.ledgerID) }
-            ?? transaction.postings.first.flatMap { postingCommodityID($0, ledgerID: transaction.ledgerID) }
-        if total != .zero {
-            let row = MobileBalanceRow(commodityID: commodityID, symbol: symbol(for: commodityID), amount: -total)
-            derivedCache.registerAmountInfoByTransactionID[transaction.id] = row
-            return row
-        }
-        let positive = transaction.postings.first { $0.amount > .zero } ?? transaction.postings.first
-        let positiveCommodityID = positive.flatMap { postingCommodityID($0, ledgerID: transaction.ledgerID) } ?? commodityID
-        let row = MobileBalanceRow(
-            commodityID: positiveCommodityID,
-            symbol: symbol(for: positiveCommodityID),
-            amount: positive?.amount ?? .zero
-        )
-        derivedCache.registerAmountInfoByTransactionID[transaction.id] = row
-        return row
+    func registerAmounts(for transaction: LedgerTransaction) -> [RegisterMoney] {
+        if let cached = derivedCache.registerAmountsByTransactionID[transaction.id] { return cached }
+        let rows = derivedCache.registerAmounts(for: transaction)
+        derivedCache.registerAmountsByTransactionID[transaction.id] = rows
+        return rows
     }
 
     @discardableResult

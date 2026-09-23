@@ -674,6 +674,15 @@ struct TransactionListScreen: View {
     }
 }
 
+private struct RegisterAmountText: View {
+    let value: RegisterMoney
+    var body: some View {
+        Text((value.showsPositiveSign ? "+" : "") + moneyString(value.amount, symbol: value.symbol))
+            .foregroundStyle(value.amountTone == .negative ? Color.red : value.amountTone == .positive ? Color.green : Color.primary)
+            .monospacedDigit()
+    }
+}
+
 struct RegisterRow: View, Equatable {
     let transaction: LedgerTransaction
     let amounts: [RegisterMoney]
@@ -695,9 +704,7 @@ struct RegisterRow: View, Equatable {
             Spacer(minLength: 4)
             VStack(alignment: .trailing, spacing: 3) {
                 ForEach(amounts) { value in
-                    Text((value.showsCashFlowSign && value.amount > 0 ? "+" : "") + moneyString(value.amount, symbol: value.symbol))
-                        .foregroundStyle(value.amount < 0 ? Color.red : value.showsCashFlowSign && value.amount > 0 ? Color.green : Color.primary)
-                        .monospacedDigit()
+                    RegisterAmountText(value: value)
                 }
                 ForEach(balances) { value in Text(moneyString(value.amount, symbol: value.symbol)).font(.subheadline).foregroundStyle(.secondary).monospacedDigit() }
             }.lineLimit(1).minimumScaleFactor(0.8).layoutPriority(1)
@@ -1044,8 +1051,7 @@ private struct MobileTransactionPreviewPresentation: Equatable {
     var cleared: Bool
     var title: String
     var payeeLabel: String?
-    var amountText: String
-    var isNegativeAmount: Bool
+    var amounts: [RegisterMoney]
     var flowDisplay: MobileAccountFlowDisplay
     var hasActiveRecurrence: Bool
     var hasAttachment: Bool
@@ -1057,14 +1063,12 @@ private func mobileTransactionPreviewPresentation(
     for transaction: LedgerTransaction,
     store: MobileLedgerStore
 ) -> MobileTransactionPreviewPresentation {
-    let amount = store.registerAmountInfo(for: transaction)
     let title = transactionTitle(for: transaction)
     return MobileTransactionPreviewPresentation(
         cleared: transaction.cleared,
         title: title,
         payeeLabel: !transaction.payee.isEmpty && transaction.payee != title ? "@\(transaction.payee)" : nil,
-        amountText: moneyString(amount.amount, symbol: amount.symbol),
-        isNegativeAmount: amount.amount < .zero,
+        amounts: store.registerAmounts(for: transaction),
         flowDisplay: store.accountFlowDisplay(for: transaction),
         hasActiveRecurrence: transaction.recurrenceRule?.frequency != nil && transaction.recurrenceRule?.frequency != .never,
         hasAttachment: transaction.attachment?.assets.isEmpty == false,
@@ -1095,10 +1099,11 @@ private struct MobileTransactionPreviewRow: View, Equatable {
                             .lineLimit(1)
                     }
                     Spacer(minLength: 8)
-                    Text(presentation.amountText)
-                        .foregroundStyle(presentation.isNegativeAmount ? .red : .primary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.72)
+                    VStack(alignment: .trailing, spacing: 2) {
+                        ForEach(presentation.amounts) { RegisterAmountText(value: $0) }
+                    }
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
                 }
                 HStack(spacing: 4) {
                     AccountFlowText(display: presentation.flowDisplay)

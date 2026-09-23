@@ -3,6 +3,82 @@ import XCTest
 
 @MainActor
 final class RegisterPresentationCacheTests: XCTestCase {
+    func testAllTwentyFiveFlowsAndBothAccountViews() throws {
+        let kinds: [AccountKind] = [.asset, .liability, .income, .expense, .equity]
+        let expected: [[Decimal]] = [
+            [100, 100, -100, -100, 100], [100, 100, -100, -100, 100],
+            [100, 100, 0, 0, 100], [100, 100, 0, 0, 100],
+            [100, 100, -100, -100, 100]
+        ]
+        let tones: [[RegisterAmountTone]] = [
+            [.neutral, .neutral, .negative, .negative, .neutral],
+            [.neutral, .neutral, .negative, .negative, .neutral],
+            [.positive, .positive, .neutral, .neutral, .positive],
+            [.positive, .positive, .neutral, .neutral, .positive],
+            [.neutral, .neutral, .negative, .negative, .neutral]
+        ]
+        for (sourceIndex, sourceKind) in kinds.enumerated() {
+            for (targetIndex, targetKind) in kinds.enumerated() {
+                let ledger = Ledger(name: "Color matrix"), usd = Commodity(ledgerID: ledger.id, symbol: "USD", name: "Dollar")
+                let source = Account(ledgerID: ledger.id, name: "From", kind: sourceKind)
+                let target = Account(ledgerID: ledger.id, name: "To", kind: targetKind)
+                let tx = LedgerTransaction(ledgerID: ledger.id, date: Date(timeIntervalSince1970: 100), payee: "", note: "", number: "", cleared: true,
+                    postings: [Posting(accountID: source.id, commodityID: usd.id, amount: -100), Posting(accountID: target.id, commodityID: usd.id, amount: 100, listIndex: 1)])
+                let data = JournalData(ledgers: [ledger], commodities: [usd], accounts: [source, target], transactions: [tx], selectedLedgerID: ledger.id)
+                let all = try XCTUnwrap(RegisterPresentation.build(data: data, rows: [tx], scope: .all).amounts[tx.id]?.first)
+                XCTAssertEqual(all.amount, expected[sourceIndex][targetIndex], "\(sourceKind) → \(targetKind)")
+                XCTAssertEqual(all.amountTone, tones[sourceIndex][targetIndex])
+                XCTAssertEqual(all.showsPositiveSign, tones[sourceIndex][targetIndex] == .positive)
+                for (account, raw) in [(source, Decimal(-100)), (target, Decimal(100))] {
+                    let accountView = RegisterPresentation.build(data: data, rows: [tx], scope: .account(account.id))
+                    let amount = try XCTUnwrap(accountView.amounts[tx.id]?.first)
+                    let expectedAmount = account.kind == .income || account.kind == .expense ? -raw : raw
+                    XCTAssertEqual(amount.amount, expectedAmount)
+                    XCTAssertEqual(amount.amountTone, account.kind == .equity ? .neutral : expectedAmount < 0 ? .negative : .positive)
+                    XCTAssertEqual(amount.showsPositiveSign, expectedAmount > 0)
+                    XCTAssertEqual(accountView.balances[tx.id]?.first?.amount, expectedAmount)
+                }
+                XCTAssertEqual(data.transactions[0], tx)
+            }
+        }
+    }
+
+    func testSplitAndCurrencyAmountsMatchCachedPreviewsWithoutChangingBalances() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let ledger = Ledger(name: "Currency matrix"), usd = Commodity(ledgerID: ledger.id, symbol: "USD", name: "Dollar")
+        let eur = Commodity(ledgerID: ledger.id, symbol: "EUR", name: "Euro")
+        let bank = Account(ledgerID: ledger.id, name: "Bank", kind: .asset)
+        let card = Account(ledgerID: ledger.id, name: "Card", kind: .liability)
+        let income = Account(ledgerID: ledger.id, name: "Income", kind: .income)
+        let expense = Account(ledgerID: ledger.id, name: "Expense", kind: .expense)
+        let cases: [[Posting]] = [
+            [Posting(accountID: bank.id, commodityID: usd.id, amount: -100), Posting(accountID: card.id, commodityID: usd.id, amount: 60), Posting(accountID: card.id, commodityID: usd.id, amount: 40)],
+            [Posting(accountID: bank.id, commodityID: usd.id, amount: -60), Posting(accountID: bank.id, commodityID: usd.id, amount: -40), Posting(accountID: card.id, commodityID: eur.id, amount: 90)],
+            [Posting(accountID: income.id, commodityID: usd.id, amount: -100), Posting(accountID: expense.id, commodityID: usd.id, amount: 100)],
+            [Posting(accountID: income.id, commodityID: usd.id, amount: -100), Posting(accountID: bank.id, commodityID: usd.id, amount: 100), Posting(accountID: bank.id, commodityID: eur.id, amount: -20), Posting(accountID: expense.id, commodityID: eur.id, amount: 20)]
+        ]
+        let transactions = cases.enumerated().map { index, postings in
+            LedgerTransaction(ledgerID: ledger.id, date: Date(timeIntervalSince1970: Double(index + 1)), payee: "", note: "", number: "", cleared: true, postings: postings)
+        }
+        let data = JournalData(ledgers: [ledger], commodities: [usd, eur], accounts: [bank, card, income, expense], transactions: transactions, selectedLedgerID: ledger.id)
+        let store = MobileLedgerStore(supportDirectory: directory, initialData: data)
+        let expected: [[Decimal]] = [[100], [90, 100], [0], [-20, 100]]
+        let expectedTones: [[RegisterAmountTone]] = [[.neutral], [.neutral, .neutral], [.neutral], [.negative, .positive]]
+        let all = RegisterPresentation.build(data: data, rows: transactions, scope: .all)
+        for (index, transaction) in transactions.enumerated() {
+            let values = try XCTUnwrap(all.amounts[transaction.id])
+            XCTAssertEqual(values.map(\.amount), expected[index])
+            XCTAssertEqual(values.map(\.amountTone), expectedTones[index])
+            XCTAssertEqual(store.registerAmounts(for: transaction), values)
+            XCTAssertEqual(store.registerAmounts(for: transaction), values)
+            let dollars = RegisterPresentation.build(data: data, rows: [transaction], scope: .currency(usd.id))
+            XCTAssertEqual(dollars.amounts[transaction.id], values.filter { $0.commodityID == usd.id })
+        }
+        XCTAssertEqual(all.balances[transactions[1].id]?.first?.amount, -200)
+        XCTAssertEqual(store.data.transactions, data.transactions)
+    }
+
     private actor Gate {
         var continuations: [CheckedContinuation<Void, Never>] = []
         var released = false
@@ -70,7 +146,7 @@ final class RegisterPresentationCacheTests: XCTestCase {
                     let balances = Dictionary(uniqueKeysWithValues: (presentation.balances[tx.id] ?? []).map { ($0.commodityID, $0.amount) })
                     let total = raw.prefix(index + 1).reduce(Decimal.zero, +) * multiplier
                     XCTAssertEqual(balances, [usd.id: total, eur.id: total * 2])
-                    XCTAssertEqual(presentation.amounts[tx.id]?.first?.showsCashFlowSign, multiplier == -1)
+                    XCTAssertEqual(presentation.amounts[tx.id]?.first?.amountStyle, kind == .equity ? .signedNeutral : .cashFlow)
                 }
             }
             XCTAssertEqual(try AssistantJSON.modelDigest(data), original)

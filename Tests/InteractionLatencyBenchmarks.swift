@@ -32,7 +32,7 @@ final class InteractionLatencyBenchmarks: XCTestCase {
         sample("transaction-detail-model", iterations: 100) {
             for transaction in rows.prefix(40) {
                 sink += store.draft(for: transaction).postings.count
-                sink += store.registerAmountInfo(for: transaction).symbol.count
+                sink += store.registerAmounts(for: transaction).reduce(0) { $0 + $1.symbol.count }
             }
         }
         sample("new-template-editor-model", iterations: 100) {

@@ -1,11 +1,53 @@
 import Foundation
 
+enum RegisterAmountStyle: Equatable {
+    case cashFlow, neutral, signedNeutral
+}
+
+enum RegisterAmountTone: Equatable {
+    case positive, negative, neutral
+}
+
 struct RegisterMoney: Identifiable, Equatable {
     let commodityID: UUID
     let symbol: String
     var amount: Decimal
-    var showsCashFlowSign = false
+    var amountStyle: RegisterAmountStyle = .cashFlow
+    var showsPositiveSign: Bool { amountStyle != .neutral && amount > .zero }
+    var amountTone: RegisterAmountTone {
+        guard amountStyle == .cashFlow else { return .neutral }
+        return amount < .zero ? .negative : amount > .zero ? .positive : .neutral
+    }
     var id: UUID { commodityID }
+}
+
+/// The All register and search previews share one projection, independently per currency.
+enum RegisterTransactionAmounts {
+    static func build(postings: [Posting], accountKind: (UUID) -> AccountKind?,
+                      commodityID: (Posting) -> UUID?, symbol: (UUID) -> String) -> [RegisterMoney] {
+        struct Totals {
+            var hasCategory = false
+            var category = Decimal.zero
+            var incoming = Decimal.zero
+            var outgoing = Decimal.zero
+        }
+        var totals: [UUID: Totals] = [:]
+        for posting in postings {
+            guard let currency = commodityID(posting) else { continue }
+            if totals[currency] == nil { totals[currency] = Totals() }
+            if let kind = accountKind(posting.accountID), kind == .income || kind == .expense {
+                totals[currency]!.hasCategory = true
+                totals[currency]!.category += posting.amount
+            }
+            if posting.amount > .zero { totals[currency]!.incoming += posting.amount }
+            else { totals[currency]!.outgoing -= posting.amount }
+        }
+        return totals.map { currency, total in
+            RegisterMoney(commodityID: currency, symbol: symbol(currency),
+                          amount: total.hasCategory ? -total.category : max(total.incoming, total.outgoing),
+                          amountStyle: total.hasCategory ? .cashFlow : .neutral)
+        }.sorted { $0.symbol == $1.symbol ? $0.commodityID.canonicallyPrecedes($1.commodityID) : $0.symbol < $1.symbol }
+    }
 }
 
 struct RegisterMonth: Identifiable {
@@ -217,6 +259,7 @@ struct RegisterPresentation {
             }
             guard rowIDs.contains(transaction.id) else { continue }
             var displayed: [UUID: Decimal] = [:]
+            var globalAmounts: [RegisterMoney] = []
             var running: [UUID: Decimal] = [:]
             func rowBalances(for accountID: UUID, using currencyIDs: Set<UUID>) -> [UUID: Decimal] {
                 let totals = cumulative[accountID] ?? [:]
@@ -239,9 +282,9 @@ struct RegisterPresentation {
                     running = scopedTotals
                 }
             } else {
-                let incomeExpense = transaction.postings.filter { p in accounts[p.accountID].map { $0.kind == .income || $0.kind == .expense } ?? false }
-                for p in incomeExpense { if let id = currency(p) { displayed[id, default: 0] -= p.amount } }
-                if incomeExpense.isEmpty, let posting = transaction.postings.first(where: { $0.amount > 0 }) ?? transaction.postings.first, let id = currency(posting) { displayed[id] = posting.amount }
+                globalAmounts = RegisterTransactionAmounts.build(postings: transaction.postings,
+                    accountKind: { accounts[$0]?.kind }, commodityID: currency,
+                    symbol: { currencies[$0]?.symbol ?? "" })
                 if let first = transaction.postings.first(where: { accounts[$0.accountID].map { $0.kind == .asset || $0.kind == .liability } ?? false }) {
                     let rowCurrencies = Set(transaction.postings.filter { $0.accountID == first.accountID }.compactMap(currency))
                     running = rowBalances(for: first.accountID, using: rowCurrencies)
@@ -253,8 +296,14 @@ struct RegisterPresentation {
                 running = running.mapValues { -$0 }
             }
             if case .currency(let id) = scope { displayed = displayed.filter { $0.key == id }; running = running.filter { $0.key == id } }
-            amounts[transaction.id] = money(displayed).map { value in
-                var value = value; value.showsCashFlowSign = categoryScope; return value
+            if scopedAccounts.isEmpty {
+                if case .currency(let id) = scope { globalAmounts = globalAmounts.filter { $0.commodityID == id } }
+                amounts[transaction.id] = globalAmounts
+            } else {
+                let equityScope: Bool = if case .account(let id) = scope { accounts[id]?.kind == .equity } else { false }
+                amounts[transaction.id] = money(displayed).map { value in
+                    var value = value; value.amountStyle = equityScope ? .signedNeutral : .cashFlow; return value
+                }
             }
             balances[transaction.id] = money(running)
         }
