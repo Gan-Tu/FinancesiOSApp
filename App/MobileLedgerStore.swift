@@ -2085,9 +2085,8 @@ final class MobileLedgerStore: ObservableObject {
         return draft
     }
 
-    /// The visible account wins over new-entry defaults, including template defaults.
-    /// Match the posting's role so templates keep their ordering and other splits.
-    func applyingAccountContext(_ accountID: UUID?, to draft: TransactionDraft) -> TransactionDraft {
+    /// The visible account replaces ordinary defaults, but only fills empty template slots.
+    func applyingAccountContext(_ accountID: UUID?, to draft: TransactionDraft, onlyUnspecifiedAccounts: Bool = false) -> TransactionDraft {
         guard draft.id == nil, !draft.isDuplicate,
               let context = account(accountID), context.ledgerID == draft.ledgerID,
               !draft.postings.isEmpty else { return draft }
@@ -2097,6 +2096,13 @@ final class MobileLedgerStore: ObservableObject {
         let fallbackIndex = isCategory ? min(1, draft.postings.count - 1) : 0
         let unspecifiedIndex = draft.postings[fallbackIndex].accountID == nil
             ? fallbackIndex : draft.postings.firstIndex { $0.accountID == nil }
+        if onlyUnspecifiedAccounts {
+            guard existingIndex == nil, let index = unspecifiedIndex else { return draft }
+            var result = draft
+            result.postings[index].accountID = context.id
+            result.postings[index].commodityID = context.commodityID
+            return result
+        }
         let index = draft.postings.firstIndex { posting in
             guard let candidate = account(posting.accountID) else { return false }
             return (candidate.kind == .income || candidate.kind == .expense) == isCategory
@@ -2111,7 +2117,7 @@ final class MobileLedgerStore: ObservableObject {
         return result
     }
 
-    func draft(for template: TransactionTemplate) -> TransactionDraft {
+    func draft(for template: TransactionTemplate, accountID: UUID? = nil) -> TransactionDraft {
         var draft = makeTransactionDraft(ledgerID: template.ledgerID)
         draft.payee = template.payee
         draft.note = template.note
@@ -2123,7 +2129,7 @@ final class MobileLedgerStore: ObservableObject {
         while draft.postings.count < 2 {
             draft.postings.append(PostingDraft(accountID: nil, amount: "0.00"))
         }
-        return draft
+        return applyingAccountContext(accountID, to: draft, onlyUnspecifiedAccounts: true)
     }
 
     /// Resolve unspecified postings and broad categories before opening a template's editor.

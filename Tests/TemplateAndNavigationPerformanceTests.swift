@@ -7,6 +7,52 @@ import SQLite3
 final class TemplateAndNavigationPerformanceTests: XCTestCase {
 
     @MainActor
+    func testTemplateAccountContextOnlyFillsUnspecifiedPostings() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let ledger = Ledger(name: "Templates")
+        let otherLedger = Ledger(name: "Other")
+        let currencyID = UUID()
+        let bank = Account(ledgerID: ledger.id, commodityID: currencyID, name: "Checking", kind: .asset)
+        let card = Account(ledgerID: ledger.id, commodityID: currencyID, name: "Credit card", kind: .liability)
+        let food = Account(ledgerID: ledger.id, commodityID: currencyID, name: "Food", kind: .expense)
+        let foreign = Account(ledgerID: otherLedger.id, name: "Foreign", kind: .asset)
+        let data = JournalData(ledgers: [ledger, otherLedger],
+            commodities: [Commodity(id: currencyID, ledgerID: ledger.id, symbol: "USD", name: "Dollar")],
+            accounts: [bank, card, food, foreign], transactions: [], selectedLedgerID: ledger.id)
+        let store = MobileLedgerStore(supportDirectory: directory, initialData: data)
+        let cases: [(slots: [UUID?], context: UUID?, expected: [UUID?])] = [
+            ([bank.id, nil], card.id, [bank.id, card.id]), // Credit card payment retains its source.
+            ([nil, food.id], card.id, [card.id, food.id]),
+            ([bank.id, food.id], card.id, [bank.id, food.id]), // Complete Uber Eats template.
+            ([bank.id, card.id], card.id, [bank.id, card.id]), // Never swap complete transfers.
+            ([card.id, nil], card.id, [card.id, nil]), // Never duplicate an already chosen account.
+            ([bank.id, nil, food.id], card.id, [bank.id, card.id, food.id]),
+            ([nil, nil], card.id, [card.id, nil]),
+            ([nil, nil], food.id, [nil, food.id]),
+            ([bank.id, nil], food.id, [bank.id, food.id]),
+            ([bank.id, nil], foreign.id, [bank.id, nil]),
+            ([bank.id, nil], nil, [bank.id, nil]),
+            ([bank.id], card.id, [bank.id, card.id]),
+            ([], card.id, [card.id, nil])
+        ]
+        for entry in cases {
+            let template = TransactionTemplate(ledgerID: ledger.id, name: "Template",
+                note: "Keep note", payee: "Keep payee", cleared: false,
+                postings: entry.slots.enumerated().reversed().map { PostingTemplate(accountID: $0.element, listIndex: $0.offset) })
+            let draft = store.draft(for: template, accountID: entry.context)
+            XCTAssertEqual(draft.postings.map(\.accountID), entry.expected)
+            XCTAssertEqual(draft.postings.map(\.amount), Array(repeating: "0.00", count: entry.expected.count))
+            XCTAssertEqual(draft.note, template.note)
+            XCTAssertEqual(draft.payee, template.payee)
+            XCTAssertEqual(draft.cleared, template.cleared)
+            if let index = entry.expected.firstIndex(of: card.id), !entry.slots.contains(card.id) {
+                XCTAssertEqual(draft.postings[index].commodityID, currencyID)
+            }
+        }
+    }
+
+    @MainActor
     func testNewDraftAccountContextOverridesDefaultsByRoleAndPreservesOtherFields() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

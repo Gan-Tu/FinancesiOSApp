@@ -1,7 +1,7 @@
 import XCTest
 
 final class CompanionFlowTests: XCTestCase {
-    @MainActor func testNewTransactionUsesViewedAccountThroughTemplatePicker() throws {
+    @MainActor func testTemplateAccountsTakePrecedenceOverViewedAccount() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchArguments = ["--demo", "--reset-demo"]
@@ -20,7 +20,13 @@ final class CompanionFlowTests: XCTestCase {
             app.buttons["New Transaction"].tap()
             app.buttons[template].tap()
             XCTAssertTrue(app.navigationBars["New Transaction"].waitForExistence(timeout: 5), "The current category must not require selecting it again")
-            XCTAssertTrue(app.textFields["Amount for \(name)"].exists, "The draft must inherit \(name)")
+            XCTAssertTrue(app.textFields["Amount for Checking"].exists, "Keep the template's specified bank account")
+            if name == "Cash" {
+                XCTAssertFalse(app.textFields["Amount for Cash"].exists, "A complete template must not inherit the viewed account")
+                XCTAssertTrue(app.textFields["Amount for Salary"].exists)
+            } else {
+                XCTAssertTrue(app.textFields["Amount for \(name)"].exists, "Keep the template's matching category")
+            }
             app.navigationBars["New Transaction"].buttons["Cancel"].tap()
             app.navigationBars.buttons.element(boundBy: 0).tap()
         }

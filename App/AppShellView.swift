@@ -535,7 +535,7 @@ struct EditorSheet: View {
         case .transaction(let draft, let title, let scanInvoice):
             NavigationStack { TransactionEditorView(title: title, initialDraft: draft, scanInvoice: scanInvoice) }
         case .newFromTemplate(let template, let title, let accountID):
-            let draft = store.applyingAccountContext(accountID, to: store.draft(for: template))
+            let draft = store.draft(for: template, accountID: accountID)
             TemplateTransactionEntryView(title: title, initialDraft: draft,
                 accountPostingIDs: store.templateAccountSelectionPostingIDs(in: draft).filter { id in
                     // An explicitly viewed category is already chosen, even when it has children.
