@@ -359,8 +359,13 @@ final class AssistantCoordinator: ObservableObject {
                     conversation.turnSteps += 1; try persist()
                     activity = "Thinking…"; streamingText = ""
                     var completed = false
-                    let timeContext = AssistantTimeContext.message(now: now())
-                    try await gateway.step(items: [timeContext] + conversation.items, settings: conversation.settings) { [weak self] event in
+                    var context = [AssistantTimeContext.message(now: now())]
+                    let instructions = tools.receiptPreferences().instructions.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !instructions.isEmpty {
+                        // Refresh saved receipt preferences per step without adding them to history.
+                        context.append(.object(["type": .string("message"), "role": .string("user"), "text": .string("My saved receipt suggestion instructions (also apply to relevant finance chat requests):\n\(instructions)")]))
+                    }
+                    try await gateway.step(items: context + conversation.items, settings: conversation.settings) { [weak self] event in
                         guard let self, self.generation == stamp else { throw CancellationError() }
                         try self.requireActive()
                         if event.type == "text_delta" { self.streamingText += event.text ?? "" }

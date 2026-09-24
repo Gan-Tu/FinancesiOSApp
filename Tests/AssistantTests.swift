@@ -834,6 +834,42 @@ final class AssistantTests: XCTestCase {
         restarted.dismiss()
     }
 
+    func testEveryChatStepReceivesCurrentReceiptInstructionsWithoutPersistingThem() async throws {
+        let f = try fixture(), subject = "cloudkit:iCloud.fixture:development:user-a"
+        _ = try f.store.assistantDatabase.bindCloudKitAccount(contextKey: "iCloud.fixture|Development|Journal", accountID: "user-a")
+        let gateway = TestAssistantGateway(subject: subject)
+        let original = String(repeating: "购物：使用生活费用。\n", count: 600)
+        var instructions = "  \(original)  "
+        gateway.firstCalls = [call("get_balances", .object([:]))]
+        gateway.beforeFirstStep = { instructions = "Uber: use Cash." }
+        let coordinator = AssistantCoordinator(store: f.store, gateway: gateway, contract: f.contract)
+        coordinator.consented = true; coordinator.setForeground(true); coordinator.present()
+        try await wait { coordinator.connected }
+        coordinator.tools?.receiptPreferences = { ([:], instructions) }
+        coordinator.conversation.settings.customInstructions = "Reply in Chinese."
+        XCTAssertTrue(coordinator.send("Add an Uber ride"))
+        try await wait { !coordinator.isRunning }
+        XCTAssertNil(coordinator.error)
+        XCTAssertEqual(gateway.itemsSeen.count, 2)
+        let prefix = "My saved receipt suggestion instructions (also apply to relevant finance chat requests):\n"
+        for (index, expected) in [original.trimmingCharacters(in: .whitespacesAndNewlines), "Uber: use Cash."].enumerated() {
+            let messages = gateway.itemsSeen[index].filter { $0["text"].string?.hasPrefix(prefix) == true }
+            XCTAssertEqual(messages.count, 1)
+            XCTAssertEqual(messages.first?["role"].string, "user")
+            XCTAssertEqual(messages.first?["text"].string, prefix + expected)
+            XCTAssertEqual(gateway.settingsSeen[index].customInstructions, "Reply in Chinese.")
+        }
+        instructions = " \n "
+        XCTAssertTrue(coordinator.send("Show balances"))
+        try await wait { !coordinator.isRunning }
+        XCTAssertFalse(try XCTUnwrap(gateway.itemsSeen.last).contains { $0["text"].string?.hasPrefix(prefix) == true })
+        XCTAssertFalse(coordinator.conversation.items.contains { $0["text"].string?.hasPrefix(prefix) == true })
+        let saved = try JSONDecoder().decode(AssistantConversation.self, from: XCTUnwrap(f.store.assistantDatabase.assistantHistory(scope: subject).first))
+        XCTAssertFalse(saved.items.contains { $0["text"].string?.hasPrefix(prefix) == true })
+        XCTAssertFalse(saved.messages.contains { $0.text.hasPrefix(prefix) })
+        coordinator.dismiss()
+    }
+
     func testEveryModelStepReceivesFreshLocalTimeWithoutPersistingItAsAMessage() async throws {
         let f = try fixture(), subject = "cloudkit:iCloud.fixture:development:user-a"
         _ = try f.store.assistantDatabase.bindCloudKitAccount(contextKey: "iCloud.fixture|Development|Journal", accountID: "user-a")
