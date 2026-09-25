@@ -47,7 +47,10 @@ final class AssistantMockGateway: AssistantGatewayProtocol {
         guard size > 0, size <= 15 * 1024 * 1024 else { throw AssistantFailure("attachment_limit", "Chat files must be at most 15 MiB.") }
         return .object(["id": .string(UUID().uuidString), "file_id": .string(fileID), "filename": .string(url.lastPathComponent), "size_bytes": .number(Double(size))])
     }
-    func voice(sdp: String, provider: String, context: String) async throws -> AssistantJSON {
-        throw AssistantFailure("inference_disabled", "Voice inference is disabled in development and tests.")
+    func transcribe(url: URL) async throws -> String {
+        _ = try await connect()
+        guard !(try Data(contentsOf: url)).isEmpty else { throw AssistantFailure("empty_audio", "No mock audio.") }
+        try await Task.sleep(for: .milliseconds(300))
+        return "What is my Checking balance in Personal?"
     }
 }

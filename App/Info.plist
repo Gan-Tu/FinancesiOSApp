@@ -71,7 +71,7 @@
 	<key>NSFaceIDUsageDescription</key>
 	<string>Unlock your private financial journals.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Talk with the Finances assistant. Audio is sent to OpenAI only while voice chat is active.</string>
+	<string>Dictate a message to the Finances assistant. Tap Done to send your audio to OpenAI for transcription.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Choose photos for receipts and Ask AI attachments.</string>
 	<key>UIApplicationSceneManifest</key>

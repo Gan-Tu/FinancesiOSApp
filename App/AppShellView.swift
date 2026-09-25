@@ -135,7 +135,7 @@ struct AppShellView: View {
                 .frame(width: 0, height: 0)
         }
         .onChange(of: scenePhase, initial: true) {
-            assistant.setForeground(scenePhase == .active)
+            assistant.setForeground(scenePhase == .active, isBackground: scenePhase == .background)
             store.setSceneActive(scenePhase == .active, sceneID: sceneID)
             if scenePhase != .active { store.lockApp() }
             else {

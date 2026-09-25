@@ -1,8 +1,6 @@
 import XCTest
-import AVFAudio
 import PDFKit
 import UIKit
-@preconcurrency import WebRTC
 @testable import FinancesClone
 
 @MainActor
@@ -33,7 +31,7 @@ final class AssistantTests: XCTestCase {
         XCTAssertEqual(decoded.effort, "high")
     }
 
-    func testDevelopmentUsesOfflineGatewayAndBlocksDirectChatAndVoiceInference() async throws {
+    func testDevelopmentUsesOfflineGatewayAndBlocksDirectChatAndDictationInference() async throws {
         let f = try fixture()
         XCTAssertTrue(AIInferencePolicy.blocksNetwork)
         let coordinator = AssistantCoordinator(store: f.store)
@@ -50,8 +48,8 @@ final class AssistantTests: XCTestCase {
             XCTFail("Real chat inference must be blocked")
         } catch { XCTAssertTrue(error.localizedDescription.contains("Real AI inference is disabled")) }
         do {
-            _ = try await networkGateway.voice(sdp: "synthetic-offer", provider: "live", context: "")
-            XCTFail("Real voice inference must be blocked")
+            _ = try await networkGateway.transcribe(url: URL(fileURLWithPath: "/not-a-recording.m4a"))
+            XCTFail("Real transcription inference must be blocked")
         } catch { XCTAssertTrue(error.localizedDescription.contains("Real AI inference is disabled")) }
     }
 
@@ -350,71 +348,153 @@ final class AssistantTests: XCTestCase {
         coordinator.dismiss()
     }
 
-    func testInterruptedVoiceResponsesCannotDispatchFinanceActions() {
-        func event(responseStatus: String, callStatus: String) -> AssistantJSON {
-            .object(["type": .string("response.done"), "response": .object([
-                "status": .string(responseStatus), "output": .array([.object([
-                    "type": .string("function_call"), "name": .string("run_finance_task"),
-                    "status": .string(callStatus), "call_id": .string("call-1"),
-                    "arguments": .string("{\"request\":\"Create the transaction\"}")
-                ])])
-            ])])
+    func testDictationAppendsDraftWithoutSendingAndCleansRecording() async throws {
+        let f = try fixture(), subject = "cloudkit:iCloud.fixture:development:user-a"
+        _ = try f.store.assistantDatabase.bindCloudKitAccount(contextKey: "iCloud.fixture|Development|Journal", accountID: "user-a")
+        let gateway = TestAssistantGateway(subject: subject)
+        var recording: URL?
+        gateway.transcriptionHandler = { url in
+            recording = url
+            XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+            return "  十五美元的午餐 🍜  "
         }
-        for status in ["cancelled", "failed", "incomplete", "in_progress"] {
-            XCTAssertTrue(AssistantVoiceSession.completedRealtimeRequests(in: event(responseStatus: status, callStatus: "completed")).isEmpty)
-        }
-        XCTAssertTrue(AssistantVoiceSession.completedRealtimeRequests(in: event(responseStatus: "completed", callStatus: "incomplete")).isEmpty)
-        let completed = AssistantVoiceSession.completedRealtimeRequests(in: event(responseStatus: "completed", callStatus: "completed"))
-        XCTAssertEqual(completed.count, 1)
-        XCTAssertEqual(completed.first?.request, "Create the transaction")
+        let coordinator = AssistantCoordinator(store: f.store, gateway: gateway, contract: f.contract, recorder: AssistantMockAudioRecorder())
+        coordinator.consented = true; coordinator.setForeground(true); coordinator.present()
+        try await wait { coordinator.connected }
+        coordinator.draftText = "Existing draft:"
+        let ledgerBefore = try AssistantJSON.modelDigest(f.store.data)
+        coordinator.startDictation()
+        try await wait { coordinator.dictation.state == .recording }
+        XCTAssertFalse(coordinator.send("Cannot submit during recording"))
+        coordinator.dictation.finish(); coordinator.dictation.finish()
+        try await wait { coordinator.dictation.state == .idle }
+        XCTAssertEqual(coordinator.draftText, "Existing draft: 十五美元的午餐 🍜")
+        XCTAssertEqual(gateway.transcriptions, 1)
+        XCTAssertEqual(gateway.steps, 0)
+        XCTAssertTrue(coordinator.conversation.messages.isEmpty)
+        XCTAssertEqual(try AssistantJSON.modelDigest(f.store.data), ledgerBefore)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: try XCTUnwrap(recording).path))
+        XCTAssertTrue(coordinator.send(coordinator.draftText))
+        try await wait { !coordinator.isRunning }
+        XCTAssertEqual(coordinator.conversation.messages.first?.text, coordinator.draftText)
+        coordinator.dismiss()
     }
 
-    func testRealtimePlaybackDoesNotFlipWithLateTranscriptsOrGenerationEvents() {
-        var activity = AssistantRealtimeAudioActivity()
-        func event(_ type: String, response: String = "reply", item: String = "user") -> AssistantJSON {
-            .object(["type": .string(type), "response_id": .string(response), "item_id": .string(item)])
-        }
-        XCTAssertEqual(activity.receive(event("output_audio_buffer.started"))?.status, "Speaking")
-        let interruption = activity.receive(event("input_audio_buffer.speech_started"))
-        XCTAssertEqual(interruption?.status, "Speaking") // Still audible until the server clears playback.
-        XCTAssertEqual(interruption?.beganUserSpeech, true)
-        XCTAssertNil(activity.receive(event("input_audio_buffer.speech_started"))) // Don't pause twice.
-        XCTAssertEqual(activity.receive(event("output_audio_buffer.cleared"))?.status, "Listening")
-        for type in ["response.output_audio_transcript.delta", "response.output_audio.done", "response.done"] {
-            XCTAssertNil(activity.receive(event(type)))
-        }
-        XCTAssertEqual(activity.receive(event("input_audio_buffer.speech_stopped"))?.status, "Listening")
-        XCTAssertEqual(activity.receive(event("output_audio_buffer.started", response: "next"))?.status, "Speaking")
-        XCTAssertNil(activity.receive(event("output_audio_buffer.stopped", response: "reply")))
-        XCTAssertEqual(activity.receive(event("output_audio_buffer.stopped", response: "next"))?.status, "Listening")
+    func testDictationCancellationRejectsLateTranscriptAndDeletesAudio() async throws {
+        let gateway = TestAssistantGateway(subject: "test"), gate = AssistantTestGate()
+        let dictation = AssistantDictation(recorder: AssistantMockAudioRecorder())
+        var recording: URL?, transcripts: [String] = []
+        gateway.transcriptionHandler = { url in recording = url; await gate.wait(); return "Late result" }
+        dictation.onTranscript = { transcripts.append($0) }
+        dictation.start(gateway: gateway, requireActive: {})
+        try await wait { dictation.state == .recording }
+        dictation.finish()
+        try await wait { gate.waiting }
+        dictation.cancel(); gate.release()
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(dictation.state, .idle)
+        XCTAssertTrue(transcripts.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: try XCTUnwrap(recording).path))
     }
 
-    func testVoiceKeepsSpeakerDefaultWhenWebRTCReconfiguresAndReconnects() throws {
-        let voice = AssistantVoiceSession()
-        let audio = RTCAudioSession.sharedInstance()
-        let previousConfiguration = RTCAudioSessionConfiguration.webRTC()
-        defer {
-            voice.stop()
-            RTCAudioSessionConfiguration.setWebRTC(previousConfiguration)
+    func testDictationFailureCanRetrySameRecordingAndPreservesDraft() async throws {
+        let gateway = TestAssistantGateway(subject: "test")
+        let dictation = AssistantDictation(recorder: AssistantMockAudioRecorder())
+        var urls: [URL] = [], transcript = "Typed draft"
+        gateway.transcriptionHandler = { url in
+            urls.append(url)
+            if urls.count == 1 { throw AssistantFailure("offline", "Try again") }
+            return "Recovered transcript"
         }
-        for _ in 0..<2 {
-            try voice.activateAudioSession()
-            try voice.activateAudioSession() // Repeated setup must not leak an activation.
-            XCTAssertTrue(audio.isActive)
-            // Exercise the same configuration WebRTC reapplies at audio-unit startup.
-            do {
-                let configuration = RTCAudioSessionConfiguration.webRTC()
-                audio.lockForConfiguration()
-                defer { audio.unlockForConfiguration() }
-                try audio.setConfiguration(configuration)
-                XCTAssertEqual(audio.category, AVAudioSession.Category.playAndRecord.rawValue)
-                XCTAssertEqual(audio.mode, AVAudioSession.Mode.voiceChat.rawValue)
-                XCTAssertTrue(audio.categoryOptions.contains(.defaultToSpeaker))
-                XCTAssertTrue(audio.categoryOptions.contains(.allowBluetoothHFP))
-            }
-            voice.stop()
-            XCTAssertFalse(audio.isActive)
-        }
+        dictation.onTranscript = { transcript += " " + $0 }
+        dictation.start(gateway: gateway, requireActive: {})
+        try await wait { dictation.state == .recording }
+        dictation.finish()
+        try await wait { dictation.canRetry }
+        XCTAssertEqual(transcript, "Typed draft")
+        XCTAssertEqual(dictation.error, "Try again")
+        dictation.retry(); dictation.retry()
+        try await wait { dictation.state == .idle }
+        XCTAssertEqual(transcript, "Typed draft Recovered transcript")
+        XCTAssertEqual(urls.count, 2); XCTAssertEqual(urls.first, urls.last)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: try XCTUnwrap(urls.first).path))
+    }
+
+    func testDictationRejectsEmptyTranscriptAndCancelsBeforePermissionReturns() async throws {
+        let gateway = TestAssistantGateway(subject: "test"), recorder = AssistantPermissionRecorder()
+        let dictation = AssistantDictation(recorder: recorder)
+        let gate = AssistantTestGate()
+        recorder.permission = { await gate.wait(); return true }
+        dictation.start(gateway: gateway, requireActive: {})
+        try await wait { gate.waiting }
+        dictation.cancel(); gate.release()
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(recorder.starts, 0)
+        recorder.permission = { false }
+        dictation.start(gateway: gateway, requireActive: {})
+        try await wait { dictation.error != nil }
+        XCTAssertTrue(dictation.error?.contains("microphone access") == true)
+        XCTAssertEqual(recorder.starts, 0)
+        recorder.permission = { true }
+        gateway.transcriptionHandler = { _ in "  \n " }
+        dictation.start(gateway: gateway, requireActive: {})
+        try await wait { dictation.state == .recording }
+        dictation.finish()
+        try await wait { dictation.canRetry }
+        XCTAssertTrue(dictation.error?.contains("No speech") == true)
+        dictation.cancel()
+    }
+
+    func testDictationWaitsForActiveSceneAfterPermissionAndHandlesRecordingCompletion() async throws {
+        let gateway = TestAssistantGateway(subject: "test"), recorder = AssistantPermissionRecorder()
+        let dictation = AssistantDictation(recorder: recorder), permission = AssistantTestGate()
+        var active = false, transcript = ""
+        recorder.permission = { await permission.wait(); return true }
+        gateway.transcriptionHandler = { _ in "Finished at recording limit" }
+        dictation.onTranscript = { transcript = $0 }
+        dictation.start(gateway: gateway) { if !active { throw CancellationError() } }
+        try await wait { permission.waiting }
+        permission.release()
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(recorder.starts, 0)
+        XCTAssertEqual(dictation.state, .preparing)
+        active = true; dictation.activateIfPermitted()
+        XCTAssertEqual(recorder.starts, 1)
+        recorder.onFinish?(nil)
+        try await wait { dictation.state == .idle }
+        XCTAssertEqual(transcript, "Finished at recording limit")
+        dictation.start(gateway: gateway, requireActive: {})
+        try await wait { dictation.state == .recording }
+        recorder.onFinish?(AssistantFailure("recording_failed", "Recording failed"))
+        XCTAssertEqual(dictation.state, .idle)
+        XCTAssertEqual(dictation.error, "Recording failed")
+        XCTAssertEqual(gateway.transcriptions, 1)
+    }
+
+    func testDictationStopsOnBackgroundAndConversationChange() async throws {
+        let f = try fixture(), subject = "cloudkit:iCloud.fixture:development:user-a"
+        _ = try f.store.assistantDatabase.bindCloudKitAccount(contextKey: "iCloud.fixture|Development|Journal", accountID: "user-a")
+        let gateway = TestAssistantGateway(subject: subject), gate = AssistantTestGate()
+        gateway.transcriptionHandler = { _ in await gate.wait(); return "Old conversation" }
+        let coordinator = AssistantCoordinator(store: f.store, gateway: gateway, contract: f.contract, recorder: AssistantMockAudioRecorder())
+        coordinator.consented = true; coordinator.setForeground(true); coordinator.present()
+        try await wait { coordinator.connected }
+        coordinator.draftText = "Keep typed words"
+        coordinator.startDictation()
+        try await wait { coordinator.dictation.state == .recording }
+        coordinator.setForeground(false)
+        XCTAssertEqual(coordinator.dictation.state, .idle)
+        XCTAssertEqual(coordinator.draftText, "Keep typed words")
+        XCTAssertEqual(gateway.transcriptions, 0)
+        coordinator.setForeground(true); coordinator.startDictation()
+        try await wait { coordinator.dictation.state == .recording }
+        coordinator.dictation.finish(); try await wait { gate.waiting }
+        coordinator.newConversation(); gate.release()
+        try await wait { !coordinator.isConnecting }
+        XCTAssertEqual(coordinator.draftText, "")
+        XCTAssertEqual(coordinator.dictation.state, .idle)
+        XCTAssertTrue(coordinator.conversation.messages.isEmpty)
+        coordinator.dismiss()
     }
 
     private var stores: [MobileLedgerStore] = []
@@ -542,12 +622,6 @@ final class AssistantTests: XCTestCase {
         XCTAssertFalse(result.jsonString.contains(ledger.uuidString))
         XCTAssertEqual(try tools.account(.string("Assets / Cash"), ledger: ledger).id, cash.id)
         XCTAssertEqual(try tools.currency(.string("USD"), ledger: ledger).symbol, "USD")
-    }
-    func testLiveAppendChunksPreserveChineseAndEmojiWithinTheTokenByteBound() {
-        let text = String(repeating: "已保存十五美元的午餐 🍜👨‍👩‍👧‍👦。", count: 90)
-        let chunks = AssistantVoiceSession.liveChunks(text)
-        XCTAssertEqual(chunks.joined(), text)
-        XCTAssertTrue(chunks.allSatisfy { !$0.isEmpty && $0.utf8.count <= 400 })
     }
     func testConflictPreviewShowsClearedAndAccountParentDifferences() throws {
         let tools = try fixture(), tx = tools.store.data.transactions[0]
@@ -1245,7 +1319,13 @@ private final class TestAssistantGateway: AssistantGatewayProtocol {
         if let uploadHandler { return try await uploadHandler(url, fileID) }
         throw AssistantFailure("test", "No uploads in this fixture")
     }
-    func voice(sdp: String, provider: String, context: String) async throws -> AssistantJSON { throw AssistantFailure("test", "No voice network in this fixture") }
+    var transcriptions = 0
+    var transcriptionHandler: ((URL) async throws -> String)?
+    func transcribe(url: URL) async throws -> String {
+        transcriptions += 1
+        guard let transcriptionHandler else { throw AssistantFailure("test", "No transcription in this fixture") }
+        return try await transcriptionHandler(url)
+    }
 }
 
 @MainActor
@@ -1262,4 +1342,16 @@ private final class AssistantTestGate {
         released = true
         continuation?.resume(); continuation = nil
     }
+}
+
+@MainActor
+private final class AssistantPermissionRecorder: AssistantAudioRecording {
+    var onFinish: ((Error?) -> Void)?
+    var permission: () async -> Bool = { true }
+    var starts = 0
+    private let recorder = AssistantMockAudioRecorder()
+    func requestPermission() async -> Bool { await permission() }
+    func start() throws { starts += 1; try recorder.start() }
+    func finish() throws -> URL { try recorder.finish() }
+    func cancel() { recorder.cancel() }
 }

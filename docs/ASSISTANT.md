@@ -1,25 +1,25 @@
 # Native Finance Assistant
 
-The iPhone owns tool execution, approvals, conversation checkpoints, and financial writes. The existing Finances backend authenticates the current CloudKit user, proxies Responses inference, and creates WebRTC voice sessions. It does not mirror the journal or run unattended finance operations.
+The iPhone owns tool execution, approvals, conversation checkpoints, and financial writes. The existing Finances backend authenticates the current CloudKit user, proxies Responses inference, and transcribes submitted dictation recordings. It does not mirror the journal or run unattended finance operations.
 
 ## Local testing — mock inference only
 
 Never use real model inference for development, tests, verification, demos, or deployment checks, including against production endpoints. Existing API keys are not permission to make paid test calls.
 
-Debug and Simulator builds block real chat, voice, and receipt inference. Launch the isolated sample app with `--demo` to use `AssistantMockGateway`; no backend, API key, or provider connection is required. Mock history uses the isolated sample scope and must not be mixed into real account history.
+Debug and Simulator builds block real chat, transcription, and receipt inference. Launch the isolated sample app with `--demo` to use `AssistantMockGateway`; no backend, API key, or provider connection is required. Mock history uses the isolated sample scope and must not be mixed into real account history.
 
 ```sh
 xcrun simctl launch --terminate-running-process <SIMULATOR_UDID> \
   dev.gan.FinancesApp.iOS --demo --mock-ai
 ```
 
-Existing demo data and mock history survive relaunch. `--reset-demo` resets only the disposable fixture. In Ask AI, “What is my Checking balance in Personal?” exercises the real local read tool with a deterministic mock response. `MOCK_SLOW_REPLY` provides a cancellable mock stream for follow-up tests. Photo uploads are simulated locally, and voice inference is unavailable in development.
+Existing demo data and mock history survive relaunch. `--reset-demo` resets only the disposable fixture. In Ask AI, “What is my Checking balance in Personal?” exercises the real local read tool with a deterministic mock response. `MOCK_SLOW_REPLY` provides a cancellable mock stream for follow-up tests. Photo uploads and dictation are simulated locally. Dictation uses a synthetic recording and fixed transcript without accessing the microphone or a provider.
 
 **Ask AI** reopens the last active conversation when no more than 10 minutes have passed since leaving it, including after an app relaunch. After that it opens a fresh conversation with a centered welcome. **New Chat** always starts fresh. Restored chats keep their original journal context, and paused work waits for an explicit Resume. Existing conversations remain in **History**. Opening and closing an untouched welcome does not add an empty history entry. The transcript shows message bubbles and a thinking indicator, without an Actions disclosure. Answers render Markdown headings, lists, quotes, links, code, and tables; wide tables and code scroll horizontally inside the message. In **History**, swipe left for **Rename** or **Delete**. Renaming preserves the conversation's activity date and 30-day expiry.
 
 Every model step receives the current device-local timestamp and time zone as transient context; it is not a visible message or a saved historical timestamp. New transactions, duplicates, and entries from templates use an explicit ISO timestamp with at least minute precision and an offset, or `date: "now"`. Missing dates default to `now`, resolved on the iPhone during execution. Date-only creation is rejected instead of silently saving midnight. Date-only search/report bounds and existing transaction dates remain supported, and replaying a committed action retains its original timestamp.
 
-**Settings → Ask AI** and the chat's **Assistant Settings** open the same app-wide preferences. Unset model choices default to `gpt-5.6-terra` with medium reasoning; valid saved overrides are preserved. Model, reasoning, and instructions use a separate private iCloud preferences zone with an account-scoped local outbox. Synced settings restore after reinstalling with the same iCloud account; pending changes must finish syncing first. Sample-mode preferences remain local. Each new request snapshots current preferences; paused work keeps its original settings. Live voice captions are hidden; production voice uses speakerphone noise filtering and conservative speech detection.
+**Settings → Ask AI** and the chat's **Assistant Settings** open the same app-wide preferences. Unset model choices default to `gpt-5.6-terra` with medium reasoning; valid saved overrides are preserved. Model, reasoning, and instructions use a separate private iCloud preferences zone with an account-scoped local outbox. Synced settings restore after reinstalling with the same iCloud account; pending changes must finish syncing first. Sample-mode preferences remain local. Each new request snapshots current preferences; paused work keeps its original settings. Tap the microphone to dictate a single message, up to five minutes. The active status reads **Dictating**. Tap **Done** to transcribe with OpenAI, review or edit the appended draft, then tap Send. There is no voice conversation, audio playback, or automatic finance action. Failed uploads can retry the same recording; Cancel, backgrounding, account changes, or switching conversations discard it and reject late responses. Temporary audio is deleted after success or cancellation.
 
 A browser mirror can be started with `npx --yes serve-sim@latest <SIMULATOR_UDID>`. Use the URL it prints; do not expose it on the network unless explicitly needed. On Xcode 27, native Simulator windows are managed through Device Hub.
 
@@ -46,14 +46,15 @@ npm run build
 
 ## Contracts and recovery
 
-- Protocol version 1 uses `mobile-assistant/options`, `mobile-assistant/step`, and `mobile-assistant/voice-session` under `/api/v1/`. Swift sees app-owned messages, tool calls/results, citations, and opaque user-signed continuation data, not SDK types.
+- Protocol version 1 uses `mobile-assistant/options`, `mobile-assistant/step`, and `mobile-assistant/transcribe` under `/api/v1/`. Swift sees app-owned messages, tool calls/results, citations, and opaque user-signed continuation data, not SDK types.
 - The bundled 44-tool contract is exported from the canonical web catalog. Native finance commands reuse `MobileLedgerStore` operations and exact decimal strings.
 - Hosted tool search defers finance and conversation-title tools; only app context is eager. Discovery state stays in signed continuations, and discovery-only steps continue inference before local actions execute.
 - SQLite `assistant_actions` commits action results in the same transaction as ledger/outbox changes. It is the authority after a lost reply. `assistant_history` contains local-only 30-day checkpoints. Neither table is part of CloudKit envelopes or portable finance backups.
 - Pending intents must be durable before execution. Resume rechecks identity, current record revisions, and approval fingerprints. Cancel Remaining reconciles committed receipts before marking unfinished calls cancelled.
 - Pausing stops new execution. Already-started atomic commits finish or roll back. A stopped run never implies an undo.
 - Local identity verification precedes showing history. Gateway failure does not hide already verified local history. Account changes cancel and hide account-specific state.
-- GPT-Live client delegation is preferred. Explicit delegation events, timestamped user/assistant transcripts, and request IDs own voice tasks. Realtime uses the same native agent through `run_finance_task` if Live access is unavailable. Voice results are never reassigned to a newer request.
+- Dictation sends a bounded `audio/mp4` body (mono AAC/M4A, at most 3 MiB) to the authenticated backend, which calls `/v1/audio/transcriptions` with `gpt-transcribe` and returns `{version: 1, text}` in the original language. Audio is processed in memory without becoming a receipt or chat attachment. The app never receives an API key. Legacy server voice routes remain for older installed apps; this client has no WebRTC dependency.
+- API reference: [OpenAI file transcription](https://developers.openai.com/api/docs/guides/speech-to-text). Recording uses [AVAudioRecorder](https://developer.apple.com/documentation/avfaudio/avaudiorecorder).
 - Temporary uploads are separate from saved receipts. Expired chat uploads can be removed from historical inference context without deleting journal attachments or replaying saved edits.
 
 ## Validation limits

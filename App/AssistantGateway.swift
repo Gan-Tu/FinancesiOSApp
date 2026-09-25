@@ -8,7 +8,7 @@ protocol AssistantGatewayProtocol {
     func options() async throws -> AssistantJSON
     func step(items: [AssistantJSON], settings: AssistantSettings, receive: @escaping @MainActor (AssistantStepEvent) throws -> Void) async throws
     func upload(url: URL, fileID: String) async throws -> AssistantJSON
-    func voice(sdp: String, provider: String, context: String) async throws -> AssistantJSON
+    func transcribe(url: URL) async throws -> String
 }
 
 @MainActor
@@ -62,11 +62,35 @@ final class AssistantGateway: AssistantGatewayProtocol {
         guard let attachment = value["attachments"].array.first, attachment["file_id"].string?.lowercased() == fileID.lowercased(), attachment["id"].string != nil else { throw AssistantFailure("upload_failed", "The file could not be matched to its upload.") }
         return attachment
     }
-    func voice(sdp: String, provider: String, context: String) async throws -> AssistantJSON {
+    func transcribe(url: URL) async throws -> String {
         try AIInferencePolicy.requireNetworkInference()
-        let body = AssistantJSON.object(["version": .number(1), "sdp": .string(sdp), "provider": .string(provider), "context": .string(String(context.prefix(8000)))])
-        let request = try auth.assistantRequest("mobile-assistant/voice-session", endpoint: endpoint, data: body.encoded())
-        let (data, response) = try await auth.assistantURLSession.data(for: request); try check(response)
-        return try JSONDecoder().decode(AssistantJSON.self, from: data)
+        let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+        guard size > 0, size <= 3 * 1024 * 1024 else {
+            throw AssistantFailure("recording_limit", "No audio was captured, or the dictation is too long. Please dictate a shorter message.")
+        }
+        var request = try auth.assistantRequest("mobile-assistant/transcribe", endpoint: endpoint,
+            data: Data(contentsOf: url), contentType: "audio/mp4")
+        request.timeoutInterval = 75
+        let (data, response) = try await auth.assistantURLSession.data(for: request)
+        if (response as? HTTPURLResponse)?.statusCode == 401 {
+            auth.assistantSessionExpired()
+            throw AssistantFailure("session_expired", "Your session expired. Close and reopen Ask Finances to reconnect.")
+        }
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode), http.statusCode != 401 {
+            let message: String
+            switch http.statusCode {
+            case 413: message = "The dictation is too long. Please dictate a shorter message."
+            case 422: message = "No speech was detected. Please dictate again."
+            case 429: message = "Dictation is busy. Wait a moment, then tap Retry."
+            default: message = "Dictation could not be transcribed. Tap Retry or dictate again."
+            }
+            throw AssistantFailure("transcription_failed", message)
+        }
+        try check(response)
+        let result = try JSONDecoder().decode(AssistantJSON.self, from: data)
+        guard let text = result["text"].string, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AssistantFailure("empty_transcript", "No speech was detected. Please dictate again.")
+        }
+        return text
     }
 }

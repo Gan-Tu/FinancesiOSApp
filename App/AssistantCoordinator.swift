@@ -31,7 +31,9 @@ final class AssistantCoordinator: ObservableObject {
     let store: MobileLedgerStore
     let gateway: any AssistantGatewayProtocol
     let contract: AssistantContract
-    let voice: AssistantVoiceSession
+    let dictation: AssistantDictation
+    @Published var draftText = ""
+    private var dictationObservation: AnyCancellable?
     let preferences: AssistantPreferencesStore?
     private(set) var identity = ""
     private(set) var tools: AssistantTools?
@@ -46,29 +48,36 @@ final class AssistantCoordinator: ObservableObject {
     private var generation = UUID()
     private let observations = AssistantNotificationTokens()
     private var fileContinuation: CheckedContinuation<[URL], Error>?
-    private var voiceRequestID: String?
     private let logger = Logger(subsystem: "dev.gan.FinancesApp.iOS", category: "Assistant")
 
-    init(store: MobileLedgerStore, gateway: (any AssistantGatewayProtocol)? = nil, contract: AssistantContract? = nil, preferences: AssistantPreferencesStore? = nil, now: @escaping () -> Date = Date.init) {
+    init(store: MobileLedgerStore, gateway: (any AssistantGatewayProtocol)? = nil, contract: AssistantContract? = nil, preferences: AssistantPreferencesStore? = nil, recorder: (any AssistantAudioRecording)? = nil, now: @escaping () -> Date = Date.init) {
         self.store = store
         self.now = now
         self.preferences = preferences
         self.gateway = gateway ?? (AIInferencePolicy.blocksNetwork ? AssistantMockGateway() : AssistantGateway())
         self.contract = contract ?? (try? AssistantContract.load()) ?? AssistantContract(version: 1, tools: [])
-        voice = AssistantVoiceSession()
+        dictation = AssistantDictation(recorder: recorder ?? (AIInferencePolicy.usesIsolatedSample ? AssistantMockAudioRecorder() : AssistantAudioRecorder()))
         consented = UserDefaults.standard.bool(forKey: "assistant.cloudConsent.v1")
         observations.values.append(NotificationCenter.default.addObserver(forName: .CKAccountChanged, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.invalidateIdentity() }
         })
-        voice.onRequest = { [weak self] text, id, visible in self?.send(text, fromVoice: true, voiceRequestID: id, displayText: visible) }
-        voice.onCorrection = { [weak self] in if self?.isRunning == true { self?.pause(stopVoice: false) } }
+        dictation.onTranscript = { [weak self] text in
+            guard let self else { return }
+            let separator = self.draftText.isEmpty || self.draftText.last?.isWhitespace == true ? "" : " "
+            self.draftText += separator + text
+        }
+        dictationObservation = dictation.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
     }
 
-    func setForeground(_ active: Bool) {
+    func setForeground(_ active: Bool, isBackground: Bool = true) {
         if foreground && !active && presented { conversation.lastActiveAt = now() }
         foreground = active
-        if !active { pause() }
-        else if let preferences { Task { await preferences.refresh() } }
+        if !active {
+            if isBackground || dictation.state != .preparing { pause() }
+        } else {
+            dictation.activateIfPermitted()
+            if let preferences { Task { await preferences.refresh() } }
+        }
     }
     func lockChanged() { if store.requiresUnlock { pause() } }
     func acceptConsent() {
@@ -90,7 +99,7 @@ final class AssistantCoordinator: ObservableObject {
     }
     func invalidateIdentity() {
         pause(); tools?.clearPreviews(); connected = false; identity = ""; tools = nil
-        history = []; conversation = AssistantConversation(); uploadedFiles = []; artifact = nil; restoreRecentOnConnect = false
+        history = []; conversation = AssistantConversation(); draftText = ""; uploadedFiles = []; artifact = nil; restoreRecentOnConnect = false
         error = "Your iCloud account changed. Reopen the assistant after Finances refreshes its account."
     }
     private func verifyIdentity(_ subject: String) throws {
@@ -216,7 +225,7 @@ final class AssistantCoordinator: ObservableObject {
     private func clearConversationPresentation() {
         uploadedFiles = []; error = nil; streamingText = ""; artifact = nil
         approval = nil; approvalText = ""; approvalFingerprint = ""
-        needsAttachmentRecovery = false; navigationRequest = nil; voiceRequestID = nil
+        needsAttachmentRecovery = false; navigationRequest = nil; draftText = ""
     }
     func selectConversation(_ value: AssistantConversation) {
         pause(); tools?.clearPreviews()
@@ -266,18 +275,18 @@ final class AssistantCoordinator: ObservableObject {
         return result
     }
     @discardableResult
-    func send(_ text: String, fromVoice: Bool = false, voiceRequestID: String? = nil, displayText: String? = nil) -> Bool {
+    func send(_ text: String) -> Bool {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, canAcceptMessage else { return false }
+        guard !text.isEmpty, !dictation.isBusy, canAcceptMessage else { return false }
         do {
             try requireActive()
             let steering = isRunning || conversation.canResume
             // Steering retains the current run's settings and journal scope.
             let settings = steering ? conversation.settings : try settingsForNewRequest()
-            if steering { interruptExecution(stopVoice: !fromVoice) }
+            if steering { interruptExecution() }
             var next = conversation
             next.settings = settings
-            let visible = displayText ?? text
+            let visible = text
             if next.messages.isEmpty && next.customTitle != true { next.title = String(visible.prefix(70)) }
             next.messages.append(AssistantMessage(role: "user", text: visible))
             var item: AssistantJSON = .object(["type": .string("message"), "role": .string("user"), "text": .string(text)])
@@ -286,7 +295,7 @@ final class AssistantCoordinator: ObservableObject {
             else { next.items.append(item); next.turnSteps = 0 }
             next.hasPendingInference = true; next.paused = true
             try persist(next)
-            uploadedFiles = []; self.voiceRequestID = voiceRequestID
+            uploadedFiles = []; dictation.cancel()
             resume(); return true
         } catch { self.error = error.localizedDescription; return false }
     }
@@ -298,7 +307,6 @@ final class AssistantCoordinator: ObservableObject {
         guard !isRunning, !isConnecting, conversation.canResume else { return }
         error = nil; approval = nil
         let stamp = UUID(); generation = stamp
-        let delegatedRequestID = voiceRequestID
         isRunning = true; conversation.paused = false
         if conversation.hasPendingSteering { activity = "Updating request…" }
         let previousTask = retiringTask; retiringTask = nil
@@ -381,7 +389,6 @@ final class AssistantCoordinator: ObservableObject {
                             self.streamingText = ""
                             self.conversation.hasPendingInference = !calls.isEmpty || event.needsFollowUp == true
                             try self.persist()
-                            if !self.conversation.hasPendingInference { self.voice.returnResult(text, requestID: delegatedRequestID) }
                         }
                     }
                     guard generation == stamp else { return }
@@ -396,7 +403,6 @@ final class AssistantCoordinator: ObservableObject {
                     self.error = error.localizedDescription; conversation.paused = true
                     needsAttachmentRecovery = (error as? AssistantFailure)?.code == "attachments_expired"
                     do { try persist() } catch { self.error = "Could not save assistant progress. \(error.localizedDescription)" }
-                    voice.returnResult("The task paused: " + (self.error ?? "Please check the app."), requestID: delegatedRequestID)
                 }
             }
         }
@@ -445,12 +451,12 @@ final class AssistantCoordinator: ObservableObject {
             self.approval = nil; conversation.paused = true; try persist(); resume()
         } catch { self.error = error.localizedDescription }
     }
-    func pause(stopVoice: Bool = true) {
-        do { try pauseAndCheckpoint(stopVoice: stopVoice) }
+    func pause() {
+        do { try pauseAndCheckpoint() }
         catch { self.error = "Could not save paused progress: \(error.localizedDescription)" }
     }
-    private func pauseAndCheckpoint(stopVoice: Bool = true) throws {
-        interruptExecution(stopVoice: stopVoice)
+    private func pauseAndCheckpoint() throws {
+        interruptExecution()
         // Merely opening and closing the welcome screen should not fill History.
         let hasHistory = history.contains { $0.id == conversation.id }
         let hasContent = !conversation.messages.isEmpty || !conversation.items.isEmpty
@@ -458,7 +464,7 @@ final class AssistantCoordinator: ObservableObject {
             || conversation.hasPendingInference || conversation.hasPendingSteering || conversation.customTitle == true
         if !identity.isEmpty && (hasHistory || hasContent) { try persist() }
     }
-    private func interruptExecution(stopVoice: Bool) {
+    private func interruptExecution() {
         generation = UUID()
         if let task { task.cancel(); retiringTask = task }
         task = nil; isRunning = false; isConnecting = false
@@ -466,10 +472,10 @@ final class AssistantCoordinator: ObservableObject {
         approval = nil; activity = ""; streamingText = ""
         if conversation.hasPendingInference || !conversation.calls.isEmpty || conversation.hasPendingSteering { conversation.paused = true }
         fileContinuation?.resume(throwing: CancellationError()); fileContinuation = nil; filePurpose = nil
-        if stopVoice { voice.stop() }
+        dictation.cancel()
     }
-    func cancelRemaining(stopVoice: Bool = true) {
-        pause(stopVoice: stopVoice)
+    func cancelRemaining() {
+        pause()
         if let tools {
             do {
                 for call in conversation.calls {
@@ -514,7 +520,7 @@ final class AssistantCoordinator: ObservableObject {
     }
     func beginAttachmentSelection() -> AssistantAttachmentContext? {
         guard canAttachFiles, isCurrentAttachmentContext(attachmentContext) else { return nil }
-        voice.stop()
+        dictation.cancel()
         error = nil
         return attachmentContext
     }
@@ -558,16 +564,11 @@ final class AssistantCoordinator: ObservableObject {
             } catch is CancellationError { } catch { if generation == stamp { self.error = error.localizedDescription } }
         }
     }
-    func startVoice() {
-        guard connected, consented, !conversation.canResume else { return }
-        do { _ = try settingsForNewRequest() }
-        catch { self.error = error.localizedDescription; return }
-        let timeContext = AssistantTimeContext.message(now: now())["text"].string ?? ""
-        let context = timeContext + "\n" + conversation.messages.suffix(10).map { "\($0.role): \($0.text)" }.joined(separator: "\n")
-        let stamp = generation
-        Task {
-            do { try requireActive(); try await voice.start(gateway: gateway, context: context, requireActive: { [weak self] in guard let self else { throw CancellationError() }; try self.requireActive() }) }
-            catch is CancellationError { } catch { if generation == stamp { self.error = error.localizedDescription } }
+    func startDictation() {
+        guard canAcceptMessage, !isRunning, !dictation.isBusy else { return }
+        dictation.start(gateway: gateway) { [weak self] in
+            guard let self else { throw CancellationError() }
+            try self.requireActive()
         }
     }
     private func settingsForNewRequest() throws -> AssistantSettings {

@@ -10,9 +10,6 @@ packages:
   MarkdownUI:
     url: https://github.com/gonzalezreal/swift-markdown-ui.git
     exactVersion: 2.4.1
-  WebRTC:
-    url: https://github.com/stasel/WebRTC.git
-    exactVersion: 153.0.0
   ZIPFoundation:
     url: https://github.com/weichsel/ZIPFoundation.git
     exactVersion: 0.9.20
@@ -78,7 +75,7 @@ targets:
           - dev.gan.FinancesApp.receipt-handoff
         NSCameraUsageDescription: Take photos and scan documents for receipts and Ask AI attachments.
         NSPhotoLibraryUsageDescription: Choose photos for receipts and Ask AI attachments.
-        NSMicrophoneUsageDescription: Talk with the Finances assistant. Audio is sent to OpenAI only while voice chat is active.
+        NSMicrophoneUsageDescription: Dictate a message to the Finances assistant. Tap Done to send your audio to OpenAI for transcription.
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true
         UIApplicationSupportsIndirectInputEvents: true
@@ -166,7 +163,6 @@ targets:
     dependencies:
     - target: FinancesShareExtension
       embed: true
-    - package: WebRTC
     - package: MarkdownUI
     - package: ZIPFoundation
     - sdk: libsqlite3.tbd

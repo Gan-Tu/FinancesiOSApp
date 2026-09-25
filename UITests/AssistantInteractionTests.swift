@@ -4,6 +4,43 @@ import XCTest
 /// No test may request real inference or require an API key.
 @MainActor
 final class AssistantInteractionTests: XCTestCase {
+    func testDictationReviewsAndEditsTextBeforeSendingAndCanCancel() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--demo", "--mock-ai"]
+        app.launch()
+        let open = app.buttons["assistant.open"]
+        XCTAssertTrue(open.waitForExistence(timeout: 10)); open.tap()
+        let consent = app.buttons["assistant.consent"]
+        if consent.waitForExistence(timeout: 2) { consent.tap() }
+        app.buttons["Assistant Options"].tap(); app.buttons["New Chat"].tap()
+        let composer = app.textFields["assistant.composer"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 10)); composer.tap(); composer.typeText("Please check: ")
+        let mic = app.buttons["assistant.dictate"]
+        XCTAssertTrue(mic.isEnabled); mic.tap()
+        let done = app.buttons["assistant.dictation.done"]
+        XCTAssertTrue(done.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Dictating"].exists)
+        XCTAssertFalse(app.staticTexts["Recording"].exists)
+        done.tap()
+        let expected = "Please check: What is my Checking balance in Personal?"
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", expected), object: composer)], timeout: 10), .completed)
+        XCTAssertFalse(app.otherElements["assistant.message.user"].exists)
+        composer.tap(); composer.typeText(" Thanks")
+        // Tapping the field places the caret at the tapped position on iOS 27.
+        // Cancellation must preserve the exact edit, wherever it was inserted.
+        let edited = try XCTUnwrap(composer.value as? String)
+        XCTAssertTrue(edited.contains("Thanks")); XCTAssertTrue(edited.contains(expected))
+        mic.tap()
+        let cancel = app.buttons["assistant.dictation.cancel"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5)); cancel.tap()
+        XCTAssertEqual(composer.value as? String, edited)
+        app.buttons["assistant.send"].tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Mock Checking balance response")).firstMatch.waitForExistence(timeout: 20))
+        XCTAssertEqual(composer.value as? String, "Ask about your finances…")
+        app.buttons["Close"].tap()
+    }
+
     func testLocalAssistantOffersAttachmentSourcesAndUploadsSelectedPhoto() throws {
         guard ProcessInfo.processInfo.environment["FINANCES_MOCK_ASSISTANT_TESTS"] == "1" else {
             throw XCTSkip("Run the local assistant UI test script with a seeded photo in its simulator (mock AI only).")
@@ -147,7 +184,7 @@ final class AssistantInteractionTests: XCTestCase {
         if welcomeBounds.height < welcomeViewport.frame.height {
             XCTAssertEqual(welcomeBounds.midY, welcomeViewport.frame.midY, accuracy: 8, "Welcome should be centered between the header and composer.")
         }
-        XCTAssertTrue(app.buttons["Start Voice Chat"].isHittable)
+        XCTAssertTrue(app.buttons["Dictate Message"].isHittable)
         XCTAssertTrue(app.buttons["assistant.attach"].isHittable)
         for suggestion in ["Summarize this month", "Find recent receipts", "Show my account balances"] {
             XCTAssertFalse(app.buttons[suggestion].exists)
@@ -206,7 +243,7 @@ final class AssistantInteractionTests: XCTestCase {
         let consent = app.buttons["assistant.consent"]
         if consent.waitForExistence(timeout: 2) { consent.tap() }
         app.buttons["Assistant Options"].tap(); app.buttons["New Chat"].tap()
-        XCTAssertTrue(app.buttons["Start Voice Chat"].exists)
+        XCTAssertTrue(app.buttons["Dictate Message"].exists)
         XCTAssertFalse(app.buttons["assistant.send"].isEnabled)
         let composer = app.textFields["assistant.composer"]
         let multiline = app.textViews["assistant.composer"]

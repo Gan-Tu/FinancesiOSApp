@@ -368,7 +368,7 @@ private final class ReceiptSessionObservers {
         _ path: String, endpoint: String, method: String = "GET", data: Data? = nil,
         contentType: String = "application/json", origin: String? = nil
     ) throws -> URLRequest {
-        if method == "POST", ["receipt-analysis", "assistant", "mobile-assistant/step", "mobile-assistant/voice-session"].contains(path) {
+        if method == "POST", ["receipt-analysis", "assistant", "mobile-assistant/step", "mobile-assistant/transcribe"].contains(path) {
             try AIInferencePolicy.requireNetworkInference()
         }
         var req = URLRequest(url: try base(endpoint).appendingPathComponent("api/v1/" + path))
