@@ -13,13 +13,14 @@ final class TemplateAndNavigationPerformanceTests: XCTestCase {
         let ledger = Ledger(name: "Templates")
         let otherLedger = Ledger(name: "Other")
         let currencyID = UUID()
-        let bank = Account(ledgerID: ledger.id, commodityID: currencyID, name: "Checking", kind: .asset)
-        let card = Account(ledgerID: ledger.id, commodityID: currencyID, name: "Credit card", kind: .liability)
-        let food = Account(ledgerID: ledger.id, commodityID: currencyID, name: "Food", kind: .expense)
+        let roots = AccountKind.allCases.map { Account(ledgerID: ledger.id, name: $0.title, kind: $0) }
+        let bank = Account(ledgerID: ledger.id, parentID: roots.first { $0.kind == .asset }!.id, commodityID: currencyID, name: "Checking", kind: .asset)
+        let card = Account(ledgerID: ledger.id, parentID: roots.first { $0.kind == .liability }!.id, commodityID: currencyID, name: "Credit card", kind: .liability)
+        let food = Account(ledgerID: ledger.id, parentID: roots.first { $0.kind == .expense }!.id, commodityID: currencyID, name: "Food", kind: .expense)
         let foreign = Account(ledgerID: otherLedger.id, name: "Foreign", kind: .asset)
         let data = JournalData(ledgers: [ledger, otherLedger],
             commodities: [Commodity(id: currencyID, ledgerID: ledger.id, symbol: "USD", name: "Dollar")],
-            accounts: [bank, card, food, foreign], transactions: [], selectedLedgerID: ledger.id)
+            accounts: roots + [bank, card, food, foreign], transactions: [], selectedLedgerID: ledger.id)
         let store = MobileLedgerStore(supportDirectory: directory, initialData: data)
         let cases: [(slots: [UUID?], context: UUID?, expected: [UUID?])] = [
             ([bank.id, nil], card.id, [bank.id, card.id]), // Credit card payment retains its source.
@@ -48,6 +49,57 @@ final class TemplateAndNavigationPerformanceTests: XCTestCase {
             XCTAssertEqual(draft.cleared, template.cleared)
             if let index = entry.expected.firstIndex(of: card.id), !entry.slots.contains(card.id) {
                 XCTAssertEqual(draft.postings[index].commodityID, currencyID)
+            }
+        }
+    }
+
+    @MainActor
+    func testTemplateGroupsBehaveLikeUnspecifiedAccountsAcrossAllKinds() throws {
+        for kind in AccountKind.allCases {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let ledger = Ledger(name: "Template groups")
+            let currencyID = UUID()
+            let root = Account(ledgerID: ledger.id, name: kind.title, kind: kind)
+            let group = Account(ledgerID: ledger.id, parentID: root.id, name: "Nested group", kind: kind)
+            let leaf = Account(ledgerID: ledger.id, parentID: group.id,
+                commodityID: currencyID, name: "Selected leaf", kind: kind)
+            let fixed = Account(ledgerID: ledger.id, parentID: root.id, name: "Fixed leaf", kind: kind)
+            let emptyRoot = Account(ledgerID: ledger.id, name: "Empty root", kind: kind)
+            let data = JournalData(ledgers: [ledger],
+                commodities: [Commodity(id: currencyID, ledgerID: ledger.id, symbol: "EUR", name: "Euro")],
+                accounts: [leaf, fixed, group, root, emptyRoot], transactions: [], selectedLedgerID: ledger.id)
+            let store = MobileLedgerStore(supportDirectory: directory, initialData: data)
+            let cases: [(slots: [UUID?], context: UUID?, expected: [UUID?])] = [
+                ([fixed.id, root.id], leaf.id, [fixed.id, leaf.id]),
+                ([fixed.id, group.id], leaf.id, [fixed.id, leaf.id]),
+                ([group.id, fixed.id], leaf.id, [leaf.id, fixed.id]),
+                ([fixed.id, group.id], nil, [fixed.id, nil]),
+                ([fixed.id, emptyRoot.id], leaf.id, [fixed.id, leaf.id]),
+                ([fixed.id, root.id, group.id], leaf.id, [fixed.id, leaf.id, nil]),
+                ([leaf.id, group.id], leaf.id, [leaf.id, nil]),
+                ([group.id], nil, [nil, nil]),
+                ([fixed.id], nil, [fixed.id, nil]),
+                ([], nil, [nil, nil]),
+                // Explicitly opening a group's page still supplies that chosen context.
+                ([fixed.id, group.id], group.id, [fixed.id, group.id])
+            ]
+            for entry in cases {
+                let template = TransactionTemplate(ledgerID: ledger.id, name: "Reusable template",
+                    note: "Keep note", payee: "Keep payee", cleared: false,
+                    postings: entry.slots.enumerated().reversed().map {
+                        PostingTemplate(accountID: $0.element, listIndex: $0.offset)
+                    })
+                let draft = store.draft(for: template, accountID: entry.context)
+                XCTAssertEqual(draft.postings.map(\.accountID), entry.expected, "\(kind): \(entry.slots)")
+                XCTAssertEqual(template.postings.sorted { $0.listIndex < $1.listIndex }.map(\.accountID), entry.slots)
+                XCTAssertEqual(draft.payee, template.payee)
+                XCTAssertEqual(draft.note, template.note)
+                XCTAssertEqual(draft.cleared, template.cleared)
+                XCTAssertEqual(draft.postings.map(\.amount), Array(repeating: "0.00", count: entry.expected.count))
+                if let index = entry.expected.firstIndex(of: leaf.id), !entry.slots.contains(leaf.id) {
+                    XCTAssertEqual(draft.postings[index].commodityID, currencyID)
+                }
             }
         }
     }
@@ -178,7 +230,7 @@ final class TemplateAndNavigationPerformanceTests: XCTestCase {
         }
     }
 
-    func testTemplateEntrySelectsOnlyUnspecifiedAccountsAndBroadCategories() throws {
+    func testTemplateEntrySelectsUnspecifiedAccountsAndAllNonLeafAccounts() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         var data = DemoData.fixture(includeTemplates: true)
@@ -189,34 +241,40 @@ final class TemplateAndNavigationPerformanceTests: XCTestCase {
             commodityID: checking.commodityID, name: "Checking sub-account", kind: .asset))
         let store = MobileLedgerStore(supportDirectory: directory, initialData: data)
         let income = try XCTUnwrap(data.transactionTemplates.first { $0.name == "Income" })
-        XCTAssertTrue(store.templateAccountSelectionPostingIDs(in: store.draft(for: income)).isEmpty,
-            "A complete template must open directly, even when its bank account has children")
+        let incomeDraft = store.draft(for: income)
+        let bankIndex = try XCTUnwrap(income.postings.sorted { $0.listIndex < $1.listIndex }
+            .firstIndex { $0.accountID == checking.id })
+        XCTAssertNil(incomeDraft.postings[bankIndex].accountID)
+        XCTAssertEqual(store.templateAccountSelectionPostingIDs(in: incomeDraft), [incomeDraft.postings[bankIndex].id],
+            "A bank account with children is an unspecified template slot")
         var template = try XCTUnwrap(data.transactionTemplates.first { $0.name == "Expense" })
         template.note = "Keep note"; template.payee = "Keep payee"; template.cleared = false
         let grouped = store.draft(for: template)
-        XCTAssertEqual(store.templateAccountSelectionPostingIDs(in: grouped), [grouped.postings[0].id])
-        XCTAssertEqual(grouped.postings[1].accountID, checking.id)
+        XCTAssertEqual(store.templateAccountSelectionPostingIDs(in: grouped), grouped.postings.map(\.id))
+        XCTAssertNil(grouped.postings[1].accountID)
         XCTAssertEqual(grouped.note, template.note)
         XCTAssertEqual(grouped.payee, template.payee)
         XCTAssertFalse(grouped.cleared)
 
         template.postings[0].accountID = groceries.id
-        XCTAssertTrue(store.templateAccountSelectionPostingIDs(in: store.draft(for: template)).isEmpty)
+        let leafCategory = store.draft(for: template)
+        XCTAssertEqual(leafCategory.postings[0].accountID, groceries.id)
+        XCTAssertEqual(store.templateAccountSelectionPostingIDs(in: leafCategory), [leafCategory.postings[1].id])
         template.postings[0].accountID = expenses.id
         let rootCategory = store.draft(for: template)
-        XCTAssertEqual(store.templateAccountSelectionPostingIDs(in: rootCategory), [rootCategory.postings[0].id])
+        XCTAssertEqual(store.templateAccountSelectionPostingIDs(in: rootCategory), rootCategory.postings.map(\.id))
         template.postings[0].accountID = nil
         let missing = store.draft(for: template)
         XCTAssertNil(missing.postings[0].accountID)
-        XCTAssertEqual(missing.postings[1].accountID, checking.id)
-        XCTAssertEqual(store.templateAccountSelectionPostingIDs(in: missing), [missing.postings[0].id])
+        XCTAssertNil(missing.postings[1].accountID)
+        XCTAssertEqual(store.templateAccountSelectionPostingIDs(in: missing), missing.postings.map(\.id))
 
         template.postings = [PostingTemplate(accountID: checking.id)]
         let onePosting = store.draft(for: template)
         XCTAssertEqual(onePosting.postings.count, 2)
-        XCTAssertEqual(onePosting.postings[0].accountID, checking.id)
+        XCTAssertNil(onePosting.postings[0].accountID)
         XCTAssertNil(onePosting.postings[1].accountID)
-        XCTAssertEqual(store.templateAccountSelectionPostingIDs(in: onePosting), [onePosting.postings[1].id])
+        XCTAssertEqual(store.templateAccountSelectionPostingIDs(in: onePosting), onePosting.postings.map(\.id))
         template.postings = []
         let empty = store.draft(for: template)
         XCTAssertEqual(empty.postings.count, 2)

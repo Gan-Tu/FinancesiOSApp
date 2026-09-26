@@ -9,8 +9,9 @@ final class CompanionFlowTests: XCTestCase {
         defer { app.terminate() }
         let personal = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Personal,")).firstMatch
         XCTAssertTrue(personal.waitForExistence(timeout: 10)); personal.tap()
-        for (name, kind, template) in [("Cash", 0, "Income"), ("Salary", 2, "Income"), ("Food & Dining", 3, "Expense")] {
-            app.buttons["account-kind-title-\(kind)"].tap()
+        for (name, kind, template) in [("Cash", 0, "Income"), ("Salary", 2, "Income"), ("Food & Dining", 3, "Expense"), ("Groceries", 3, "Expense")] {
+            let category = app.buttons["account-kind-title-\(kind)"]
+            if category.value as? String == "Collapsed" { category.tap() }
             let account = app.staticTexts[name].firstMatch
             for _ in 0..<4 {
                 if account.exists && account.isHittable { break }
@@ -25,7 +26,7 @@ final class CompanionFlowTests: XCTestCase {
                 XCTAssertFalse(app.textFields["Amount for Cash"].exists, "A complete template must not inherit the viewed account")
                 XCTAssertTrue(app.textFields["Amount for Salary"].exists)
             } else {
-                XCTAssertTrue(app.textFields["Amount for \(name)"].exists, "Keep the template's matching category")
+                XCTAssertTrue(app.textFields["Amount for \(name)"].exists, "Use the viewed category when the template category is a group")
             }
             app.navigationBars["New Transaction"].buttons["Cancel"].tap()
             app.navigationBars.buttons.element(boundBy: 0).tap()

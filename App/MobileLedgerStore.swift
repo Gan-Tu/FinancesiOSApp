@@ -2122,26 +2122,30 @@ final class MobileLedgerStore: ObservableObject {
         draft.payee = template.payee
         draft.note = template.note
         draft.cleared = template.cleared
-        let templatePostings = template.postings
+        let templateAccounts = accountNodes(ledgerID: template.ledgerID).map(\.account)
+        let groupIDs = Set(templateAccounts.compactMap(\.parentID))
+            .union(templateAccounts.filter(\.isGroup).map(\.id))
+        // Saved groups are placeholders, so resolve them before applying the viewed account.
+        draft.postings = template.postings
             .sorted { $0.listIndex < $1.listIndex }
-            .map { PostingDraft(accountID: $0.accountID, amount: "0.00") }
-        draft.postings = templatePostings
+            .map { posting in
+                let accountID = posting.accountID.flatMap { groupIDs.contains($0) ? nil : $0 }
+                return PostingDraft(accountID: accountID, amount: "0.00")
+            }
         while draft.postings.count < 2 {
             draft.postings.append(PostingDraft(accountID: nil, amount: "0.00"))
         }
         return applyingAccountContext(accountID, to: draft, onlyUnspecifiedAccounts: true)
     }
 
-    /// Resolve unspecified postings and broad categories before opening a template's editor.
-    /// Balance-sheet accounts can carry transactions and sub-accounts at the same time,
-    /// so a specified bank/card account is retained even when it has children.
+    /// Resolve unspecified postings and all account groups before opening a template's editor.
     func templateAccountSelectionPostingIDs(in draft: TransactionDraft) -> [UUID] {
-        let categoryGroups = Set(accountNodes(ledgerID: draft.ledgerID).filter {
-            $0.hasChildren && ($0.account.kind == .expense || $0.account.kind == .income)
+        let groupIDs = Set(accountNodes(ledgerID: draft.ledgerID).filter {
+            $0.hasChildren || $0.account.isGroup
         }.map(\.id))
         return draft.postings.filter { posting in
             guard let account = account(posting.accountID), account.ledgerID == draft.ledgerID else { return true }
-            return account.isGroup || categoryGroups.contains(account.id)
+            return groupIDs.contains(account.id)
         }.map(\.id)
     }
 
