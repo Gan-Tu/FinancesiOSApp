@@ -134,6 +134,7 @@ final class CloudKitJournalSyncCoordinator {
     private var activeID: UUID?
     private var tasks: [UUID: Task<Void, Never>] = [:]
     private var client: (any CloudKitSyncTransport)?
+    private var backupClients: [UUID: (client: any CloudKitSyncTransport, progress: Progress)] = [:]
     private var gate: CloudKitPersistenceGate?
     private var persistenceGates: [UUID: CloudKitPersistenceGate] = [:]
     private var reportsProgress = false
@@ -288,6 +289,8 @@ final class CloudKitJournalSyncCoordinator {
     /// Retire ownership first. Late callbacks cannot finish, report errors, or
     /// erase the state of a replacement pass started by a rapid Off/On toggle.
     func cancel() {
+        for request in backupClients.values { request.progress.cancel(); request.client.cancel() }
+        backupClients.removeAll()
         retireActivePass()
         let requests = Array(backgroundRequests.keys)
         for id in requests { finishBackgroundRequest(id, outcome: .noData) }
@@ -308,6 +311,124 @@ final class CloudKitJournalSyncCoordinator {
             for gate in ownedGates { gate.waitForAdmittedWork() }
         } else { oldGate?.closeAdmission() }
         oldClient?.cancel(); task?.cancel()
+    }
+
+    /// Resolve missing receipt bytes for a frozen export without changing live metadata or sync checkpoints.
+    func prepareBackupAttachments(_ snapshot: JournalData, workspace: URL, progress: Progress,
+                                  attachmentURL: (AttachmentAsset) -> URL) async throws -> JournalData {
+        var missing: [UUID: (asset: AttachmentAsset, parent: UUID)] = [:]
+        for row in snapshot.transactions {
+            guard let container = row.attachment else { continue }
+            for asset in container.assets where !FileManager.default.fileExists(atPath: attachmentURL(asset).path) {
+                if let previous = missing[asset.id], previous.asset != asset || previous.parent != container.id {
+                    throw CloudKitSyncError.invalidData("A backup attachment has inconsistent references.")
+                }
+                missing[asset.id] = (asset, container.id)
+            }
+        }
+        try Task.checkCancellation()
+        guard !progress.isCancelled else { throw CancellationError() }
+        guard !missing.isEmpty else { progress.completedUnitCount = progress.totalUnitCount; return snapshot }
+        guard let host, let context = try host.cloudKitSQLiteStore.cloudKitBoundContextKey(),
+              let configuration = dependencies.configuration() else {
+            throw CloudKitSyncError.unavailable("Some backup attachments are missing on this device. Sign in to the journal's iCloud account to download them.")
+        }
+        guard [configuration.containerIdentifier, configuration.environment, configuration.zoneName].joined(separator: "|") == context else {
+            throw CloudKitSyncError.unavailable("The missing backup attachments belong to a different iCloud environment.")
+        }
+        let id = UUID(), client = try dependencies.makeClient(configuration)
+        backupClients[id] = (client, progress)
+        let watcher = Task {
+            while !Task.isCancelled {
+                if progress.isCancelled { client.cancel(); return }
+                do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+            }
+        }
+        defer { watcher.cancel(); backupClients.removeValue(forKey: id); client.cancel() }
+        func check() throws {
+            try Task.checkCancellation()
+            guard !progress.isCancelled, backupClients[id] != nil,
+                  try host.cloudKitSQLiteStore.cloudKitBoundContextKey() == context else { throw CancellationError() }
+        }
+        return try await withTaskCancellationHandler {
+            let account = try await client.accountIdentifier()
+            try check()
+            _ = try host.cloudKitSQLiteStore.bindCloudKitAccount(contextKey: context, accountID: account)
+            progress.totalUnitCount = Int64(missing.count)
+            var paths: [UUID: URL] = [:]
+            for (assetID, reference) in missing.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
+                try check()
+                progress.localizedDescription = "Downloading backup attachment \(paths.count + 1) of \(missing.count)…"
+                do {
+                    let known = try host.cloudKitSQLiteStore.knownCloudKitRecord(forKey: "attachment_asset:\(assetID.uuidString)", contextKey: context)
+                    let remote = try await client.fetchRecord(recordType: "attachment_asset", recordID: assetID.uuidString)
+                    try check()
+                    guard remote.recordType == "attachment_asset", UUID(uuidString: remote.recordID) == assetID,
+                          remote.operation == "upsert", UUID(uuidString: remote.parentRecordID ?? "") == reference.parent,
+                          let payload = remote.payloadJSON?.data(using: .utf8),
+                          let asset = try? JSONDecoder.appDecoder.decode(AttachmentAsset.self, from: payload),
+                          asset.id == assetID, asset.originalFilename == reference.asset.originalFilename,
+                          asset.mimeType == reference.asset.mimeType, asset.sizeBytes == reference.asset.sizeBytes,
+                          known?.assetSHA256 == nil || known?.assetSHA256?.lowercased() == remote.assetSHA256?.lowercased() else {
+                        throw CloudKitSyncError.invalidData("The iCloud attachment differs from this backup's version. Sync and try again.")
+                    }
+                    let url = try await Task.detached(priority: .userInitiated) {
+                        try Self.stageBackupAttachment(remote, asset: reference.asset, workspace: workspace, progress: progress)
+                    }.value
+                    try check()
+                    paths[assetID] = url
+                    progress.completedUnitCount += 1
+                } catch {
+                    if error is CancellationError || progress.isCancelled { throw CancellationError() }
+                    throw CloudKitSyncError.unavailable("Could not download backup attachment \(reference.asset.originalFilename): \(error.localizedDescription)")
+                }
+            }
+            let finalAccount = try await client.accountIdentifier()
+            try check()
+            guard finalAccount == account else { throw CloudKitSyncError.accountUnavailable }
+            var result = snapshot
+            for row in result.transactions.indices {
+                guard var container = result.transactions[row].attachment else { continue }
+                for index in container.assets.indices {
+                    if let url = paths[container.assets[index].id] { container.assets[index].storedPath = url.path }
+                }
+                result.transactions[row].attachment = container
+            }
+            return result
+        } onCancel: {
+            progress.cancel()
+            client.cancel()
+        }
+    }
+
+    private nonisolated static func stageBackupAttachment(_ record: CloudKitSyncRecord, asset: AttachmentAsset,
+                                                         workspace: URL, progress: Progress) throws -> URL {
+        guard let source = record.assetFileURL, source.isFileURL, let checksum = record.assetSHA256?.lowercased(),
+              checksum.count == 64 else { throw CloudKitSyncError.invalidData("The receipt download is incomplete.") }
+        let values = try source.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+        guard values.isRegularFile == true, values.isSymbolicLink != true,
+              Int64(values.fileSize ?? -1) == asset.sizeBytes else { throw CloudKitSyncError.invalidData("The receipt size does not match its metadata.") }
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        let target = workspace.appendingPathComponent(asset.id.uuidString)
+        let input = try FileHandle(forReadingFrom: source)
+        defer { try? input.close() }
+        guard FileManager.default.createFile(atPath: target.path, contents: nil) else { throw CloudKitSyncError.invalidData("Could not prepare the receipt for backup.") }
+        let output = try FileHandle(forWritingTo: target)
+        defer { try? output.close() }
+        var hash = SHA256(), total: Int64 = 0
+        while true {
+            guard !progress.isCancelled else { throw CancellationError() }
+            let bytes = try autoreleasepool { try input.read(upToCount: 256 * 1024) ?? Data() }
+            if bytes.isEmpty { break }
+            total += Int64(bytes.count)
+            guard total <= asset.sizeBytes else { throw CloudKitSyncError.invalidData("The receipt changed while downloading.") }
+            hash.update(data: bytes)
+            try output.write(contentsOf: bytes)
+        }
+        guard total == asset.sizeBytes, hash.finalize().map({ String(format: "%02x", $0) }).joined() == checksum else {
+            throw CloudKitSyncError.invalidData("The receipt checksum does not match its file.")
+        }
+        return target
     }
 
     func waitUntilIdle() async {

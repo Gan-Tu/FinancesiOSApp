@@ -1,10 +1,10 @@
 import Foundation
 
-/// Numeric searches compare complete posting values, never formatted substrings.
+/// Numeric searches match the start of any posting amount, without rounding.
 /// Unsigned queries match either debit or credit; an explicit sign narrows the match.
 struct TransactionAmountSearch {
-    let amount: Decimal
-    let signed: Bool
+    let prefix: String
+    let sign: Character?
 
     init?(_ query: String) {
         var text = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -15,23 +15,29 @@ struct TransactionAmountSearch {
             text.removeFirst()
             text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        let sign = text.first == "-" || text.first == "+" ? String(text.removeFirst()) : ""
+        sign = text.first == "-" || text.first == "+" ? text.removeFirst() : nil
         if !currencyFirst, let first = text.first, currencies.contains(first) {
             text.removeFirst()
             text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        // Decimal(string:) silently rounds beyond its precision; never turn such a query into a false match.
-        let significantDigits = text.filter(\.isNumber).drop(while: { $0 == "0" }).reversed().drop(while: { $0 == "0" })
-        guard significantDigits.count <= 38, text.range(of: #"^(?:(?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(?:\.[0-9]+)?|\.[0-9]+)$"#,
-                         options: .regularExpression) != nil,
-              let amount = Decimal(string: sign + text.replacingOccurrences(of: ",", with: ""),
-                                   locale: Locale(identifier: "en_US_POSIX")), !amount.isNaN else { return nil }
-        self.amount = amount
-        signed = !sign.isEmpty
+        guard text.range(of: #"^(?:(?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(?:\.[0-9]*)?|\.[0-9]+)$"#,
+                         options: .regularExpression) != nil else { return nil }
+        let parts = text.replacingOccurrences(of: ",", with: "").split(separator: ".", omittingEmptySubsequences: false)
+        let integer = parts[0].drop(while: { $0 == "0" })
+        prefix = (integer.isEmpty ? "0" : String(integer)) + (parts.count == 2 ? "." + String(parts[1]) : "")
     }
 
     func matches(_ value: Decimal) -> Bool {
-        signed ? value == amount : value.magnitude == amount
+        guard !value.isNaN, !(sign == "-" && value > 0), !(sign == "+" && value < 0) else { return false }
+        var magnitude = value.magnitude
+        var text = NSDecimalString(&magnitude, Locale(identifier: "en_US_POSIX"))
+        if let dot = prefix.firstIndex(of: ".") {
+            let places = prefix.distance(from: prefix.index(after: dot), to: prefix.endIndex)
+            if !text.contains(".") { text += "." }
+            let existing = text.split(separator: ".", omittingEmptySubsequences: false).last?.count ?? 0
+            text += String(repeating: "0", count: max(0, places - existing))
+        }
+        return text.hasPrefix(prefix)
     }
 }
 

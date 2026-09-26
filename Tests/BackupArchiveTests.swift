@@ -6,6 +6,96 @@ import ZIPFoundation
 
 final class BackupArchiveTests: XCTestCase {
     @MainActor
+    func testAsyncBackupDownloadsOnlyMissingReceiptsAndPreservesTheLiveJournal() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("BackupDownload-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory.appendingPathComponent("Attachments"), withIntermediateDirectories: true)
+        let remoteBytes = Data("Cloud receipt".utf8), localBytes = Data("Local receipt".utf8)
+        let missing = AttachmentAsset(originalFilename: "Cloud.txt", storedPath: "Attachments/missing.txt", mimeType: "text/plain", sizeBytes: Int64(remoteBytes.count))
+        let local = AttachmentAsset(originalFilename: "Local.txt", storedPath: "Attachments/local.txt", mimeType: "text/plain", sizeBytes: Int64(localBytes.count))
+        try localBytes.write(to: directory.appendingPathComponent(local.storedPath))
+        let cloudFile = directory.appendingPathComponent("RemoteBytes")
+        try remoteBytes.write(to: cloudFile)
+        let ledger = Ledger(name: "Backup QA"), currency = Commodity(ledgerID: ledger.id, symbol: "USD", name: "Dollar")
+        let bank = Account(ledgerID: ledger.id, name: "Bank", kind: .asset), expense = Account(ledgerID: ledger.id, name: "Expense", kind: .expense)
+        let container = AttachmentContainer(assets: [missing, local])
+        let row = LedgerTransaction(ledgerID: ledger.id, date: Date(), payee: "Merchant", note: "Keep", number: "", cleared: true,
+            postings: [Posting(accountID: bank.id, amount: -10), Posting(accountID: expense.id, amount: 10)], attachment: container)
+        let data = JournalData(ledgers: [ledger], commodities: [currency], accounts: [bank, expense], transactions: [row], selectedLedgerID: ledger.id, syncEnabled: false)
+        let remote = CloudKitSyncRecord(recordType: "attachment_asset", recordID: missing.id.uuidString,
+            parentRecordID: container.id.uuidString, payloadJSON: String(decoding: try JSONEncoder.appEncoder.encode(missing), as: UTF8.self),
+            assetFileURL: cloudFile, assetSHA256: SHA256.hash(data: remoteBytes).map { String(format: "%02x", $0) }.joined())
+        let client = ExportReceiptTestTransport(record: remote)
+        let dependencies = CloudKitSyncDependencies(configuration: { CloudKitSyncConfiguration() }, makeClient: { _ in client }, automaticTriggersEnabled: false)
+        let store = MobileLedgerStore(supportDirectory: directory, initialData: data, cloudKitSyncDependencies: dependencies)
+        _ = try store.cloudKitSQLiteStore.bindCloudKitAccount(contextKey: "iCloud.dev.gan.FinanceApp|Development|FinancesJournal_v1", accountID: "backup-user")
+        let before = try JSONEncoder.appEncoder.encode(store.data)
+        let progress = Progress(totalUnitCount: 1)
+        let output = try await store.exportBackupFileAsync(progress: progress)
+        let zip = try Archive(url: output, accessMode: .read)
+        func read(_ path: String) throws -> Data {
+            let entry = try XCTUnwrap(zip[path]); var bytes = Data()
+            _ = try zip.extract(entry) { bytes.append($0) }
+            return bytes
+        }
+        let exported = try JSONDecoder.appDecoder.decode(JournalData.self, from: read("Journal.json"))
+        for asset in try XCTUnwrap(exported.transactions.first?.attachment?.assets) {
+            XCTAssertEqual(try read(asset.storedPath), asset.id == missing.id ? remoteBytes : localBytes)
+        }
+        XCTAssertEqual(client.requestedIDs, [missing.id.uuidString])
+        XCTAssertTrue(client.wasCancelled, "The export must release the client's temporary download files")
+        XCTAssertEqual(try JSONEncoder.appEncoder.encode(store.data), before)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.attachmentURL(for: missing).path))
+        XCTAssertEqual(progress.fractionCompleted, 1)
+        XCTAssertNil(try store.cloudKitSQLiteStore.cloudKitChangeToken(contextKey: "iCloud.dev.gan.FinanceApp|Development|FinancesJournal_v1"))
+    }
+
+    @MainActor
+    func testAsyncBackupRejectsMissingChangedCorruptAndCancelledDownloads() async throws {
+        for mode in ["unavailable", "corrupt", "changed", "version", "account", "unbound", "cancelled"] {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("BackupFailure-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let bytes = Data("Cloud receipt".utf8), remoteFile = directory.appendingPathComponent("RemoteBytes")
+            try bytes.write(to: remoteFile)
+            let missing = AttachmentAsset(originalFilename: "Receipt.txt", storedPath: "Attachments/missing.txt", mimeType: "text/plain", sizeBytes: Int64(bytes.count))
+            let ledger = Ledger(name: "Backup QA"), currency = Commodity(ledgerID: ledger.id, symbol: "USD", name: "Dollar")
+            let bank = Account(ledgerID: ledger.id, name: "Bank", kind: .asset), expense = Account(ledgerID: ledger.id, name: "Expense", kind: .expense)
+            let container = AttachmentContainer(assets: [missing])
+            let row = LedgerTransaction(ledgerID: ledger.id, date: Date(), payee: "Merchant", note: "", number: "", cleared: true,
+                postings: [Posting(accountID: bank.id, amount: -10), Posting(accountID: expense.id, amount: 10)], attachment: container)
+            let data = JournalData(ledgers: [ledger], commodities: [currency], accounts: [bank, expense], transactions: [row], selectedLedgerID: ledger.id, syncEnabled: false)
+            let remote = CloudKitSyncRecord(recordType: "attachment_asset", recordID: missing.id.uuidString,
+                parentRecordID: mode == "changed" ? UUID().uuidString : container.id.uuidString,
+                payloadJSON: String(decoding: try JSONEncoder.appEncoder.encode(missing), as: UTF8.self),
+                assetFileURL: mode == "unavailable" ? nil : remoteFile,
+                assetSHA256: mode == "corrupt" ? String(repeating: "0", count: 64) : SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined())
+            let progress = Progress(totalUnitCount: 1)
+            let client = ExportReceiptTestTransport(record: remote, account: mode == "account" ? "different-user" : "backup-user", onFetch: {
+                if mode == "cancelled" { progress.cancel() }
+            })
+            let dependencies = CloudKitSyncDependencies(configuration: { CloudKitSyncConfiguration() }, makeClient: { _ in client }, automaticTriggersEnabled: false)
+            let store = MobileLedgerStore(supportDirectory: directory, initialData: data, cloudKitSyncDependencies: dependencies)
+            if mode != "unbound" {
+                _ = try store.cloudKitSQLiteStore.bindCloudKitAccount(contextKey: "iCloud.dev.gan.FinanceApp|Development|FinancesJournal_v1", accountID: "backup-user")
+            }
+            if mode == "version" {
+                try store.cloudKitFlushLocalChanges()
+                var known = remote; known.assetSHA256 = String(repeating: "f", count: 64)
+                known.contentHash = SHA256.hash(data: Data(known.payloadJSON!.utf8)).map { String(format: "%02x", $0) }.joined()
+                try store.cloudKitSQLiteStore.persistCloudKitPull([known], data: store.data, previous: store.data,
+                    contextKey: "iCloud.dev.gan.FinanceApp|Development|FinancesJournal_v1", changeToken: nil)
+            }
+            let before = try JSONEncoder.appEncoder.encode(store.data)
+            do { _ = try await store.exportBackupFileAsync(progress: progress); XCTFail("Expected \(mode) to fail") }
+            catch { XCTAssertFalse(error.localizedDescription.isEmpty) }
+            XCTAssertNil(store.latestExportedBackup())
+            XCTAssertEqual(try JSONEncoder.appEncoder.encode(store.data), before, mode)
+            if mode == "account" || mode == "unbound" { XCTAssertTrue(client.requestedIDs.isEmpty) }
+        }
+    }
+
+    @MainActor
     func testRetiredSourceMetadataDoesNotBlockRestoreEditOrReopen() throws {
         var fixture = try Fixture()
         defer { fixture.remove() }
@@ -203,4 +293,28 @@ final class BackupArchiveTests: XCTestCase {
         }
         func remove() { try? FileManager.default.removeItem(at: root) }
     }
+}
+
+private final class ExportReceiptTestTransport: CloudKitSyncTransport, @unchecked Sendable {
+    let record: CloudKitSyncRecord
+    let account: String
+    let onFetch: @Sendable () -> Void
+    private let lock = NSLock()
+    private var requests: [String] = []
+    private var cancelled = false
+    var requestedIDs: [String] { lock.withLock { requests } }
+    var wasCancelled: Bool { lock.withLock { cancelled } }
+    init(record: CloudKitSyncRecord, account: String = "backup-user", onFetch: @escaping @Sendable () -> Void = {}) {
+        self.record = record; self.account = account; self.onFetch = onFetch
+    }
+    func accountIdentifier() async throws -> String { account }
+    func prepareZone() async throws { throw CloudKitSyncError.service("Backup must not create a zone") }
+    func fetchChanges(since: Data?) async throws -> CloudKitSyncPage { throw CloudKitSyncError.service("Backup must not run a global sync") }
+    func modifyRecords(_ records: [CloudKitSyncRecord]) async throws -> CloudKitSyncModifyResult { throw CloudKitSyncError.service("Backup must not upload") }
+    func fetchRecord(recordType: String, recordID: String) async throws -> CloudKitSyncRecord {
+        lock.withLock { requests.append(recordID) }
+        onFetch()
+        return record
+    }
+    func cancel() { lock.withLock { cancelled = true } }
 }

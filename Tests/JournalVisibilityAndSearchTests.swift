@@ -3,7 +3,7 @@ import XCTest
 
 @MainActor
 final class JournalVisibilityAndSearchTests: XCTestCase {
-    func testExactPostingAmountSearchAcrossScopesCachesAndUpdates() async throws {
+    func testPostingAmountPrefixSearchAcrossScopesCachesAndUpdates() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
         let ledger = Ledger(name: "Exact amounts")
@@ -25,9 +25,9 @@ final class JournalVisibilityAndSearchTests: XCTestCase {
         }
         let data = JournalData(ledgers: [ledger], commodities: [currency], accounts: [root, expenses, bank, category, fee], transactions: rows, selectedLedgerID: ledger.id)
         let store = MobileLedgerStore(supportDirectory: folder, initialData: data)
-        let cases: [(String, [Int])] = [("56", [0, 1, 2]), ("56.00", [0, 1, 2]), ("$56", [0, 1, 2]),
-            ("+56", [0, 1]), ("−56", [0, 2]), ("561", [3]), ("56.1", [4]), (".56", [5]),
-            ("56.0001", [6]), ("0", [7]), ("1,234.56", [8]), ("56x", [])]
+        let cases: [(String, [Int])] = [("56", [0, 1, 2, 3, 4, 6]), ("56.00", [0, 1, 2, 6]), ("$56", [0, 1, 2, 3, 4, 6]),
+            ("+56", [0, 1, 3, 4, 6]), ("−56", [0, 2, 3, 4, 6]), ("561", [3]), ("56.1", [4]), (".56", [5]),
+            ("56.0001", [6]), ("0", [5, 7]), ("1,234.56", [8]), ("56x", [])]
         for warm in [false, true] {
             if warm { store.warmTransactionSearchCacheForPerformanceProbe() }
             for (query, indices) in cases {
@@ -48,7 +48,7 @@ final class JournalVisibilityAndSearchTests: XCTestCase {
         edit.postings[0].amount = "-57"; edit.postings[1].amount = "57"
         store.saveTransactionAndFlush(edit)
         XCTAssertNil(store.validationError)
-        XCTAssertEqual(Set(store.transactions(scope: .all, ledgerID: ledger.id, search: "56").map(\.id)), [rows[1].id, rows[2].id], "Amount-only edits must invalidate search caches")
+        XCTAssertEqual(Set(store.transactions(scope: .all, ledgerID: ledger.id, search: "56").map(\.id)), [rows[1].id, rows[2].id, rows[3].id, rows[4].id, rows[6].id], "Amount-only edits must invalidate search caches")
     }
 
     private func calendar() -> Calendar {
@@ -225,7 +225,7 @@ final class JournalVisibilityAndSearchTests: XCTestCase {
             let full = try await RegisterRenderWorker.shared.render(request)
             XCTAssertEqual(Set(quick.rows.map(\.id)), expected)
             XCTAssertEqual(Set(full.presentation.months.flatMap(\.days).flatMap(\.transactions).map(\.id)), expected)
-            for text in ["needle account", "needle category", "needle journal", "needle currency", "needle.txt", "receipt-content-only", "12345"] {
+            for text in ["needle account", "needle category", "needle journal", "needle currency", "needle.txt", "receipt-content-only", "23456"] {
                 XCTAssertTrue(store.transactions(scope: .all, ledgerID: ledgerID, search: text).isEmpty, text)
                 let excluded = RegisterRenderRequest(data: store.data, rows: store.registerSourceRows(ledgerID: ledgerID), scope: .all, search: text, dateInterval: nil, transactionIDs: nil)
                 let result = try await RegisterRenderWorker.shared.search(excluded)

@@ -2872,20 +2872,37 @@ final class MobileLedgerStore: ObservableObject {
         defer { endBackupFileOperation() }
         let snapshot = data, directory = supportDirectory, tombstones = deletedTransactionTombstoneIDs
         let destination = try newBackupURL()
+        let workspace = destination.deletingLastPathComponent().appendingPathComponent("DownloadedReceipts")
+        defer { try? FileManager.default.removeItem(at: workspace) }
         do {
-            sealPendingDeferredWrite()
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                Self.deferredPersistenceQueue.async {
-                    do {
-                        try Self.validateCandidateData(snapshot, operation: "Backup")
-                        try BackupArchive.export(snapshot, to: destination, progress: progress, deletedIDs: tombstones) {
-                            Self.attachmentURL(for: $0, supportDirectory: directory)
-                        }
-                        continuation.resume()
-                    } catch { continuation.resume(throwing: error) }
+            return try await withTaskCancellationHandler {
+                try Task.checkCancellation()
+                try BackupArchive.checkCancellation(progress)
+                sealPendingDeferredWrite()
+                progress.totalUnitCount = 2
+                let download = Progress(totalUnitCount: 1), archive = Progress(totalUnitCount: 1)
+                progress.addChild(download, withPendingUnitCount: 1)
+                progress.addChild(archive, withPendingUnitCount: 1)
+                progress.localizedDescription = "Downloading missing backup attachments…"
+                let prepared = try await cloudSyncCoordinator.prepareBackupAttachments(snapshot, workspace: workspace, progress: download) {
+                    Self.attachmentURL(for: $0, supportDirectory: directory)
                 }
-            }
-            return destination
+                try Task.checkCancellation()
+                try BackupArchive.checkCancellation(progress)
+                progress.localizedDescription = "Writing backup…"
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    Self.deferredPersistenceQueue.async {
+                        do {
+                            try Self.validateCandidateData(prepared, operation: "Backup")
+                            try BackupArchive.export(prepared, to: destination, progress: archive, deletedIDs: tombstones) {
+                                Self.attachmentURL(for: $0, supportDirectory: directory)
+                            }
+                            continuation.resume()
+                        } catch { continuation.resume(throwing: error) }
+                    }
+                }
+                return destination
+            } onCancel: { progress.cancel() }
         } catch {
             try? FileManager.default.removeItem(at: destination.deletingLastPathComponent())
             throw error
