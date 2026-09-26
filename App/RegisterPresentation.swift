@@ -510,6 +510,7 @@ actor RegisterRenderWorker {
 
     private nonisolated static func filteredRows(_ request: RegisterRenderRequest, limit: Int? = nil) throws -> [LedgerTransaction] {
         let query = request.search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let amountSearch = request.searchField == .anywhere ? TransactionAmountSearch(query) : nil
         let accountsByID = Dictionary(uniqueKeysWithValues: request.data.accounts.map { ($0.id, $0) })
         let defaults = Dictionary(grouping: request.data.commodities, by: \.ledgerID).compactMapValues { $0.first?.id }
         var scopedAccounts = Set<UUID>()
@@ -545,7 +546,8 @@ actor RegisterRenderWorker {
             if let ids = request.transactionIDs, !ids.contains(transaction.id) { continue }
             // Ordinary registers skip search-string allocation entirely.
             if !query.isEmpty {
-                if !request.searchField.normalizedText(for: transaction).contains(query) { continue }
+                if !request.searchField.normalizedText(for: transaction).contains(query)
+                    && amountSearch.map({ amount in transaction.postings.contains { amount.matches($0.amount) } }) != true { continue }
             }
             if let policy = request.searchDatePolicy, transaction.date >= policy.todayEnd {
                 // Source rows are newest first. A bounded ring retains the

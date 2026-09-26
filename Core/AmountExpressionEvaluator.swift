@@ -1,5 +1,40 @@
 import Foundation
 
+/// Numeric searches compare complete posting values, never formatted substrings.
+/// Unsigned queries match either debit or credit; an explicit sign narrows the match.
+struct TransactionAmountSearch {
+    let amount: Decimal
+    let signed: Bool
+
+    init?(_ query: String) {
+        var text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "−", with: "-")
+        let currencies: Set<Character> = ["$", "€", "£", "¥"]
+        let currencyFirst = text.first.map { currencies.contains($0) } ?? false
+        if currencyFirst {
+            text.removeFirst()
+            text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let sign = text.first == "-" || text.first == "+" ? String(text.removeFirst()) : ""
+        if !currencyFirst, let first = text.first, currencies.contains(first) {
+            text.removeFirst()
+            text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        // Decimal(string:) silently rounds beyond its precision; never turn such a query into a false match.
+        let significantDigits = text.filter(\.isNumber).drop(while: { $0 == "0" }).reversed().drop(while: { $0 == "0" })
+        guard significantDigits.count <= 38, text.range(of: #"^(?:(?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(?:\.[0-9]+)?|\.[0-9]+)$"#,
+                         options: .regularExpression) != nil,
+              let amount = Decimal(string: sign + text.replacingOccurrences(of: ",", with: ""),
+                                   locale: Locale(identifier: "en_US_POSIX")), !amount.isNaN else { return nil }
+        self.amount = amount
+        signed = !sign.isEmpty
+    }
+
+    func matches(_ value: Decimal) -> Bool {
+        signed ? value == amount : value.magnitude == amount
+    }
+}
+
 /// Evaluates arithmetic expressions typed into amount fields, mirroring the
 /// original Finances app's DDMathParser-backed entry ("12.50*3+7", "1/3",
 /// "(20-5)*0.0825").

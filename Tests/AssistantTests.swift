@@ -505,6 +505,20 @@ final class AssistantTests: XCTestCase {
         for directory in directories { try? FileManager.default.removeItem(at: directory) }
         try await super.tearDown()
     }
+    func testTransactionToolsSearchExactPostingAmounts() async throws {
+        let tools = try fixture()
+        for name in ["search_entries", "list_transactions"] {
+            for query in ["12.34", "$12.3400", "-12.34", "+12.34"] {
+                let result = try await tools.execute(call(name, .object(["query": .string(query)])))["result"]
+                XCTAssertEqual(result["total"].int, 1, "\(name): \(query)")
+            }
+            for query in ["12", "12.3", "1234", "12.341"] {
+                let result = try await tools.execute(call(name, .object(["query": .string(query)])))["result"]
+                XCTAssertEqual(result["total"].int, 0, "\(name): \(query)")
+            }
+        }
+    }
+
     private func fixture() throws -> AssistantTools {
         let ledger = Ledger(name: "Synthetic"), currency = Commodity(ledgerID: ledger.id, symbol: "USD", name: "Dollar")
         let assets = Account(ledgerID: ledger.id, name: "Assets", kind: .asset)

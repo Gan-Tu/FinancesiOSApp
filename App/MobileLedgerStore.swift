@@ -1534,8 +1534,10 @@ final class MobileLedgerStore: ObservableObject {
         if normalizedSearch.isEmpty {
             rows = baseRows
         } else {
+            let amountSearch = TransactionAmountSearch(normalizedSearch)
             rows = baseRows.filter { transaction in
                 ensureTransactionSearchText(for: transaction).contains(normalizedSearch)
+                    || amountSearch.map { amount in transaction.postings.contains { amount.matches($0.amount) } } == true
             }
         }
         transactionRowsCache[cacheKey] = rows

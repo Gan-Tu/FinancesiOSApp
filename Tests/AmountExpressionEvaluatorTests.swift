@@ -3,6 +3,27 @@ import UIKit
 @testable import FinancesClone
 
 final class AmountExpressionEvaluatorTests: XCTestCase {
+    func testExactAmountSearchDoesNotEvaluateOrPrefixMatch() throws {
+        for query in ["56", "56.00", "  $56.00  ", "€56"] {
+            let search = try XCTUnwrap(TransactionAmountSearch(query))
+            XCTAssertTrue(search.matches(56), query)
+            XCTAssertTrue(search.matches(-56), query)
+            for value in ["561", "156", "56.1", "0.56", "56.00000001"] {
+                XCTAssertFalse(search.matches(try XCTUnwrap(Decimal(string: value))), "\(query): \(value)")
+            }
+        }
+        XCTAssertTrue(try XCTUnwrap(TransactionAmountSearch("-56")).matches(-56))
+        XCTAssertFalse(try XCTUnwrap(TransactionAmountSearch("-56")).matches(56))
+        XCTAssertTrue(try XCTUnwrap(TransactionAmountSearch("+$56")).matches(56))
+        XCTAssertFalse(try XCTUnwrap(TransactionAmountSearch("+$56")).matches(-56))
+        XCTAssertTrue(try XCTUnwrap(TransactionAmountSearch("$−56")).matches(-56))
+        XCTAssertTrue(try XCTUnwrap(TransactionAmountSearch("1,234.5600")).matches(Decimal(string: "1234.56")!))
+        XCTAssertTrue(try XCTUnwrap(TransactionAmountSearch(".56")).matches(Decimal(string: "0.56")!))
+        XCTAssertTrue(try XCTUnwrap(TransactionAmountSearch("0")).matches(.zero))
+        for query in ["56.0000000000000000000000000000000000000001", "", "56 apples", "56x", "56+1", "5,6", "1,23,4", "56.", "--56", "$$56", "NaN", "Infinity"] {
+            XCTAssertNil(TransactionAmountSearch(query), query)
+        }
+    }
 
     private func assertEvaluates(
         _ expression: String,

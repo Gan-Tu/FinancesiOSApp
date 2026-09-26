@@ -286,6 +286,7 @@ final class AssistantTools {
     }
     func filtered(_ a: AssistantJSON, defaultFuture: Bool = true) throws -> [LedgerTransaction] {
         let ledger = try journal(a), query = (a["query"].string ?? "").lowercased()
+        let amountSearch = TransactionAmountSearch(query)
         let accountIDs: Set<UUID>? = try a["account"].string.map { _ in let id = try account(a["account"], ledger: ledger).id; return a["include_children"].bool == false ? [id] : descendants(id) }
         let currencyID = try a["currency"].string.map { _ in try currency(a["currency"], ledger: ledger).id }
         let from = try a["from"].string.map { _ in try date(a["from"]) }
@@ -299,7 +300,8 @@ final class AssistantTools {
         return store.data.transactions.filter { tx in
             guard tx.ledgerID == ledger, (from == nil || tx.date >= from!), (cutoff == nil || tx.date < cutoff!),
                 future || tx.date < tomorrow, a["cleared"].bool == nil || tx.cleared == a["cleared"].bool else { return false }
-            if !query.isEmpty && !(tx.payee + " " + tx.note + " " + tx.number + " " + tx.postings.compactMap { store.account($0.accountID)?.name }.joined(separator: " ")).lowercased().contains(query) { return false }
+            if !query.isEmpty && !(tx.payee + " " + tx.note + " " + tx.number + " " + tx.postings.compactMap { store.account($0.accountID)?.name }.joined(separator: " ")).lowercased().contains(query)
+                && amountSearch.map({ amount in tx.postings.contains { amount.matches($0.amount) } }) != true { return false }
             return tx.postings.contains { p in
                 let c = postingCurrency(p, ledger: ledger)
                 return (accountIDs == nil || accountIDs!.contains(p.accountID)) && (currencyID == nil || currencyID == c) && (min == nil || p.amount >= min!) && (max == nil || p.amount <= max!)

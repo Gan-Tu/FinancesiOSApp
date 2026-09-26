@@ -3,6 +3,54 @@ import XCTest
 
 @MainActor
 final class JournalVisibilityAndSearchTests: XCTestCase {
+    func testExactPostingAmountSearchAcrossScopesCachesAndUpdates() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let ledger = Ledger(name: "Exact amounts")
+        let currency = Commodity(ledgerID: ledger.id, symbol: "USD", name: "Dollar")
+        let root = Account(ledgerID: ledger.id, name: "Assets", kind: .asset)
+        let expenses = Account(ledgerID: ledger.id, name: "Expenses", kind: .expense)
+        let bank = Account(ledgerID: ledger.id, parentID: root.id, commodityID: currency.id, name: "Bank", kind: .asset)
+        let category = Account(ledgerID: ledger.id, parentID: expenses.id, commodityID: currency.id, name: "Category", kind: .expense)
+        let fee = Account(ledgerID: ledger.id, parentID: expenses.id, commodityID: currency.id, name: "Fee", kind: .expense)
+        let amounts = [["-56", "56"], ["-100", "56", "44"], ["-56", "40", "16"],
+                       ["-561", "561"], ["-56.1", "56.1"], ["-0.56", "0.56"],
+                       ["-56.0001", "56.0001"], ["-1", "1", "0"], ["-1234.56", "1234.56"]]
+        let rows = amounts.map { values in
+            LedgerTransaction(ledgerID: ledger.id, date: Date(timeIntervalSince1970: 1_700_000_000), payee: "Merchant", note: "", number: "", cleared: true,
+                postings: values.enumerated().map { index, value in
+                    Posting(accountID: [bank.id, category.id, fee.id][index], commodityID: currency.id,
+                            amount: Decimal(string: value)!, listIndex: index)
+                })
+        }
+        let data = JournalData(ledgers: [ledger], commodities: [currency], accounts: [root, expenses, bank, category, fee], transactions: rows, selectedLedgerID: ledger.id)
+        let store = MobileLedgerStore(supportDirectory: folder, initialData: data)
+        let cases: [(String, [Int])] = [("56", [0, 1, 2]), ("56.00", [0, 1, 2]), ("$56", [0, 1, 2]),
+            ("+56", [0, 1]), ("−56", [0, 2]), ("561", [3]), ("56.1", [4]), (".56", [5]),
+            ("56.0001", [6]), ("0", [7]), ("1,234.56", [8]), ("56x", [])]
+        for warm in [false, true] {
+            if warm { store.warmTransactionSearchCacheForPerformanceProbe() }
+            for (query, indices) in cases {
+                let expected = Set(indices.map { rows[$0].id })
+                XCTAssertEqual(Set(store.transactions(scope: .all, ledgerID: ledger.id, search: query).map(\.id)), expected, query)
+                XCTAssertEqual(Set(store.transactions(scope: .account(bank.id), ledgerID: ledger.id, search: query).map(\.id)), expected, query)
+                let request = RegisterRenderRequest(data: store.data, rows: store.registerSourceRows(ledgerID: ledger.id), scope: .all, search: query, dateInterval: nil, transactionIDs: nil)
+                let found = try await RegisterRenderWorker.shared.search(request)
+                XCTAssertEqual(Set(found.rows.map(\.id)), expected, query)
+                let rendered = try await RegisterRenderWorker.shared.render(request)
+                XCTAssertEqual(Set(rendered.presentation.months.flatMap(\.days).flatMap(\.transactions).map(\.id)), expected, query)
+                var fieldOnly = request; fieldOnly.searchField = .note
+                let notes = try await RegisterRenderWorker.shared.search(fieldOnly)
+                XCTAssertTrue(notes.rows.isEmpty)
+            }
+        }
+        var edit = store.draft(for: rows[0])
+        edit.postings[0].amount = "-57"; edit.postings[1].amount = "57"
+        store.saveTransactionAndFlush(edit)
+        XCTAssertNil(store.validationError)
+        XCTAssertEqual(Set(store.transactions(scope: .all, ledgerID: ledger.id, search: "56").map(\.id)), [rows[1].id, rows[2].id], "Amount-only edits must invalidate search caches")
+    }
+
     private func calendar() -> Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "America/Los_Angeles")!
@@ -177,7 +225,7 @@ final class JournalVisibilityAndSearchTests: XCTestCase {
             let full = try await RegisterRenderWorker.shared.render(request)
             XCTAssertEqual(Set(quick.rows.map(\.id)), expected)
             XCTAssertEqual(Set(full.presentation.months.flatMap(\.days).flatMap(\.transactions).map(\.id)), expected)
-            for text in ["needle account", "needle category", "needle journal", "needle currency", "needle.txt", "receipt-content-only", "123456"] {
+            for text in ["needle account", "needle category", "needle journal", "needle currency", "needle.txt", "receipt-content-only", "12345"] {
                 XCTAssertTrue(store.transactions(scope: .all, ledgerID: ledgerID, search: text).isEmpty, text)
                 let excluded = RegisterRenderRequest(data: store.data, rows: store.registerSourceRows(ledgerID: ledgerID), scope: .all, search: text, dateInterval: nil, transactionIDs: nil)
                 let result = try await RegisterRenderWorker.shared.search(excluded)
