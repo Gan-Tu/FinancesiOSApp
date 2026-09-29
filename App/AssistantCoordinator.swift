@@ -108,35 +108,34 @@ final class AssistantCoordinator: ObservableObject {
         let fields = binding.context.split(separator: "|")
         guard fields.count >= 2, subject == "cloudkit:\(fields[0]):\(fields[1].lowercased()):\(binding.account)" else { throw AssistantFailure("identity_mismatch", "The signed-in account does not own this local journal. Existing data is preserved.") }
     }
+    // Opening chat uses the journal's local account binding. Network identity
+    // verification remains mandatory at the start of every submitted operation.
     func prepare() {
         guard consented, !isConnecting, !isRunning else { return }
-        isConnecting = true; error = nil
-        let stamp = generation
-        let previousTask = retiringTask; retiringTask = nil
-        task = Task { [weak self] in
-            guard let self else { return }
-            defer { if generation == stamp { isConnecting = false; task = nil } }
-            do {
-                await previousTask?.value
-                guard generation == stamp else { return }
-                try requireActive()
-                if let local = try await gateway.localIdentity() {
-                    try requireActive(); guard generation == stamp else { return }
-                    try installIdentity(local)
+        error = nil
+        do {
+            try requireActive()
+            let subject: String
+            if AIInferencePolicy.blocksNetwork && AIInferencePolicy.usesIsolatedSample {
+                subject = "local-developer"
+            } else {
+                guard let binding = try store.assistantDatabase.assistantBoundIdentity() else {
+                    throw AssistantFailure("unbound_journal", "Finish the initial iCloud connection before using the assistant.")
                 }
-                let subject = try await gateway.connect()
-                try requireActive(); guard generation == stamp else { return }
-                try verifyIdentity(subject)
-                try installIdentity(subject)
-                if contract.tools.count != 45 { throw AssistantFailure("contract_missing", "This build is missing the finance tool contract.") }
-                let options = try await gateway.options()
-                guard options["version"].int == contract.version else { throw AssistantFailure("contract_version", "Update Finances to match the assistant service.") }
-                guard generation == stamp else { return }
-                modelChoices = try JSONDecoder().decode([AssistantModelChoice].self, from: options["models"].encoded())
-                connected = true
-            } catch is CancellationError { }
-            catch { if generation == stamp { self.error = error.localizedDescription; connected = false } }
-        }
+                let fields = binding.context.split(separator: "|")
+                guard fields.count >= 2 else { throw AssistantFailure("unbound_journal", "The journal account binding is invalid.") }
+                subject = "cloudkit:\(fields[0]):\(fields[1].lowercased()):\(binding.account)"
+            }
+            try installIdentity(subject)
+            modelChoices = contract.models ?? AssistantSettings.models
+            connected = true
+        } catch { self.error = error.localizedDescription; connected = false }
+    }
+    private func validateServerOptions() async throws {
+        guard contract.tools.count == 45 else { throw AssistantFailure("contract_missing", "This build is missing the finance tool contract.") }
+        let options = try await gateway.options()
+        guard options["version"].int == contract.version else { throw AssistantFailure("contract_version", "Update Finances to match the assistant service.") }
+        modelChoices = try JSONDecoder().decode([AssistantModelChoice].self, from: options["models"].encoded())
     }
     private func installIdentity(_ subject: String) throws {
         try verifyIdentity(subject)
@@ -312,14 +311,18 @@ final class AssistantCoordinator: ObservableObject {
         let previousTask = retiringTask; retiringTask = nil
         task = Task { [weak self] in
             guard let self else { return }
-            defer { if generation == stamp { isRunning = false; activity = ""; task = nil } }
+            defer { if generation == stamp { isRunning = false; isConnecting = false; activity = ""; task = nil } }
             do {
                 await previousTask?.value
                 guard generation == stamp else { return }
+                isConnecting = true
                 let subject = try await gateway.connect()
                 try requireActive(); guard generation == stamp else { return }
                 try verifyIdentity(subject)
                 guard subject == identity, let tools else { throw AssistantFailure("identity_mismatch", "Reconnect with the account that owns this conversation.") }
+                try await validateServerOptions()
+                try requireActive(); guard generation == stamp else { return }
+                isConnecting = false
                 tools.context = conversation.context
                 while generation == stamp {
                     // Let a follow-up arrive between local actions, even when
@@ -531,8 +534,15 @@ final class AssistantCoordinator: ObservableObject {
         guard canAttachFiles, isCurrentAttachmentContext(context), let tools else { return }
         isRunning = true; let stamp = generation
         task = Task {
-            defer { if generation == stamp { isRunning = false; task = nil; activity = "" } }
+            defer { if generation == stamp { isRunning = false; isConnecting = false; task = nil; activity = "" } }
             do {
+                activity = "Connecting…"
+                isConnecting = true
+                let subject = try await gateway.connect()
+                try requireActive(); guard generation == stamp else { return }
+                try verifyIdentity(subject)
+                guard subject == identity else { throw AssistantFailure("identity_mismatch", "Reconnect with the account that owns this conversation.") }
+                isConnecting = false
                 activity = "Preparing attachment…"
                 let inputs = try await load()
                 try Task.checkCancellation()

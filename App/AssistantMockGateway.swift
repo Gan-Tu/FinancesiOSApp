@@ -10,7 +10,6 @@ final class AssistantMockGateway: AssistantGatewayProtocol {
         }
         return "local-developer"
     }
-    func localIdentity() async throws -> String? { AIInferencePolicy.usesIsolatedSample ? "local-developer" : nil }
     func options() async throws -> AssistantJSON {
         .object(["version": .number(1), "models": .array(AssistantSettings.models.map {
             .object(["id": .string($0.id), "label": .string($0.label), "efforts": .array($0.efforts.map(AssistantJSON.string))])

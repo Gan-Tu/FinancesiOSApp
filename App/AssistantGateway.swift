@@ -4,7 +4,6 @@ import UniformTypeIdentifiers
 @MainActor
 protocol AssistantGatewayProtocol {
     func connect() async throws -> String
-    func localIdentity() async throws -> String?
     func options() async throws -> AssistantJSON
     func step(items: [AssistantJSON], settings: AssistantSettings, receive: @escaping @MainActor (AssistantStepEvent) throws -> Void) async throws
     func upload(url: URL, fileID: String) async throws -> AssistantJSON
@@ -17,7 +16,6 @@ final class AssistantGateway: AssistantGatewayProtocol {
     private let auth: ReceiptAnalysisClient
     init(endpoint: String = "https://finances.tugan.app", auth: ReceiptAnalysisClient = .shared) { self.endpoint = endpoint; self.auth = auth }
     func connect() async throws -> String { try await auth.connectAssistant(endpoint: endpoint) }
-    func localIdentity() async throws -> String? { try await auth.verifiedAssistantIdentity(endpoint: endpoint) }
     func options() async throws -> AssistantJSON {
         let request = try auth.assistantRequest("mobile-assistant/options", endpoint: endpoint)
         let (data, response) = try await auth.assistantURLSession.data(for: request); try check(response)
@@ -64,6 +62,7 @@ final class AssistantGateway: AssistantGatewayProtocol {
     }
     func transcribe(url: URL) async throws -> String {
         try AIInferencePolicy.requireNetworkInference()
+        _ = try await connect()
         let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
         guard size > 0, size <= 3 * 1024 * 1024 else {
             throw AssistantFailure("recording_limit", "No audio was captured, or the dictation is too long. Please dictate a shorter message.")

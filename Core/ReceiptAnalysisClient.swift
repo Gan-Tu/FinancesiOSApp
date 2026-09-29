@@ -3,7 +3,6 @@ import CloudKit
 import Combine
 import CryptoKit
 import Foundation
-import PDFKit
 import Security
 import UniformTypeIdentifiers
 
@@ -127,6 +126,18 @@ private final class ReceiptSessionObservers {
 
 @MainActor final class ReceiptAnalysisClient: ObservableObject {
     static let shared = ReceiptAnalysisClient()
+    private var lastWarmup: [String: Date] = [:]
+    /// No auth, receipt contents, or inference; failures never block the picker.
+    func warmUp(endpoint: String) {
+        guard let url = URL(string: endpoint + "/api/v1/warmup"),
+              url.scheme == "https" || url.host == "127.0.0.1" || url.host == "localhost" else { return }
+        if let last = lastWarmup[endpoint], Date().timeIntervalSince(last) < 60 { return }
+        lastWarmup[endpoint] = Date()
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 8)
+        request.httpShouldHandleCookies = false
+        Task { _ = try? await session.data(for: request) }
+    }
+
     @Published private(set) var authenticated = false
     @Published private(set) var localDevelopment = false
     @Published private(set) var nonce = ""
@@ -316,16 +327,6 @@ private final class ReceiptSessionObservers {
             throw AssistError.message("The assistant needs the iCloud identity that owns this journal.")
         }
         return subject
-    }
-
-    func verifiedAssistantIdentity(endpoint: String) async throws -> String? {
-        #if DEBUG
-        if CommandLine.arguments.contains("--demo"), ["localhost", "127.0.0.1", "::1"].contains(try base(endpoint).host ?? "") { return "local-developer" }
-        #endif
-        guard let configuration = CloudKitSyncConfiguration.availableConfiguration() else { return nil }
-        let user = try await CKContainer(identifier: configuration.containerIdentifier).userRecordID()
-        try Task.checkCancellation()
-        return "cloudkit:\(configuration.containerIdentifier):\(configuration.environment.lowercased()):\(user.recordName)"
     }
 
     func assistantRequest(_ path: String, endpoint: String, data: Data? = nil, contentType: String = "application/json") throws -> URLRequest {
@@ -602,7 +603,6 @@ private final class ReceiptSessionObservers {
         }
         var body = Data()
         var total = 0
-        var pages = 0
         func append(_ text: String) { body.append(Data(text.utf8)) }
         append("--\(boundary)\r\nContent-Disposition: form-data; name=\"context\"\r\n\r\n")
         body.append(context)
@@ -621,15 +621,6 @@ private final class ReceiptSessionObservers {
             total += data.count
             guard data.count <= 20_000_000, total <= 40_000_000 else {
                 throw AssistError.attachmentLimit("Receipts exceed the attachment limit.")
-            }
-            if ext == "pdf" {
-                guard let pdf = PDFDocument(data: data), !pdf.isLocked else {
-                    throw AssistError.message("Unlock this PDF before analyzing it.")
-                }
-                pages += pdf.pageCount
-                guard pages <= 30 else {
-                    throw AssistError.attachmentLimit("Choose PDFs with at most 30 pages combined.")
-                }
             }
             let name = asset.originalFilename.replacingOccurrences(of: "\"", with: "_").replacingOccurrences(
                 of: "\r", with: "_"

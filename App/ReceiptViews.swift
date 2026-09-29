@@ -392,11 +392,11 @@ private struct ReceiptPickerContent: View {
 
     var body: some View {
         Menu {
-            Button("Choose Files", systemImage: "folder") { importGeneration = store.attachmentImportGeneration; files = true }
-            Button("Photo Library", systemImage: "photo") { importGeneration = store.attachmentImportGeneration; photos = true }
+            Button("Choose Files", systemImage: "folder") { ReceiptAnalysisClient.shared.warmUp(endpoint: ReceiptPreferencesStore.shared.settings.endpoint); importGeneration = store.attachmentImportGeneration; files = true }
+            Button("Photo Library", systemImage: "photo") { ReceiptAnalysisClient.shared.warmUp(endpoint: ReceiptPreferencesStore.shared.settings.endpoint); importGeneration = store.attachmentImportGeneration; photos = true }
             if VNDocumentCameraViewController.isSupported {
-                Button("Scan Receipt", systemImage: "doc.viewfinder") { importGeneration = store.attachmentImportGeneration; scan = .images }
-                Button("Scan to PDF", systemImage: "doc") { importGeneration = store.attachmentImportGeneration; scan = .pdf }
+                Button("Scan Receipt", systemImage: "doc.viewfinder") { ReceiptAnalysisClient.shared.warmUp(endpoint: ReceiptPreferencesStore.shared.settings.endpoint); importGeneration = store.attachmentImportGeneration; scan = .images }
+                Button("Scan to PDF", systemImage: "doc") { ReceiptAnalysisClient.shared.warmUp(endpoint: ReceiptPreferencesStore.shared.settings.endpoint); importGeneration = store.attachmentImportGeneration; scan = .pdf }
             }
         } label: {
             if session.isImporting { ProgressView("Adding Receipt…") }

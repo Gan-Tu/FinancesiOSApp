@@ -36,8 +36,6 @@ final class AssistantTests: XCTestCase {
         XCTAssertTrue(AIInferencePolicy.blocksNetwork)
         let coordinator = AssistantCoordinator(store: f.store)
         XCTAssertTrue(coordinator.gateway is AssistantMockGateway)
-        let mockIdentity = try await coordinator.gateway.localIdentity()
-        XCTAssertNil(mockIdentity, "A non-demo ledger must not use the shared mock identity")
         do {
             _ = try await coordinator.gateway.connect()
             XCTFail("Mock history must stay isolated to the sample app")
@@ -726,7 +724,9 @@ final class AssistantTests: XCTestCase {
         try coordinator.beginFreshConversation(context: tools.context)
         coordinator.consented = true; coordinator.setForeground(true); coordinator.present()
         try await wait { !coordinator.isConnecting }
-        XCTAssertFalse(coordinator.connected)
+        XCTAssertTrue(coordinator.connected)
+        XCTAssertEqual(gateway.connections, 0)
+        XCTAssertEqual(gateway.optionRequests, 0)
         XCTAssertTrue(coordinator.conversation.messages.isEmpty)
         coordinator.selectConversation(try XCTUnwrap(coordinator.history.first { $0.id == saved.id }))
         XCTAssertEqual(coordinator.conversation.messages.first?.text, "Saved locally")
@@ -1311,10 +1311,11 @@ private final class TestAssistantGateway: AssistantGatewayProtocol {
     var uploadHandler: ((URL, String) async throws -> AssistantJSON)?
     var steps = 0
     var offline = false
+    var connections = 0
+    var optionRequests = 0
     init(subject: String) { self.subject = subject }
-    func localIdentity() async throws -> String? { subject }
-    func connect() async throws -> String { if offline { throw URLError(.notConnectedToInternet) }; return subject }
-    func options() async throws -> AssistantJSON { .object(["version": .number(1), "models": .array([])]) }
+    func connect() async throws -> String { connections += 1; if offline { throw URLError(.notConnectedToInternet) }; return subject }
+    func options() async throws -> AssistantJSON { optionRequests += 1; return .object(["version": .number(1), "models": .array([])]) }
     func step(items: [AssistantJSON], settings: AssistantSettings, receive: @escaping @MainActor (AssistantStepEvent) throws -> Void) async throws {
         steps += 1
         settingsSeen.append(settings)
