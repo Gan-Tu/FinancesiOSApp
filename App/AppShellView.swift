@@ -363,7 +363,7 @@ private struct TransactionTemplatePicker: View {
 
             action("Cancel", role: .cancel) { dismiss() }
                 .fontWeight(.semibold)
-                .background(Color.white, in: RoundedRectangle(cornerRadius: 16))
+                .background(Color(uiColor: .tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
         }
         .padding(.horizontal, 8)
         .padding(.top, 8)
@@ -373,7 +373,7 @@ private struct TransactionTemplatePicker: View {
         .presentationDetents([.height((actionsHeight > 0 ? actionsHeight : Double(templates.count + 1) * rowHeight + 50) + rowHeight + 16)])
         .presentationDragIndicator(.hidden)
         .presentationCornerRadius(24)
-        .presentationBackground(Color(.sRGB, red: 240 / 255, green: 240 / 255, blue: 241 / 255, opacity: 1))
+        .presentationBackground(Color(uiColor: .secondarySystemGroupedBackground))
         .performanceDestination("template-menu")
     }
 
