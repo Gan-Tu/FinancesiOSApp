@@ -2,8 +2,8 @@
   "version": 1,
   "models": [
     {
-      "id": "gpt-6-sol",
-      "label": "GPT-6 Sol",
+      "id": "gpt-6.1-sol",
+      "label": "GPT-6.1 Sol",
       "efforts": [
         "none",
         "low",

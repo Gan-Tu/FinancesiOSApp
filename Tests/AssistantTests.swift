@@ -6,7 +6,7 @@ import UIKit
 @MainActor
 final class AssistantTests: XCTestCase {
     func testLegacyConversationAndCloudSettingsUpgradeModelOnly() throws {
-        for (old, current) in [("gpt-5.6-sol", "gpt-6-sol"), ("gpt-5.6-luna", "gpt-6-luna")] {
+        for (old, current) in [("gpt-5.6-sol", "gpt-6.1-sol"), ("gpt-6-sol", "gpt-6.1-sol"), ("gpt-5.6-luna", "gpt-6-luna")] {
             let legacy = AssistantSettings(model: old, effort: "max", customInstructions: "Keep my preferences")
             let restored = try JSONDecoder().decode(AssistantSettings.self, from: JSONEncoder().encode(legacy))
             XCTAssertEqual(restored.model, current)

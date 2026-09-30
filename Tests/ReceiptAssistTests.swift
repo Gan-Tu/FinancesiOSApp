@@ -35,7 +35,7 @@ private actor AssistTestTransport: CloudKitSyncTransport {
 }
 @MainActor final class ReceiptAssistTests: XCTestCase {
     func testLegacySolAndLunaSettingsUpgradeWithoutLosingPreferences() throws {
-        for (old, current) in [("gpt-5.6-sol", "gpt-6-sol"), ("gpt-5.6-luna", "gpt-6-luna")] {
+        for (old, current) in [("gpt-5.6-sol", "gpt-6.1-sol"), ("gpt-6-sol", "gpt-6.1-sol"), ("gpt-5.6-luna", "gpt-6-luna")] {
             var legacy = ReceiptAISettings()
             legacy.model = old; legacy.effort = "high"; legacy.instructions = "Keep merchant names"
             let data = try JSONEncoder().encode(legacy)

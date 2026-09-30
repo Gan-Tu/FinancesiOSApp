@@ -86,11 +86,11 @@ struct ReceiptAISettings: Codable, Equatable, Sendable {
     var model = "gpt-5.6-terra"
     var effort = "medium"
     var instructions = ""
-    static let models = ["gpt-6-sol", "gpt-5.6-terra", "gpt-6-luna", "gpt-6-astra"]
-    /// Preserve the selected tier when restoring settings from before GPT-6.
+    static let models = ["gpt-6.1-sol", "gpt-5.6-terra", "gpt-6-luna", "gpt-6-astra"]
+    /// Preserve the selected tier when restoring settings from older model versions.
     static func upgradeModel(_ model: String) -> String {
         switch model {
-        case "gpt-5.6-sol": return "gpt-6-sol"
+        case "gpt-5.6-sol", "gpt-6-sol": return "gpt-6.1-sol"
         case "gpt-5.6-luna": return "gpt-6-luna"
         default: return model
         }
