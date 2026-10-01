@@ -12,6 +12,8 @@ struct ReceiptSessionCredential: Codable {
     var cloudKitUserID: String?
     var cloudKitScope: String?
     var appleUserID: String?
+    var refreshToken: String?
+    var refreshExpiresAt: Date?
 
     static func claims(_ token: String) throws -> [String: Any] {
         let parts = token.split(separator: ".")
@@ -24,7 +26,7 @@ struct ReceiptSessionCredential: Codable {
         else { throw AssistError.message("Invalid receipt session.") }
         return claims
     }
-    init(token: String, cloudKitUserID: String? = nil, cloudKitScope: String? = nil, appleUserID: String? = nil) throws {
+    init(token: String, cloudKitUserID: String? = nil, cloudKitScope: String? = nil, appleUserID: String? = nil, refreshToken: String? = nil) throws {
         guard let expiration = try Self.claims(token)["exp"] as? Double,
             expiration > Date().timeIntervalSince1970
         else {
@@ -35,6 +37,10 @@ struct ReceiptSessionCredential: Codable {
         self.cloudKitUserID = cloudKitUserID
         self.cloudKitScope = cloudKitScope
         self.appleUserID = appleUserID
+        self.refreshToken = refreshToken
+        if let refreshToken, let expiration = try Self.claims(refreshToken)["exp"] as? Double {
+            refreshExpiresAt = Date(timeIntervalSince1970: expiration)
+        }
     }
 }
 @MainActor protocol ReceiptCredentialStore {
@@ -187,8 +193,10 @@ private final class ReceiptSessionObservers {
             token = credential.token
             authenticated = true
         } else {
-            if credential != nil { try credentialStore.remove(endpoint: endpoint) }
-            credential = nil
+            if credential?.refreshExpiresAt ?? .distantPast <= Date() {
+                if credential != nil { try credentialStore.remove(endpoint: endpoint) }
+                credential = nil
+            }
             token = ""
             authenticated = false
         }
@@ -284,7 +292,7 @@ private final class ReceiptSessionObservers {
                 ])), retryAuthentication: false)
         try saveSession(
             ReceiptSessionCredential(token: login.token, cloudKitUserID: user.recordName,
-                cloudKitScope: "\(configuration.containerIdentifier):\(configuration.environment.lowercased())"),
+                cloudKitScope: "\(configuration.containerIdentifier):\(configuration.environment.lowercased())", refreshToken: login.refreshToken),
             endpoint: endpoint, stamp: stamp)
         return true
     }
@@ -298,13 +306,54 @@ private final class ReceiptSessionObservers {
         var challenge: String
         var nonce: String
     }
-    struct Login: Decodable { var token: String }
+    struct Login: Decodable { var token: String; var refreshToken: String? }
+
+    /// Safe on app activation and inside the share extension. Validates the
+    /// saved account before renewing; no receipt bytes or inference are sent.
+    @discardableResult
+    func renewSession(endpoint: String) async throws -> Bool {
+        try restoreSession(endpoint: endpoint)
+        try await checkSavedIdentity()
+        let saved = credential
+        if let saved, let refresh = saved.refreshToken, !authenticated {
+            let stamp = generation
+            let login: Login
+            do {
+                login = try await perform(request("auth/native/refresh", endpoint: endpoint,
+                    method: "POST", data: JSONSerialization.data(withJSONObject: ["refreshToken": refresh])), retryAuthentication: false)
+            } catch {
+                if generation != stamp { throw CancellationError() }
+                if credential == nil, !Task.isCancelled { return try await connectCloudKit(endpoint: endpoint) }
+                throw error
+            }
+            try saveSession(ReceiptSessionCredential(token: login.token, cloudKitUserID: saved.cloudKitUserID,
+                cloudKitScope: saved.cloudKitScope, appleUserID: saved.appleUserID,
+                refreshToken: login.refreshToken ?? refresh), endpoint: endpoint, stamp: stamp)
+            return true
+        }
+        if authenticated {
+            if saved?.refreshToken == nil, try canonicalEndpoint(endpoint) == "https://finances.tugan.app" {
+                let stamp = generation
+                // Upgrade legacy sessions when the server supports refresh.
+                // An older backend or temporary outage must not block access.
+                do {
+                    let login: Login = try await perform(request("auth/native/refresh", endpoint: endpoint,
+                        method: "POST", data: Data("{}".utf8)), retryAuthentication: false)
+                    try saveSession(ReceiptSessionCredential(token: login.token, cloudKitUserID: saved?.cloudKitUserID,
+                        cloudKitScope: saved?.cloudKitScope, appleUserID: saved?.appleUserID,
+                        refreshToken: login.refreshToken), endpoint: endpoint, stamp: stamp)
+                } catch is CancellationError { throw CancellationError() }
+                catch { if generation != stamp { throw CancellationError() } }
+            }
+            return authenticated
+        }
+        return try await connectCloudKit(endpoint: endpoint)
+    }
 
     /// Reuses the native Apple proof and Keychain session. No provider key or
     /// long-lived Apple credential leaves this boundary for the assistant UI.
     func connectAssistant(endpoint: String) async throws -> String {
-        try restoreSession(endpoint: endpoint)
-        try await checkSavedIdentity()
+        _ = try await renewSession(endpoint: endpoint)
         if !authenticated {
             let options: Options = try await perform(request("receipt-analysis/options", endpoint: endpoint))
             guard options.configured else { throw AssistError.message("The assistant is not configured on this server.") }
@@ -334,7 +383,15 @@ private final class ReceiptSessionObservers {
         return try request(path, endpoint: endpoint, method: data == nil ? "GET" : "POST", data: data, contentType: contentType)
     }
     var assistantURLSession: URLSession { session }
-    func assistantSessionExpired() { invalidateSession() }
+    func assistantSessionExpired() {
+        // Keep the separate refresh proof for the next upload/send/resume.
+        if var saved = credential, saved.refreshToken != nil {
+            saved.expiresAt = .distantPast
+            do { try credentialStore.save(saved, endpoint: authEndpoint) }
+            catch { invalidateSession(); return }
+            credential = saved; token = ""; authenticated = false
+        } else { invalidateSession() }
+    }
     func uploadAssistantAttachment<T: Decodable>(_ body: Data, contentType: String, endpoint: String) async throws -> T {
         let direct = try assistantRequest("chat-attachments", endpoint: endpoint, data: body, contentType: contentType)
         #if DEBUG
@@ -386,7 +443,9 @@ private final class ReceiptSessionObservers {
     private func perform<T: Decodable>(
         _ req: URLRequest, as: T.Type = T.self, retryAuthentication: Bool = true
     ) async throws -> T {
+        let stamp = generation
         let (data, response) = try await session.data(for: req)
+        guard generation == stamp else { throw CancellationError() }
         guard let http = response as? HTTPURLResponse else {
             throw AssistError.message("The API server did not respond.")
         }
@@ -398,12 +457,21 @@ private final class ReceiptSessionObservers {
                 req.value(forHTTPHeaderField: "Authorization") == "Bearer " + token
             {
                 let endpoint = authEndpoint
-                invalidateSession()
-                if retryAuthentication, try await connectCloudKit(endpoint: endpoint) {
+                let saved = credential
+                if var saved, saved.refreshToken != nil {
+                    saved.expiresAt = .distantPast
+                    try credentialStore.save(saved, endpoint: endpoint)
+                    credential = saved; token = ""; authenticated = false
+                } else { invalidateSession() }
+                if retryAuthentication, try await renewSession(endpoint: endpoint) {
                     var retry = req
                     retry.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
                     return try await perform(retry, as: T.self, retryAuthentication: false)
                 }
+            }
+            if http.statusCode == 401, req.url?.path == "/api/v1/auth/native/refresh" {
+                if !authEndpoint.isEmpty { try credentialStore.remove(endpoint: authEndpoint) }
+                credential = nil; token = ""; authenticated = false
             }
             if http.statusCode == 413 { throw AssistError.attachmentLimit(message) }
             throw AssistError.message(message)
@@ -420,8 +488,9 @@ private final class ReceiptSessionObservers {
         error = ""
         localDevelopment = false
         do {
-            try restoreSession(endpoint: endpoint)
-            try await checkSavedIdentity()
+            do { _ = try await renewSession(endpoint: endpoint) }
+            catch is CancellationError { throw CancellationError() }
+            catch { /* Keep interactive Apple sign-in available if iCloud is temporarily unavailable. */ }
             let stamp = generation
             let options: Options = try await perform(
                 request("receipt-analysis/options", endpoint: endpoint))
@@ -461,7 +530,7 @@ private final class ReceiptSessionObservers {
             request("auth/apple/native", endpoint: endpoint, method: "POST", data: data))
         let appleUser = try? ReceiptSessionCredential.claims(appleToken)["sub"] as? String
         try saveSession(
-            ReceiptSessionCredential(token: value.token, appleUserID: appleUser), endpoint: endpoint,
+            ReceiptSessionCredential(token: value.token, appleUserID: appleUser, refreshToken: value.refreshToken), endpoint: endpoint,
             stamp: stamp)
     }
     func analyze(
@@ -470,8 +539,7 @@ private final class ReceiptSessionObservers {
         settings: ReceiptAISettings
     ) async throws -> ReceiptAnalysisResponse {
         try AIInferencePolicy.requireNetworkInference()
-        try restoreSession(endpoint: settings.endpoint)
-        try await checkSavedIdentity()
+        _ = try await renewSession(endpoint: settings.endpoint)
         let options: Options = try await perform(
             request("receipt-analysis/options", endpoint: settings.endpoint))
         guard options.configured else {
@@ -491,8 +559,8 @@ private final class ReceiptSessionObservers {
                 throw AssistError.message("Use a hosted API with Sign in with Apple.")
             #endif
         } else if !authenticated {
-            guard (try? await connectCloudKit(endpoint: settings.endpoint)) == true else {
-                throw AssistError.message("Sign in with Apple in Receipt Suggestions settings.")
+            guard try await connectCloudKit(endpoint: settings.endpoint) else {
+                throw AssistError.message("Receipt sign-in is unavailable for this API server. Reconnect in Receipt Suggestions settings.")
             }
         }
         let context = try Self.context(

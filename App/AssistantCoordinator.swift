@@ -25,6 +25,8 @@ final class AssistantCoordinator: ObservableObject {
     @Published var artifact: URL?
     @Published var navigationRequest: AssistantJSON?
     @Published var uploadedFiles: [AssistantJSON] = []
+    @Published private(set) var awaitingAttachmentActivation = false
+    private var pendingAttachment: (AssistantAttachmentContext, @MainActor () async throws -> [AssistantAttachmentInput])?
     @Published var needsAttachmentRecovery = false
     @Published var modelChoices: [AssistantModelChoice] = []
     @Published var consented: Bool
@@ -76,10 +78,16 @@ final class AssistantCoordinator: ObservableObject {
             if isBackground || dictation.state != .preparing { pause() }
         } else {
             dictation.activateIfPermitted()
+            finishPendingAttachment()
             if let preferences { Task { await preferences.refresh() } }
         }
     }
-    func lockChanged() { if store.requiresUnlock { pause() } }
+    func lockChanged() { if store.requiresUnlock { pause() } else { finishPendingAttachment() } }
+    private func finishPendingAttachment() {
+        guard foreground, !store.requiresUnlock, let (context, load) = pendingAttachment else { return }
+        pendingAttachment = nil; awaitingAttachmentActivation = false
+        attach(context: context, load: load)
+    }
     func acceptConsent() {
         consented = true; UserDefaults.standard.set(true, forKey: "assistant.cloudConsent.v1")
         prepare()
@@ -91,7 +99,7 @@ final class AssistantCoordinator: ObservableObject {
     }
     func dismiss() {
         if presented && foreground { conversation.lastActiveAt = now() }
-        presented = false; pause()
+        presented = false; pendingAttachment = nil; awaitingAttachmentActivation = false; pause()
     }
     func requireActive() throws {
         guard foreground, presented, !store.requiresUnlock else { throw CancellationError() }
@@ -99,6 +107,7 @@ final class AssistantCoordinator: ObservableObject {
     }
     func invalidateIdentity() {
         pause(); tools?.clearPreviews(); connected = false; identity = ""; tools = nil
+        pendingAttachment = nil; awaitingAttachmentActivation = false
         history = []; conversation = AssistantConversation(); draftText = ""; uploadedFiles = []; artifact = nil; restoreRecentOnConnect = false
         error = "Your iCloud account changed. Reopen the assistant after Finances refreshes its account."
     }
@@ -222,12 +231,14 @@ final class AssistantCoordinator: ObservableObject {
         } catch { self.error = "Could not start a new conversation: \(error.localizedDescription)" }
     }
     private func clearConversationPresentation() {
+        pendingAttachment = nil; awaitingAttachmentActivation = false
         uploadedFiles = []; error = nil; streamingText = ""; artifact = nil
         approval = nil; approvalText = ""; approvalFingerprint = ""
         needsAttachmentRecovery = false; navigationRequest = nil; draftText = ""
     }
     func selectConversation(_ value: AssistantConversation) {
         pause(); tools?.clearPreviews()
+        pendingAttachment = nil; awaitingAttachmentActivation = false
         restoreConversation(value)
     }
     private func restoreConversation(_ value: AssistantConversation) {
@@ -275,8 +286,9 @@ final class AssistantCoordinator: ObservableObject {
     }
     @discardableResult
     func send(_ text: String) -> Bool {
-        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !dictation.isBusy, canAcceptMessage else { return false }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !dictation.isBusy, canAcceptMessage, !trimmed.isEmpty || !uploadedFiles.isEmpty else { return false }
+        let text = trimmed.isEmpty ? "Please review these attachments." : trimmed
         do {
             try requireActive()
             let steering = isRunning || conversation.canResume
@@ -287,7 +299,9 @@ final class AssistantCoordinator: ObservableObject {
             next.settings = settings
             let visible = text
             if next.messages.isEmpty && next.customTitle != true { next.title = String(visible.prefix(70)) }
-            next.messages.append(AssistantMessage(role: "user", text: visible))
+            next.messages.append(AssistantMessage(role: "user", text: visible, attachments: uploadedFiles.isEmpty ? nil : uploadedFiles.map {
+                AssistantMessageAttachment(id: $0["id"].string ?? UUID().uuidString, filename: $0["filename"].string ?? "Attachment")
+            }))
             var item: AssistantJSON = .object(["type": .string("message"), "role": .string("user"), "text": .string(text)])
             if !uploadedFiles.isEmpty { item = item.setting("attachments", .array(uploadedFiles.map { $0["id"] })) }
             if steering { next.pendingSteering = (next.pendingSteering ?? []) + [item] }
@@ -299,7 +313,7 @@ final class AssistantCoordinator: ObservableObject {
         } catch { self.error = error.localizedDescription; return false }
     }
     var canAcceptMessage: Bool {
-        connected && consented && !isConnecting && !needsAttachmentRecovery
+        connected && consented && !isConnecting && !awaitingAttachmentActivation && !needsAttachmentRecovery
             && (!isRunning || conversation.hasPendingInference || !conversation.calls.isEmpty || conversation.hasPendingSteering)
     }
     func resume() {
@@ -516,7 +530,7 @@ final class AssistantCoordinator: ObservableObject {
         needsAttachmentRecovery = false; conversation.hasPendingInference = true; conversation.paused = true
         do { try persist(); resume() } catch { self.error = error.localizedDescription }
     }
-    var canAttachFiles: Bool { connected && !isRunning && !isConnecting && !conversation.canResume && uploadedFiles.count < 10 }
+    var canAttachFiles: Bool { connected && !awaitingAttachmentActivation && !isRunning && !isConnecting && !conversation.canResume && uploadedFiles.count < 10 }
     var attachmentContext: AssistantAttachmentContext { .init(conversationID: conversation.id, identity: identity) }
     func isCurrentAttachmentContext(_ context: AssistantAttachmentContext) -> Bool {
         context == attachmentContext && (try? requireActive()) != nil
@@ -531,7 +545,14 @@ final class AssistantCoordinator: ObservableObject {
         attach(context: context ?? attachmentContext) { urls.map { .file($0) } }
     }
     func attach(context: AssistantAttachmentContext, load: @escaping @MainActor () async throws -> [AssistantAttachmentInput]) {
-        guard canAttachFiles, isCurrentAttachmentContext(context), let tools else { return }
+        // A system picker can deliver its result before scenePhase returns to
+        // active. Keep the selection until activation instead of dropping it.
+        guard context == attachmentContext, presented, consented, canAttachFiles else { return }
+        if !foreground || store.requiresUnlock {
+            pendingAttachment = (context, load); awaitingAttachmentActivation = true
+            return
+        }
+        guard isCurrentAttachmentContext(context), let tools else { return }
         isRunning = true; let stamp = generation
         task = Task {
             defer { if generation == stamp { isRunning = false; isConnecting = false; task = nil; activity = "" } }

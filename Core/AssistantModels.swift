@@ -41,6 +41,13 @@ struct AssistantMessage: Identifiable, Codable, Equatable, Sendable {
     var role: String
     var text: String
     var created = Date()
+    /// Display metadata only; older history remains readable.
+    var attachments: [AssistantMessageAttachment]?
+}
+
+struct AssistantMessageAttachment: Identifiable, Codable, Equatable, Sendable {
+    var id: String
+    var filename: String
 }
 
 struct AssistantToolCall: Identifiable, Codable, Equatable, Sendable {

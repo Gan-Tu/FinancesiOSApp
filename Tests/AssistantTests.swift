@@ -120,6 +120,64 @@ final class AssistantTests: XCTestCase {
         coordinator.dismiss()
     }
 
+    func testFirstAttachmentSelectionWaitsForActivationAndPersistsSentMetadata() async throws {
+        let f = try fixture(), subject = "cloudkit:iCloud.fixture:development:user-a"
+        _ = try f.store.assistantDatabase.bindCloudKitAccount(contextKey: "iCloud.fixture|Development|Journal", accountID: "user-a")
+        let gateway = TestAssistantGateway(subject: subject)
+        var uploads = 0
+        gateway.uploadHandler = { _, fileID in
+            uploads += 1
+            return .object(["id": .string("uploaded-first"), "file_id": .string(fileID), "filename": .string("First receipt.txt"), "size_bytes": .number(3)])
+        }
+        let coordinator = AssistantCoordinator(store: f.store, gateway: gateway, contract: f.contract)
+        coordinator.consented = true; coordinator.setForeground(true); coordinator.present()
+        XCTAssertTrue(coordinator.conversation.messages.isEmpty)
+        XCTAssertEqual(gateway.connections, 0)
+        let context = try XCTUnwrap(coordinator.beginAttachmentSelection())
+        coordinator.setForeground(false, isBackground: false)
+        coordinator.attach(context: context) { [.bytes(Data([1, 2, 3]), filename: "First receipt.txt")] }
+        XCTAssertTrue(coordinator.awaitingAttachmentActivation)
+        XCTAssertEqual(uploads, 0)
+        XCTAssertFalse(coordinator.canAcceptMessage)
+        coordinator.setForeground(true)
+        try await wait { !coordinator.isRunning }
+        XCTAssertNil(coordinator.error)
+        XCTAssertEqual(uploads, 1)
+        XCTAssertEqual(gateway.connections, 1)
+        XCTAssertTrue(coordinator.send(""))
+        try await wait { !coordinator.isRunning }
+        let message = try XCTUnwrap(coordinator.conversation.messages.first)
+        XCTAssertEqual(message.text, "Please review these attachments.")
+        XCTAssertEqual(message.attachments?.map(\.filename), ["First receipt.txt"])
+        XCTAssertEqual(gateway.itemsSeen.first?.first(where: { $0["attachments"].array.count == 1 })?["attachments"].array, [.string("uploaded-first")])
+        let restored = try JSONDecoder().decode(AssistantConversation.self, from: JSONEncoder().encode(coordinator.conversation))
+        XCTAssertEqual(restored.messages.first?.attachments, message.attachments)
+        coordinator.dismiss()
+    }
+
+    func testDeferredAttachmentCannotCrossConversationOrIdentityBoundaries() async throws {
+        let f = try fixture(), subject = "cloudkit:iCloud.fixture:development:user-a"
+        _ = try f.store.assistantDatabase.bindCloudKitAccount(contextKey: "iCloud.fixture|Development|Journal", accountID: "user-a")
+        let gateway = TestAssistantGateway(subject: subject)
+        let coordinator = AssistantCoordinator(store: f.store, gateway: gateway, contract: f.contract)
+        coordinator.consented = true; coordinator.setForeground(true); coordinator.present()
+        let context = try XCTUnwrap(coordinator.beginAttachmentSelection())
+        coordinator.setForeground(false, isBackground: false)
+        var loaded = false
+        coordinator.attach(context: context) { loaded = true; return [] }
+        XCTAssertTrue(coordinator.awaitingAttachmentActivation)
+        coordinator.invalidateIdentity()
+        coordinator.setForeground(true)
+        XCTAssertFalse(coordinator.awaitingAttachmentActivation)
+        XCTAssertFalse(loaded)
+        XCTAssertTrue(coordinator.uploadedFiles.isEmpty)
+    }
+
+    func testLegacyMessageWithoutAttachmentsRemainsReadable() throws {
+        let message = try JSONDecoder().decode(AssistantMessage.self, from: JSONEncoder().encode(AssistantMessage(role: "user", text: "Old message")))
+        XCTAssertNil(message.attachments)
+    }
+
     func testLatePhotoSelectionCannotUploadIntoAnotherConversation() async throws {
         let f = try fixture(), subject = "cloudkit:iCloud.fixture:development:user-a", gate = AssistantTestGate()
         _ = try f.store.assistantDatabase.bindCloudKitAccount(contextKey: "iCloud.fixture|Development|Journal", accountID: "user-a")

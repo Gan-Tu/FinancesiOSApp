@@ -139,6 +139,9 @@ struct AppShellView: View {
             store.setSceneActive(scenePhase == .active, sceneID: sceneID)
             if scenePhase != .active { store.lockApp() }
             else {
+                if !AIInferencePolicy.blocksNetwork {
+                    Task { try? await ReceiptAnalysisClient.shared.renewSession(endpoint: ReceiptAISettings.load().endpoint) }
+                }
                 handleSystemEntry()
                 Task {
                     await systemEntries.restoreSharedReceipts(store: store)

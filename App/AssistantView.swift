@@ -133,8 +133,19 @@ struct AssistantView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
                     ForEach(assistant.conversation.messages) { message in
-                        messageBubble(message.text, isUser: message.role == "user", identifier: "assistant.message.\(message.role)")
-                            .id(message.id)
+                        VStack(alignment: .leading, spacing: 6) {
+                            messageBubble(message.text, isUser: message.role == "user", identifier: "assistant.message.\(message.role)")
+                            if let attachments = message.attachments, !attachments.isEmpty {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("\(attachments.count) \(attachments.count == 1 ? "attachment" : "attachments") included with message")
+                                        .font(.caption.weight(.medium))
+                                    ForEach(attachments) { file in
+                                        Label(file.filename, systemImage: "paperclip").font(.caption).textSelection(.enabled)
+                                    }
+                                }.foregroundStyle(.secondary).padding(.horizontal, 16)
+                                .accessibilityIdentifier("assistant.message.attachments")
+                            }
+                        }.id(message.id)
                     }
                     if !assistant.streamingText.isEmpty {
                         messageBubble(assistant.streamingText, isUser: false, identifier: "assistant.streaming")
@@ -191,7 +202,12 @@ struct AssistantView: View {
     }
     private var composer: some View {
         VStack(spacing: 8) {
+            if assistant.awaitingAttachmentActivation {
+                ProgressView("Waiting to add attachment…").font(.caption)
+            }
             if !assistant.uploadedFiles.isEmpty {
+                Text("\(assistant.uploadedFiles.count) \(assistant.uploadedFiles.count == 1 ? "attachment" : "attachments") ready to send")
+                    .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("assistant.attachments.ready")
                 ScrollView(.horizontal) { HStack { ForEach(Array(assistant.uploadedFiles.enumerated()), id: \.offset) { index, file in
                     Button { assistant.uploadedFiles.remove(at: index) } label: { Label(file["filename"].string ?? "Attachment", systemImage: "xmark.circle.fill").font(.caption).padding(7).background(.quaternary, in: Capsule()) }
                 } } }.padding(.horizontal, 10)
@@ -245,7 +261,7 @@ struct AssistantView: View {
         .disabled(!assistant.canAcceptMessage || assistant.isRunning || assistant.dictation.state == .preparing || assistant.dictation.state == .transcribing)
     }
     private var canSend: Bool {
-        !assistant.draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && assistant.canAcceptMessage && !assistant.dictation.isBusy
+        (!assistant.draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !assistant.uploadedFiles.isEmpty) && assistant.canAcceptMessage && !assistant.dictation.isBusy
     }
     @ViewBuilder private var submitButton: some View {
         if assistant.isRunning && assistant.draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

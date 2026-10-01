@@ -309,6 +309,72 @@ extension ReceiptAssistTests {
             .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
         return try ReceiptSessionCredential(token: "test.\(payload).synthetic")
     }
+    func testExpiredAccessRenewsFromSharedCredentialWithoutAppleSignIn() async throws {
+        let store = MemoryReceiptCredentials(), endpoint = "https://assistant-upload.invalid"
+        let refresh = try syntheticSession().token
+        var expired = try ReceiptSessionCredential(token: syntheticSession().token, refreshToken: refresh)
+        expired.expiresAt = .distantPast
+        try store.save(expired, endpoint: endpoint)
+        let sessionConfig = URLSessionConfiguration.ephemeral; sessionConfig.protocolClasses = [AssistantUploadProtocol.self]
+        let session = URLSession(configuration: sessionConfig)
+        defer { session.invalidateAndCancel(); AssistantUploadProtocol.responder = nil }
+        let freshToken = try syntheticSession().token
+        AssistantUploadProtocol.responder = { request in
+            XCTAssertEqual(request.url?.path, "/api/v1/auth/native/refresh")
+            let body = try XCTUnwrap(request.httpBody ?? request.httpBodyStream.map { stream in
+                stream.open(); defer { stream.close() }
+                var data = Data(), bytes = [UInt8](repeating: 0, count: 8192)
+                while stream.hasBytesAvailable { let count = stream.read(&bytes, maxLength: bytes.count); if count <= 0 { break }; data.append(contentsOf: bytes.prefix(count)) }
+                return data
+            })
+            XCTAssertEqual((try JSONSerialization.jsonObject(with: body) as? [String: String])?["refreshToken"], refresh)
+            return (200, try JSONSerialization.data(withJSONObject: ["token": freshToken, "refreshToken": refresh]))
+        }
+        let extensionClient = ReceiptAnalysisClient(credentialStore: store, session: session)
+        try extensionClient.restoreSession(endpoint: endpoint)
+        XCTAssertFalse(extensionClient.authenticated)
+        XCTAssertFalse(store.values.isEmpty)
+        let renewed = try await extensionClient.renewSession(endpoint: endpoint)
+        XCTAssertTrue(renewed); XCTAssertTrue(extensionClient.authenticated)
+        let appClient = ReceiptAnalysisClient(credentialStore: store, session: session)
+        try appClient.restoreSession(endpoint: endpoint)
+        XCTAssertTrue(appClient.authenticated)
+        XCTAssertEqual(try store.load(endpoint: endpoint)?.refreshToken, refresh)
+    }
+    func testRefreshOutagePreservesProofAndAccessExpiryCanRetry() async throws {
+        let store = MemoryReceiptCredentials(), endpoint = "https://assistant-upload.invalid"
+        let refresh = try syntheticSession().token
+        let value = try ReceiptSessionCredential(token: syntheticSession().token, refreshToken: refresh)
+        try store.save(value, endpoint: endpoint)
+        let configuration = URLSessionConfiguration.ephemeral; configuration.protocolClasses = [AssistantUploadProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel(); AssistantUploadProtocol.responder = nil }
+        let client = ReceiptAnalysisClient(credentialStore: store, session: session)
+        try client.restoreSession(endpoint: endpoint)
+        client.assistantSessionExpired()
+        XCTAssertFalse(client.authenticated)
+        XCTAssertEqual(try store.load(endpoint: endpoint)?.refreshToken, refresh)
+        AssistantUploadProtocol.responder = { _ in throw URLError(.notConnectedToInternet) }
+        do { _ = try await client.renewSession(endpoint: endpoint); XCTFail("Outage must be reported") }
+        catch { XCTAssertEqual((error as? URLError)?.code, .notConnectedToInternet) }
+        XCTAssertEqual(try store.load(endpoint: endpoint)?.refreshToken, refresh)
+        let fresh = try syntheticSession().token
+        AssistantUploadProtocol.responder = { _ in (200, try JSONSerialization.data(withJSONObject: ["token": fresh, "refreshToken": refresh])) }
+        let renewed = try await client.renewSession(endpoint: endpoint)
+        XCTAssertTrue(renewed)
+        XCTAssertTrue(client.authenticated)
+    }
+    func testRevokedAccountRemovesBothAccessAndRefreshCredentials() async throws {
+        let store = MemoryReceiptCredentials(), endpoint = "https://assistant-upload.invalid"
+        let value = try ReceiptSessionCredential(token: syntheticSession().token, refreshToken: syntheticSession().token)
+        try store.save(value, endpoint: endpoint)
+        let client = ReceiptAnalysisClient(credentialStore: store)
+        try client.restoreSession(endpoint: endpoint)
+        NotificationCenter.default.post(name: .CKAccountChanged, object: nil)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertFalse(client.authenticated)
+        XCTAssertNil(try store.load(endpoint: endpoint))
+    }
     func testReceiptSessionRestoresAcrossClientInstances() throws {
         let store = MemoryReceiptCredentials()
         try store.save(syntheticSession(), endpoint: "https://finances.tugan.app")

@@ -74,9 +74,9 @@ struct AssistantAttachmentMenu: View {
         .accessibilityLabel("Add Attachment")
         .accessibilityIdentifier("assistant.attach")
         .disabled(!assistant.canAttachFiles)
-        .fileImporter(isPresented: $files, allowedContentTypes: [.image, .pdf, .plainText, .commaSeparatedText, .data], allowsMultipleSelection: true) { [context = fileContext] result in
-            if fileContext == context { fileContext = nil }
-            guard let context, assistant.isCurrentAttachmentContext(context) else { return }
+        .fileImporter(isPresented: $files, allowedContentTypes: [.image, .pdf, .plainText, .commaSeparatedText, .data], allowsMultipleSelection: true) { result in
+            let context = fileContext; fileContext = nil
+            guard let context, context == assistant.attachmentContext else { return }
             do { assistant.attach(try result.get(), context: context) }
             catch { if (error as NSError).code != NSUserCancelledError { assistant.error = error.localizedDescription } }
         }
@@ -125,7 +125,7 @@ struct AssistantAttachmentMenu: View {
     private func receive(_ result: Result<[Data], Error>, request: CaptureRequest) {
         guard capture?.id == request.id else { return }
         capture = nil
-        guard assistant.isCurrentAttachmentContext(request.context) else { return }
+        guard request.context == assistant.attachmentContext else { return }
         do {
             let pages = try result.get()
             guard !pages.isEmpty else { return } // Explicit scanner/camera cancellation.

@@ -78,6 +78,14 @@ final class AssistantInteractionTests: XCTestCase {
         XCTAssertTrue(chip.waitForExistence(timeout: 30))
         chip.tap()
         XCTAssertFalse(chip.exists)
+        attach.tap(); app.buttons["Photo Library"].tap()
+        XCTAssertTrue(photo.waitForExistence(timeout: 10)); photo.tap()
+        XCTAssertTrue(add.waitForExistence(timeout: 5)); add.tap()
+        XCTAssertTrue(chip.waitForExistence(timeout: 30))
+        XCTAssertTrue(app.staticTexts["assistant.attachments.ready"].waitForExistence(timeout: 5))
+        app.buttons["assistant.send"].tap()
+        XCTAssertTrue(app.staticTexts["1 attachment included with message"].waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["Please review these attachments."].waitForExistence(timeout: 10))
         attach.tap(); app.buttons["Choose Files"].tap()
         let cancel = app.buttons["Cancel"]
         // The system Files service can still be loading a blank sheet after
