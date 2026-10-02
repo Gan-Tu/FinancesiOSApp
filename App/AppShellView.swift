@@ -35,7 +35,11 @@ enum EditorRoute: Identifiable {
 struct AppShellView: View {
     @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var store: MobileLedgerStore
-    @EnvironmentObject private var assistant: AssistantCoordinator
+    /// A plain reference, not an observed object. The chat coordinator publishes
+    /// on every streamed token and status change; the navigation shell behind
+    /// the sheet must not re-render for those. Navigation requests arrive
+    /// through their own publisher below.
+    let assistant: AssistantCoordinator
     @State private var sceneID = UUID()
     @State private var route: EditorRoute?
     @State private var navigationPath: [MobileRoute] = []
@@ -158,7 +162,7 @@ struct AppShellView: View {
             handleSystemEntry()
             if unlocked { Task { await systemEntries.restoreSharedReceipts(store: store) } }
         }
-        .onChange(of: assistant.navigationRequest) { _, request in
+        .onReceive(assistant.$navigationRequest.receive(on: DispatchQueue.main)) { request in
             guard let request else { return }
             assistant.navigationRequest = nil
             assistant.dismiss(); presentedSheet = nil

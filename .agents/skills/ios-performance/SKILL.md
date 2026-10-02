@@ -63,6 +63,8 @@ Everything the user sees is driven by one `@MainActor` object, `MobileLedgerStor
 4. Search types through `RegisterRenderWorker.search` and the store's normalized-text caches. Do not call `transactions(scope:search:)` on every keystroke from a view.
 5. Receipts: thumbnails come from `QLThumbnailGenerator` in a `.task(id:)`; never read file bytes or decode images on the main actor.
 6. Disabling hit testing while content settles (`contentReady`) must always have a timed fallback that re-enables it.
+7. Text input must not bind to a published property on a large observable object. Every keystroke republishes that object to every observer. Keep drafts in `@State` or in a small dedicated `ObservableObject` (see `AssistantComposerDraft`) observed only by the input row.
+8. A view that only calls methods on a coordinator holds it as a plain `let`, not `@EnvironmentObject` or `@ObservedObject`, and subscribes to the one publisher it needs (`AppShellView` and `navigationRequest`). A `@StateObject` observes too; own a chatty object through a non-publishing holder when the owning view must stay still.
 
 ## 6. Diagnosing a freeze or laggy input
 

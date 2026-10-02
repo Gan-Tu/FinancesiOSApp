@@ -323,6 +323,8 @@ final class AssistantTests: XCTestCase {
         let gateway = TestAssistantGateway(subject: subject)
         gateway.stepOverride = { _, _, _ in await gate.wait() }
         let coordinator = AssistantCoordinator(store: f.store, gateway: gateway, contract: f.contract)
+        // Without background time the run checkpoints and pauses immediately.
+        let lease = AssistantTestBackgroundLease(); lease.granted = false; coordinator.backgroundLease = lease
         coordinator.consented = true; coordinator.setForeground(true); coordinator.present()
         try await wait { coordinator.connected }
         XCTAssertTrue(coordinator.send("Explain spending"))
@@ -525,6 +527,104 @@ final class AssistantTests: XCTestCase {
         XCTAssertEqual(dictation.state, .idle)
         XCTAssertEqual(dictation.error, "Recording failed")
         XCTAssertEqual(gateway.transcriptions, 1)
+    }
+
+    func testBackgroundKeepsAnInFlightReplyRunningUntilItFinishesThenReturnsTheLease() async throws {
+        let f = try fixture(), subject = "cloudkit:iCloud.fixture:development:user-a", gate = AssistantTestGate()
+        _ = try f.store.assistantDatabase.bindCloudKitAccount(contextKey: "iCloud.fixture|Development|Journal", accountID: "user-a")
+        let gateway = TestAssistantGateway(subject: subject)
+        gateway.stepOverride = { _, _, receive in
+            await gate.wait()
+            try receive(AssistantStepEvent(type: "text_delta", text: "Finished while away"))
+            try receive(AssistantStepEvent(type: "step_completed", continuation: "away", calls: [], needsFollowUp: false))
+        }
+        let coordinator = AssistantCoordinator(store: f.store, gateway: gateway, contract: f.contract)
+        let lease = AssistantTestBackgroundLease(); coordinator.backgroundLease = lease
+        coordinator.consented = true; coordinator.setForeground(true); coordinator.present()
+        try await wait { coordinator.connected }
+        XCTAssertTrue(coordinator.send("Summarize this month"))
+        try await wait { gate.waiting }
+        coordinator.setForeground(false)
+        XCTAssertTrue(lease.active, "An in-flight reply asks the system for background time")
+        XCTAssertTrue(coordinator.isRunning, "Leaving no longer pauses a reply that iOS lets finish")
+        gate.release()
+        try await wait { !coordinator.isRunning }
+        XCTAssertEqual(coordinator.conversation.messages.last?.text, "Finished while away")
+        XCTAssertFalse(coordinator.conversation.canResume)
+        XCTAssertFalse(lease.active, "Finished work returns its lease at once")
+        XCTAssertEqual(lease.ends, 1)
+        let saved = try JSONDecoder().decode(AssistantConversation.self, from: XCTUnwrap(f.store.assistantDatabase.assistantHistory(scope: subject).first))
+        XCTAssertEqual(saved.messages.last?.text, "Finished while away")
+        coordinator.setForeground(true)
+        XCTAssertEqual(lease.ends, 1, "Returning to the foreground does not end a lease twice")
+    }
+
+    func testBackgroundLeaseExpiryCheckpointsAndPausesUntilTheUserResumes() async throws {
+        let f = try fixture(), subject = "cloudkit:iCloud.fixture:development:user-a", gate = AssistantTestGate()
+        _ = try f.store.assistantDatabase.bindCloudKitAccount(contextKey: "iCloud.fixture|Development|Journal", accountID: "user-a")
+        let gateway = TestAssistantGateway(subject: subject)
+        gateway.stepOverride = { _, _, _ in await gate.wait() }
+        let coordinator = AssistantCoordinator(store: f.store, gateway: gateway, contract: f.contract)
+        let lease = AssistantTestBackgroundLease(); coordinator.backgroundLease = lease
+        coordinator.consented = true; coordinator.setForeground(true); coordinator.present()
+        try await wait { coordinator.connected }
+        XCTAssertTrue(coordinator.send("Explain spending"))
+        try await wait { gate.waiting }
+        coordinator.setForeground(false)
+        XCTAssertTrue(lease.active)
+        lease.expire()
+        XCTAssertFalse(coordinator.isRunning, "The expiring lease pauses the run before the app suspends")
+        XCTAssertTrue(coordinator.conversation.canResume)
+        XCTAssertFalse(lease.active)
+        let saved = try JSONDecoder().decode(AssistantConversation.self, from: XCTUnwrap(f.store.assistantDatabase.assistantHistory(scope: subject).first))
+        XCTAssertTrue(saved.canResume, "Paused progress is durable before the lease ends")
+        gate.release()
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertTrue(coordinator.conversation.canResume, "A late network completion cannot revive a paused run")
+        XCTAssertEqual(gateway.steps, 1)
+        coordinator.setForeground(true)
+        XCTAssertFalse(coordinator.isRunning, "Returning requires an explicit Resume")
+        XCTAssertTrue(coordinator.conversation.canResume)
+        coordinator.resume()
+        try await wait { gateway.steps == 2 }
+        coordinator.pause()
+    }
+
+    func testInactiveSceneKeepsRunningWithoutABackgroundLease() async throws {
+        let f = try fixture(), subject = "cloudkit:iCloud.fixture:development:user-a", gate = AssistantTestGate()
+        _ = try f.store.assistantDatabase.bindCloudKitAccount(contextKey: "iCloud.fixture|Development|Journal", accountID: "user-a")
+        let gateway = TestAssistantGateway(subject: subject)
+        gateway.stepOverride = { _, _, receive in
+            await gate.wait()
+            try receive(AssistantStepEvent(type: "step_completed", text: "Answered behind a system prompt", continuation: "inactive", calls: [], needsFollowUp: false))
+        }
+        let coordinator = AssistantCoordinator(store: f.store, gateway: gateway, contract: f.contract)
+        let lease = AssistantTestBackgroundLease(); coordinator.backgroundLease = lease
+        coordinator.consented = true; coordinator.setForeground(true); coordinator.present()
+        try await wait { coordinator.connected }
+        XCTAssertTrue(coordinator.send("Check balances"))
+        try await wait { gate.waiting }
+        coordinator.setForeground(false, isBackground: false)
+        XCTAssertEqual(lease.begins, 0, "An inactive scene still has full execution; no lease is needed")
+        XCTAssertTrue(coordinator.isRunning)
+        gate.release()
+        try await wait { !coordinator.isRunning }
+        XCTAssertEqual(coordinator.conversation.messages.last?.text, "Answered behind a system prompt")
+        XCTAssertFalse(coordinator.conversation.canResume)
+        coordinator.setForeground(true)
+    }
+
+    func testTypingInTheComposerDoesNotRepublishTheCoordinator() throws {
+        let f = try fixture()
+        let coordinator = AssistantCoordinator(store: f.store, gateway: TestAssistantGateway(subject: "cloudkit:iCloud.fixture:development:user-a"), contract: f.contract)
+        let publishes = AssistantPublishCounter(), draftPublishes = AssistantPublishCounter()
+        let token = coordinator.objectWillChange.sink { publishes.count += 1 }
+        let draftToken = coordinator.draft.objectWillChange.sink { draftPublishes.count += 1 }
+        defer { token.cancel(); draftToken.cancel() }
+        for word in ["Where", "did", "my", "money", "go"] { coordinator.draftText += word + " " }
+        XCTAssertEqual(publishes.count, 0, "Keystrokes must not re-render the transcript or the app shell")
+        XCTAssertEqual(draftPublishes.count, 5)
+        XCTAssertEqual(coordinator.draftText, "Where did my money go ")
     }
 
     func testDictationStopsOnBackgroundAndConversationChange() async throws {
@@ -1415,6 +1515,35 @@ private final class AssistantTestGate {
         released = true
         continuation?.resume(); continuation = nil
     }
+}
+
+/// Mirrors UIKit: expiry runs the handler, then the lease is gone.
+@MainActor
+private final class AssistantTestBackgroundLease: AssistantBackgroundLeasing {
+    var granted = true
+    private(set) var active = false
+    private(set) var begins = 0
+    private(set) var ends = 0
+    private var expiration: (@MainActor @Sendable () -> Void)?
+    func begin(onExpiration: @escaping @MainActor @Sendable () -> Void) -> Bool {
+        begins += 1
+        guard granted else { return false }
+        active = true; expiration = onExpiration
+        return true
+    }
+    func end() {
+        guard active else { return }
+        active = false; expiration = nil; ends += 1
+    }
+    func expire() {
+        let handler = expiration
+        handler?()
+        end()
+    }
+}
+
+private final class AssistantPublishCounter {
+    var count = 0
 }
 
 @MainActor

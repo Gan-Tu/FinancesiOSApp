@@ -64,10 +64,19 @@ private final class FinancesMobileLaunchState: ObservableObject {
     }
 }
 
+/// Owns the chat coordinator for the scene's lifetime without observing it.
+/// The coordinator publishes on every keystroke-adjacent status change and
+/// every streamed token; only the chat sheet should re-render for those.
+@MainActor
+private final class AssistantCoordinatorHolder: ObservableObject {
+    let coordinator: AssistantCoordinator
+    init(coordinator: AssistantCoordinator) { self.coordinator = coordinator }
+}
+
 @MainActor
 private struct FinancesMobileNormalContent: View {
     @ObservedObject var store: MobileLedgerStore
-    @StateObject private var assistant: AssistantCoordinator
+    @StateObject private var assistantHolder: AssistantCoordinatorHolder
     init(store: MobileLedgerStore) {
         self.store = store
         let preferences = AssistantPreferencesStore.shared
@@ -76,13 +85,13 @@ private struct FinancesMobileNormalContent: View {
             return try store.assistantDatabase.assistantHistory(scope: subject).first
                 .map { try JSONDecoder().decode(AssistantConversation.self, from: $0).settings }
         }
-        _assistant = StateObject(wrappedValue: AssistantCoordinator(store: store, preferences: preferences))
+        _assistantHolder = StateObject(wrappedValue: AssistantCoordinatorHolder(coordinator: AssistantCoordinator(store: store, preferences: preferences)))
     }
     @AppStorage(JournalVisibility.preferenceKey, store: MobileDisplayPreferences.defaults) private var hiddenJournalIDs = ""
     var body: some View {
-        AppShellView()
+        AppShellView(assistant: assistantHolder.coordinator)
             .environmentObject(store)
-            .environmentObject(assistant)
+            .environmentObject(assistantHolder.coordinator)
             .environmentObject(AssistantPreferencesStore.shared)
             .environmentObject(store.cloudSyncState)
             .preferredColorScheme(store.data.appearance.colorScheme)

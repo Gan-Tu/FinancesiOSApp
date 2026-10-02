@@ -1,11 +1,54 @@
 import Foundation
 import Combine
 import CloudKit
+import UIKit
 import os
 
 final class AssistantNotificationTokens {
     var values: [NSObjectProtocol] = []
     deinit { values.forEach(NotificationCenter.default.removeObserver) }
+}
+
+/// The composer's text lives apart from the coordinator. A keystroke then
+/// re-renders only the input row, not the Markdown transcript above it or the
+/// navigation shell behind the sheet.
+@MainActor
+final class AssistantComposerDraft: ObservableObject {
+    @Published var text = ""
+}
+
+/// Best-effort execution after the scene leaves the foreground. iOS grants a
+/// short lease; when it ends, the conversation checkpoints and pauses, and the
+/// user resumes it on return.
+@MainActor
+protocol AssistantBackgroundLeasing: AnyObject {
+    /// Returns false when the system refuses background time.
+    func begin(onExpiration: @escaping @MainActor @Sendable () -> Void) -> Bool
+    func end()
+}
+
+@MainActor
+final class AssistantSystemBackgroundLease: AssistantBackgroundLeasing {
+    private var identifier: UIBackgroundTaskIdentifier = .invalid
+    func begin(onExpiration: @escaping @MainActor @Sendable () -> Void) -> Bool {
+        guard identifier == .invalid else { return true }
+        identifier = UIApplication.shared.beginBackgroundTask(withName: "Ask Finances") { [weak self] in
+            // UIKit calls this on the main thread shortly before the allowance
+            // ends. Checkpoint first, then give the lease back before returning.
+            MainActor.assumeIsolated {
+                guard let self, self.identifier != .invalid else { return }
+                onExpiration()
+                self.end()
+            }
+        }
+        return identifier != .invalid
+    }
+    func end() {
+        guard identifier != .invalid else { return }
+        let current = identifier
+        identifier = .invalid
+        UIApplication.shared.endBackgroundTask(current)
+    }
 }
 
 @MainActor
@@ -34,13 +77,25 @@ final class AssistantCoordinator: ObservableObject {
     let gateway: any AssistantGatewayProtocol
     let contract: AssistantContract
     let dictation: AssistantDictation
-    @Published var draftText = ""
+    let draft = AssistantComposerDraft()
+    /// Compatibility accessor; views bind to `draft` directly so typing never
+    /// publishes through this object.
+    var draftText: String {
+        get { draft.text }
+        set { draft.text = newValue }
+    }
     private var dictationObservation: AnyCancellable?
+    private var dictationStateObservation: AnyCancellable?
     let preferences: AssistantPreferencesStore?
     private(set) var identity = ""
     private(set) var tools: AssistantTools?
     private var foreground = false
     private var presented = false
+    /// System background time or an inactive scene (notification shade,
+    /// permission prompt) keeps in-flight work running on a best-effort basis.
+    var backgroundLease: any AssistantBackgroundLeasing = AssistantSystemBackgroundLease()
+    private var continuesWhileAway = false
+    private var holdsBackgroundLease = false
     private var restoreRecentOnConnect = false
     private let now: () -> Date
     private var task: Task<Void, Never>?
@@ -69,18 +124,56 @@ final class AssistantCoordinator: ObservableObject {
             self.draftText += separator + text
         }
         dictationObservation = dictation.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
+        // A transcription that finishes while the scene is away returns its lease.
+        dictationStateObservation = dictation.$state.sink { [weak self] state in
+            guard let self, state == .idle || state == .failed, !self.isRunning, !self.isConnecting else { return }
+            self.finishAwayWork()
+        }
     }
 
     func setForeground(_ active: Bool, isBackground: Bool = true) {
         if foreground && !active && presented { conversation.lastActiveAt = now() }
         foreground = active
-        if !active {
-            if isBackground || dictation.state != .preparing { pause() }
-        } else {
+        if active {
+            releaseBackgroundLease()
+            continuesWhileAway = false
             dictation.activateIfPermitted()
             finishPendingAttachment()
             if let preferences { Task { await preferences.refresh() } }
+            return
         }
+        // Away from the foreground. Finish in-flight work on a best-effort
+        // basis instead of pausing at once: an inactive scene (notification
+        // shade, system prompt) keeps full execution, and the background runs
+        // on a system lease that checkpoints the conversation when it ends.
+        // The microphone cannot keep recording in the background.
+        if isBackground, dictation.state == .recording { dictation.cancel() }
+        let busy = isRunning || isConnecting || dictation.state == .transcribing
+        guard busy, presented, !store.requiresUnlock else {
+            if isBackground { pause() }
+            return
+        }
+        continuesWhileAway = true
+        guard isBackground, !holdsBackgroundLease else { return }
+        holdsBackgroundLease = backgroundLease.begin { [weak self] in self?.backgroundLeaseExpired() }
+        if !holdsBackgroundLease { continuesWhileAway = false; pause() }
+    }
+    private func backgroundLeaseExpired() {
+        guard holdsBackgroundLease else { return }
+        holdsBackgroundLease = false
+        continuesWhileAway = false
+        pause()
+    }
+    private func releaseBackgroundLease() {
+        guard holdsBackgroundLease else { return }
+        holdsBackgroundLease = false
+        backgroundLease.end()
+    }
+    /// Work that finishes while the scene is away gives its lease back at once.
+    private func finishAwayWork() {
+        guard !foreground else { return }
+        continuesWhileAway = false
+        releaseBackgroundLease()
     }
     func lockChanged() { if store.requiresUnlock { pause() } else { finishPendingAttachment() } }
     private func finishPendingAttachment() {
@@ -102,7 +195,7 @@ final class AssistantCoordinator: ObservableObject {
         presented = false; pendingAttachment = nil; awaitingAttachmentActivation = false; pause()
     }
     func requireActive() throws {
-        guard foreground, presented, !store.requiresUnlock else { throw CancellationError() }
+        guard foreground || continuesWhileAway, presented, !store.requiresUnlock else { throw CancellationError() }
         try store.assistantRequireAccess()
     }
     func invalidateIdentity() {
@@ -325,7 +418,7 @@ final class AssistantCoordinator: ObservableObject {
         let previousTask = retiringTask; retiringTask = nil
         task = Task { [weak self] in
             guard let self else { return }
-            defer { if generation == stamp { isRunning = false; isConnecting = false; activity = ""; task = nil } }
+            defer { if generation == stamp { isRunning = false; isConnecting = false; activity = ""; task = nil; finishAwayWork() } }
             do {
                 await previousTask?.value
                 guard generation == stamp else { return }
@@ -490,6 +583,7 @@ final class AssistantCoordinator: ObservableObject {
         if conversation.hasPendingInference || !conversation.calls.isEmpty || conversation.hasPendingSteering { conversation.paused = true }
         fileContinuation?.resume(throwing: CancellationError()); fileContinuation = nil; filePurpose = nil
         dictation.cancel()
+        finishAwayWork()
     }
     func cancelRemaining() {
         pause()
@@ -555,7 +649,7 @@ final class AssistantCoordinator: ObservableObject {
         guard isCurrentAttachmentContext(context), let tools else { return }
         isRunning = true; let stamp = generation
         task = Task {
-            defer { if generation == stamp { isRunning = false; isConnecting = false; task = nil; activity = "" } }
+            defer { if generation == stamp { isRunning = false; isConnecting = false; task = nil; activity = ""; finishAwayWork() } }
             do {
                 activity = "Connecting…"
                 isConnecting = true

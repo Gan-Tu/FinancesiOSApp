@@ -5,7 +5,6 @@ import UIKit
 struct AssistantView: View {
     @EnvironmentObject private var assistant: AssistantCoordinator
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var detent = PresentationDetent.medium
     @State private var auxiliary: AssistantAuxiliary?
     @State private var renameTarget: AssistantConversation?
@@ -94,7 +93,7 @@ struct AssistantView: View {
             Label("Your finances, in conversation", systemImage: "sparkles").font(.title3.weight(.semibold))
             Text("Ask questions, find receipts, and make bookkeeping changes using your current iPhone data.")
             Text("OpenAI processes your messages, requested records, attachments, and audio you submit for transcription. Your ledger stays on this device and in iCloud. OpenAI’s API retention policy applies.").font(.subheadline).foregroundStyle(Color(uiColor: .secondaryLabel))
-            Text("Work pauses when you leave. Chat history stays on this device for 30 days. Dictation starts only when you tap the microphone. Review the text before sending.").font(.subheadline).foregroundStyle(Color(uiColor: .secondaryLabel))
+            Text("Replies keep running briefly after you leave when iOS allows it, then pause until you return. Chat history stays on this device for 30 days. Dictation starts only when you tap the microphone. Review the text before sending.").font(.subheadline).foregroundStyle(Color(uiColor: .secondaryLabel))
             Link("OpenAI data policy", destination: URL(string: "https://developers.openai.com/api/docs/guides/your-data")!)
             Button("Continue") { assistant.acceptConsent() }.buttonStyle(.borderedProminent).accessibilityIdentifier("assistant.consent")
         }.padding(24).frame(maxHeight: .infinity, alignment: .top)
@@ -212,78 +211,11 @@ struct AssistantView: View {
                     Button { assistant.uploadedFiles.remove(at: index) } label: { Label(file["filename"].string ?? "Attachment", systemImage: "xmark.circle.fill").font(.caption).padding(7).background(.quaternary, in: Capsule()) }
                 } } }.padding(.horizontal, 10)
             }
-            Group {
-                if dynamicTypeSize.isAccessibilitySize {
-                    VStack(spacing: 4) {
-                        composerInput.padding(.horizontal, 12)
-                        HStack(spacing: 4) { attachmentButton; Spacer(); dictationButton; submitButton }
-                    }
-                } else {
-                    HStack(alignment: .bottom, spacing: 2) {
-                        attachmentButton
-                        composerInput
-                        dictationButton
-                        submitButton
-                    }
-                }
-            }
-            .padding(6)
-            .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
-            .buttonStyle(.plain)
+            AssistantComposerBar(assistant: assistant, draft: assistant.draft, typing: $typing, detent: $detent)
         }
         .padding(.horizontal, 14)
         .padding(.top, 8)
         .padding(.bottom, 10)
-    }
-    private var composerInput: some View {
-        TextField(assistant.isRunning || assistant.conversation.canResume ? "Add a follow-up…" : "Ask about your finances…", text: $assistant.draftText, axis: .vertical)
-            .font(.body)
-            .lineLimit(1...5)
-            .focused($typing)
-            .padding(.vertical, 11)
-            .accessibilityIdentifier("assistant.composer")
-    }
-    private var attachmentButton: some View {
-        AssistantAttachmentMenu(assistant: assistant)
-    }
-    private var dictationButton: some View {
-        Button {
-            typing = false; detent = .large
-            if assistant.dictation.state == .recording { assistant.dictation.finish() }
-            else { assistant.startDictation() }
-        } label: {
-            Image(systemName: assistant.dictation.state == .recording ? "stop.circle.fill" : "mic")
-                .font(.system(size: 20)).frame(width: 44, height: 44).contentShape(Circle())
-        }
-        .foregroundStyle(assistant.dictation.state == .recording ? Color.red : Color(uiColor: .secondaryLabel))
-        .accessibilityLabel(assistant.dictation.state == .recording ? "Finish Dictation" : "Dictate Message")
-        .accessibilityIdentifier("assistant.dictate")
-        .disabled(!assistant.canAcceptMessage || assistant.isRunning || assistant.dictation.state == .preparing || assistant.dictation.state == .transcribing)
-    }
-    private var canSend: Bool {
-        (!assistant.draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !assistant.uploadedFiles.isEmpty) && assistant.canAcceptMessage && !assistant.dictation.isBusy
-    }
-    @ViewBuilder private var submitButton: some View {
-        if assistant.isRunning && assistant.draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            Button { assistant.pause() } label: {
-                Image(systemName: "stop.fill").font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: 44, height: 44)
-                    .background(Color.accentColor.opacity(0.12), in: Circle())
-            }
-            .accessibilityLabel("Stop")
-            .accessibilityIdentifier("assistant.stop")
-        } else {
-            Button { if assistant.send(assistant.draftText) { assistant.draftText = "" } } label: {
-                Image(systemName: "arrow.up").font(.system(size: 19, weight: .semibold))
-                    .foregroundStyle(canSend ? Color.white : Color.secondary)
-                    .frame(width: 44, height: 44)
-                    .background(canSend ? Color.accentColor : Color(uiColor: .quaternarySystemFill), in: Circle())
-            }
-            .accessibilityLabel(assistant.isRunning || assistant.conversation.canResume ? "Send Follow-up" : "Send Message")
-            .accessibilityIdentifier("assistant.send")
-            .disabled(!canSend)
-        }
     }
     private var historySheet: some View {
         NavigationStack {
@@ -504,6 +436,88 @@ private struct AssistantDictationPanel: View {
             .padding(14)
             .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20))
             .padding(.horizontal, 18)
+        }
+    }
+}
+
+/// Observes the draft separately from the coordinator so a keystroke
+/// re-renders this row alone. The Markdown transcript above and the app shell
+/// behind the sheet stay untouched while the user types.
+private struct AssistantComposerBar: View {
+    @ObservedObject var assistant: AssistantCoordinator
+    @ObservedObject var draft: AssistantComposerDraft
+    var typing: FocusState<Bool>.Binding
+    @Binding var detent: PresentationDetent
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(spacing: 4) {
+                    input.padding(.horizontal, 12)
+                    HStack(spacing: 4) { attachmentButton; Spacer(); dictationButton; submitButton }
+                }
+            } else {
+                HStack(alignment: .bottom, spacing: 2) {
+                    attachmentButton
+                    input
+                    dictationButton
+                    submitButton
+                }
+            }
+        }
+        .padding(6)
+        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .buttonStyle(.plain)
+    }
+    private var input: some View {
+        TextField(assistant.isRunning || assistant.conversation.canResume ? "Add a follow-up…" : "Ask about your finances…", text: $draft.text, axis: .vertical)
+            .font(.body)
+            .lineLimit(1...5)
+            .focused(typing)
+            .padding(.vertical, 11)
+            .accessibilityIdentifier("assistant.composer")
+    }
+    private var attachmentButton: some View {
+        AssistantAttachmentMenu(assistant: assistant)
+    }
+    private var dictationButton: some View {
+        Button {
+            typing.wrappedValue = false; detent = .large
+            if assistant.dictation.state == .recording { assistant.dictation.finish() }
+            else { assistant.startDictation() }
+        } label: {
+            Image(systemName: assistant.dictation.state == .recording ? "stop.circle.fill" : "mic")
+                .font(.system(size: 20)).frame(width: 44, height: 44).contentShape(Circle())
+        }
+        .foregroundStyle(assistant.dictation.state == .recording ? Color.red : Color(uiColor: .secondaryLabel))
+        .accessibilityLabel(assistant.dictation.state == .recording ? "Finish Dictation" : "Dictate Message")
+        .accessibilityIdentifier("assistant.dictate")
+        .disabled(!assistant.canAcceptMessage || assistant.isRunning || assistant.dictation.state == .preparing || assistant.dictation.state == .transcribing)
+    }
+    private var canSend: Bool {
+        (!draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !assistant.uploadedFiles.isEmpty) && assistant.canAcceptMessage && !assistant.dictation.isBusy
+    }
+    @ViewBuilder private var submitButton: some View {
+        if assistant.isRunning && draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            Button { assistant.pause() } label: {
+                Image(systemName: "stop.fill").font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 44, height: 44)
+                    .background(Color.accentColor.opacity(0.12), in: Circle())
+            }
+            .accessibilityLabel("Stop")
+            .accessibilityIdentifier("assistant.stop")
+        } else {
+            Button { if assistant.send(draft.text) { draft.text = "" } } label: {
+                Image(systemName: "arrow.up").font(.system(size: 19, weight: .semibold))
+                    .foregroundStyle(canSend ? Color.white : Color.secondary)
+                    .frame(width: 44, height: 44)
+                    .background(canSend ? Color.accentColor : Color(uiColor: .quaternarySystemFill), in: Circle())
+            }
+            .accessibilityLabel(assistant.isRunning || assistant.conversation.canResume ? "Send Follow-up" : "Send Message")
+            .accessibilityIdentifier("assistant.send")
+            .disabled(!canSend)
         }
     }
 }

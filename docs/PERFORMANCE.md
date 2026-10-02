@@ -38,3 +38,15 @@ Changes:
 - The candidate guard encodes only the records with outstanding local edits.
 
 Verification: `SQLiteCloudKitSyncTests` compares the batched classifier against the individual queries it replaced and checks that an idle token bind leaves the journal, outbox, and mirror untouched. `CloudKitJournalSyncTests` confirms that an empty page advances the checkpoint without reaching the host commit while echo pages still do. Device profiling of frame pacing during a pass was not part of this change.
+
+## Ask AI composer typing (October 2, 2026)
+
+Typing in the chat lagged by whole words. The draft text was a published property of `AssistantCoordinator`, so every keystroke republished the coordinator to every observer: the chat transcript (Markdown bubbles), the attachment menu, `AppShellView`, and the root content view that owned the coordinator through `@StateObject`. The shell re-render reached the pushed register and journal screens behind the sheet. Streamed reply tokens took the same path.
+
+Changes:
+
+- The draft lives in `AssistantComposerDraft`, a separate observable object. Only `AssistantComposerBar` (input, dictation, attach, send) observes it, so a keystroke re-renders that row alone. `AssistantCoordinator.draftText` remains as a pass-through accessor.
+- `AppShellView` holds the coordinator as a plain reference and receives navigation requests through the request publisher instead of observing the whole object.
+- The root content view owns the coordinator through a non-publishing holder object, so streamed tokens and status changes no longer re-render the navigation shell.
+
+Verification: `AssistantTests` asserts that appending to the draft publishes the draft object only, never the coordinator. Device frame pacing while typing and streaming was not measured as part of this change.
