@@ -23,3 +23,8 @@
 - Keep the `FinancesiOS` release scheme limited to its small smoke-test selection. Do not add UI audits, performance sweeps, or large-file stress tests to routine TestFlight builds without Gan's request.
 - Preserve the complete suite in `FinancesiOSFullTests`. Use `scripts/test.sh` for full or targeted local regression checks and `scripts/test.sh --smoke` for the exact cloud selection.
 - Reducing cloud coverage is an intentional cost limit, not permission to ignore a failure. Run the smoke suite and the relevant local regressions before pushing, and fix failures first.
+
+## Agent Skills
+
+- Tool-agnostic skills live in `.agents/skills/<name>/SKILL.md` (the open Agent Skills format read by Codex, Claude Code, and other agents). `.claude/skills` links to the same directories; edit the `.agents` copy only.
+- Read `.agents/skills/ios-performance/SKILL.md` before investigating freezes, slow lists, or sync hitches, and before changing `MobileLedgerStore`, `SQLiteJournalStore`, `CloudKitJournalSyncCoordinator`, or register views. Update it together with `docs/PERFORMANCE.md` when a measurement changes a rule.
