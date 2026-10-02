@@ -355,6 +355,7 @@ final class MobileLedgerStore: ObservableObject {
 
     @Published private(set) var data: JournalData {
         didSet {
+            lastValidatedJournal = nil
             guard !assistantMutationInProgress else { return }
             appIconBadge?.update(data)
             if systemIntegrationsEnabled { refreshSystemIntegrations() }
@@ -386,6 +387,10 @@ final class MobileLedgerStore: ObservableObject {
     private let sqliteStore: SQLiteJournalStore
     private let persistenceBaseline = MobilePersistenceBaseline()
     private var pendingDeferredWrite: MobileDeferredPersistenceBatch?
+    /// The live journal value that last passed full validation. It shares
+    /// storage with `data` until the next assignment clears it, so repeated
+    /// sync flushes of an unchanged journal skip the whole-journal scan.
+    private var lastValidatedJournal: JournalData?
     private var persistenceSequence: UInt64 = 0
     private var persistenceOutcomes = MobilePersistenceOutcomeState()
     @Published private(set) var localPersistenceError: ValidationError?
@@ -3384,8 +3389,16 @@ final class MobileLedgerStore: ObservableObject {
     func flushLocalChanges() throws {
         if assistantMutationInProgress { return }
         try requireWritableJournal()
-        try Self.validateCandidateData(data, operation: "Journal")
+        try validateLiveJournalIfChanged()
         try persistSnapshot(data, trackSyncChanges: true)
+    }
+
+    /// Full validation once per journal value. Sync passes flush several
+    /// times while nothing changed; those calls return immediately.
+    private func validateLiveJournalIfChanged() throws {
+        if let validated = lastValidatedJournal, validated.hasIdenticalContent(to: data) { return }
+        try Self.validateCandidateData(data, operation: "Journal")
+        lastValidatedJournal = data
     }
 
     /// Enqueue before suspension. A following edit gets its own batch behind
@@ -3930,6 +3943,9 @@ final class MobileLedgerStore: ObservableObject {
     }
 
     private nonisolated static func removeObsoleteAttachmentFiles(supportDirectory: URL, previous: JournalData?, data: JournalData, collectCompletedClaims: Bool = false) {
+        // Identical transaction storage has no removed asset to clean up, so
+        // skip collecting every stored path twice for a metadata-only write.
+        if !collectCompletedClaims, let previous, previous.transactions == data.transactions { return }
         func storedPaths(in snapshot: JournalData?) -> Set<String> {
             Set(snapshot?.transactions.flatMap { $0.attachment?.assets.map { normalizedAttachmentStoredPathValue($0.storedPath) } ?? [] } ?? [])
         }
@@ -4027,9 +4043,44 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
 
     func cloudKitFlushLocalChanges() throws {
         try requireWritableJournal()
+        try validateLiveJournalIfChanged()
+        try persistSnapshot(data, trackSyncChanges: true)
+    }
+
+    /// The sync pass awaits the serial writer instead of blocking the UI actor
+    /// on it. Unlike the editor's flush, this never schedules another cloud
+    /// pass, so a running pass cannot queue its own follow-up forever.
+    func cloudKitFlushLocalChangesAsync() async throws {
+        try requireWritableJournal()
+        try validateLiveJournalIfChanged()
         let snapshot = data
-        try Self.validateCandidateData(snapshot, operation: "Journal")
-        try persistSnapshot(snapshot, trackSyncChanges: true)
+        let databaseURL = sqliteStore.databaseURL
+        let baseline = persistenceBaseline
+        let directory = supportDirectory
+        let sequence = nextPersistenceSequence()
+        sealPendingDeferredWrite()
+        let lease = MobilePersistenceBackgroundLease()
+        defer { lease.end() }
+        do {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                Self.deferredPersistenceQueue.async {
+                    do {
+                        let previous = baseline.snapshot
+                        try SQLiteJournalStore(databaseURL: databaseURL).persist(snapshot, previous: previous, trackSyncChanges: true)
+                        baseline.snapshot = snapshot
+                        Self.removeObsoleteAttachmentFiles(supportDirectory: directory, previous: previous, data: snapshot)
+                        continuation.resume()
+                    } catch {
+                        baseline.snapshot = nil
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+            finishPersistence(sequence: sequence, error: nil)
+        } catch {
+            finishPersistence(sequence: sequence, error: error)
+            throw error
+        }
     }
 
     func cloudKitValidate(_ candidate: JournalData) throws {
@@ -4068,14 +4119,21 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
             }
         }
         let previousSecurity = data.security
-        let suggestionJournals = changedSuggestionJournals(in: candidate.transactions)
-        data = candidate
-        refreshDerivedCache()
-        refreshHistoricalTextSuggestions(in: suggestionJournals)
-        receiptContentRevisions.didReplaceContents(of: Set(records.filter { $0.recordType == "attachment_asset" }.compactMap { UUID(uuidString: $0.recordID) }))
+        let contentChanged = !data.hasIdenticalContent(to: candidate)
+        if contentChanged {
+            let suggestionJournals = changedSuggestionJournals(in: candidate.transactions)
+            data = candidate
+            refreshDerivedCache()
+            refreshHistoricalTextSuggestions(in: suggestionJournals)
+        }
+        // An echo-only page (this device's own uploads coming back) updates
+        // sync bookkeeping only. Every derived index, cached register, and
+        // suggestion index stays warm, and no view is asked to re-render.
+        let replacedReceiptIDs = Set(records.filter { $0.recordType == "attachment_asset" }.compactMap { UUID(uuidString: $0.recordID) })
+        if !replacedReceiptIDs.isEmpty { receiptContentRevisions.didReplaceContents(of: replacedReceiptIDs) }
         refreshUnlockStateForLoadedData(previousSecurity: previousSecurity)
-        reloadDeletedTransactionTombstones()
-        cloudSyncDataAvailable = true
+        if contentChanged || records.contains(where: { $0.operation == "delete" }) { reloadDeletedTransactionTombstones() }
+        if !cloudSyncDataAvailable { cloudSyncDataAvailable = true }
     }
 
 
@@ -4157,7 +4215,7 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
         // any edit made during network awaits have reached the same save queue.
         try persistSnapshot(snapshot, trackSyncChanges: true, collectCompletedReceipts: true)
         data = snapshot
-        validationError = nil
+        if validationError != nil { validationError = nil }
         refreshCloudSyncDataAvailability()
     }
 }

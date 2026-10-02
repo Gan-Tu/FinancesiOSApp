@@ -473,6 +473,24 @@ final class CloudKitJournalSyncTests: XCTestCase {
         XCTAssertEqual(fixture.host.progress.state, .succeeded)
     }
 
+    func testIdlePullAdvancesCheckpointWithoutCommittingOrRepublishingTheJournal() async throws {
+        let fixture = try fixture()
+        fixture.enable(); try await settled(fixture)
+        XCTAssertEqual(fixture.host.remoteCommitCount, 0, "The first pull of an empty zone has nothing to merge")
+        XCTAssertNotNil(try fixture.host.sqlite.cloudKitChangeToken(contextKey: context), "An idle page still records its checkpoint")
+        XCTAssertNotNil(fixture.host.data.lastSyncedAt)
+        let uploaded = fixture.host.data.transactions
+        fixture.coordinator.synchronize(); try await settled(fixture)
+        XCTAssertEqual(fixture.host.remoteCommitCount, 1, "Echoes of this device's upload still update sync bookkeeping")
+        XCTAssertEqual(fixture.host.data.transactions, uploaded)
+        XCTAssertEqual(try fixture.host.sqlite.cloudKitChangeToken(contextKey: context), fixture.server.token)
+        fixture.coordinator.synchronize(); try await settled(fixture)
+        XCTAssertEqual(fixture.host.remoteCommitCount, 1, "A page without records never reaches the host commit")
+        XCTAssertEqual(try fixture.host.sqlite.cloudKitChangeToken(contextKey: context), fixture.server.token)
+        XCTAssertNil(fixture.host.failure)
+        XCTAssertEqual(fixture.host.progress.state, .succeeded)
+    }
+
     func testNonAdvancingPageLeavesJournalAndCheckpointUntouched() async throws {
         let fixture = try fixture()
         fixture.enable(); try await settled(fixture)
@@ -1057,6 +1075,7 @@ private final class CKJournalHost: CloudKitJournalSyncHost {
     var failure: String?
     var modalFailureCount = 0
     var failNextRemoteCommit = false
+    var remoteCommitCount = 0
     var cloudKitJournalData: JournalData { data }
     var cloudKitSQLiteStore: SQLiteJournalStore { sqlite }
     init(data: JournalData, directory: URL, legacyAccepted: Bool) throws {
@@ -1087,6 +1106,7 @@ private final class CKJournalHost: CloudKitJournalSyncHost {
         if failNextRemoteCommit { failNextRemoteCommit = false; throw CloudKitSyncError.service("Injected SQLite commit failure") }
         try sqlite.persistCloudKitPull(records, data: candidate, previous: baseline, contextKey: contextKey, changeToken: changeToken, receiptInstallationID: receiptInstallationID)
         data = candidate; baseline = candidate
+        remoteCommitCount += 1
     }
     func cloudKitCommitConflictResolution(id: String, keepLocal: Bool, data: JournalData, contextKey: String, receiptInstallationID: UUID?) throws {
         throw CloudKitSyncError.service("Conflict choice is outside this host fixture's scope")

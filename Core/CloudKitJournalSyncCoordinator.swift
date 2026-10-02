@@ -112,6 +112,9 @@ protocol CloudKitJournalSyncHost: AnyObject {
     var cloudKitJournalData: JournalData { get }
     var cloudKitSQLiteStore: SQLiteJournalStore { get }
     func cloudKitFlushLocalChanges() throws
+    /// Same durability as `cloudKitFlushLocalChanges`, but the pass may suspend
+    /// while the host's serial writer works instead of blocking the UI actor.
+    func cloudKitFlushLocalChangesAsync() async throws
     func cloudKitValidate(_ candidate: JournalData) throws
     func cloudKitCommitRemote(_ records: [CloudKitSyncRecord], data: JournalData, contextKey: String, changeToken: Data?, receiptInstallationID: UUID?) throws
     func cloudKitCommitConflictResolution(id: String, keepLocal: Bool, data: JournalData, contextKey: String, receiptInstallationID: UUID?) throws
@@ -119,6 +122,10 @@ protocol CloudKitJournalSyncHost: AnyObject {
     func cloudKitSyncDidUpdate(_ progress: CloudSyncProgress)
     func cloudKitSyncDidFail(_ message: String)
     func cloudKitSyncDidFinish(at date: Date) throws
+}
+
+extension CloudKitJournalSyncHost {
+    func cloudKitFlushLocalChangesAsync() async throws { try cloudKitFlushLocalChanges() }
 }
 
 /// Value-only journal snapshots cross the database queue without sharing mutable
@@ -574,7 +581,8 @@ final class CloudKitJournalSyncCoordinator {
         do {
             try check(id, gate: gate)
             guard let host else { throw CancellationError() }
-            try host.cloudKitFlushLocalChanges()
+            try await host.cloudKitFlushLocalChangesAsync()
+            try check(id, gate: gate)
             let client = try dependencies.makeClient(configuration)
             self.client = client
             passClient = client
@@ -627,7 +635,7 @@ final class CloudKitJournalSyncCoordinator {
                 if !page.moreComing { break }
             }
             try check(id, gate: gate)
-            try commitFetched(Array(fetched.values), token: token, context: context, id: id, gate: gate)
+            try await commitFetched(Array(fetched.values), token: token, startingToken: startingToken, context: context, id: id, gate: gate)
             let snapshot = CloudKitJournalSnapshot(data: host.cloudKitJournalData)
             _ = try await database(gate: gate) { try $0.prepareInitialCloudKitSnapshot(snapshot.data, contextKey: context) }
             try check(id, gate: gate)
@@ -635,7 +643,8 @@ final class CloudKitJournalSyncCoordinator {
             var uploaded = 0
             while true {
                 try check(id, gate: gate)
-                try host.cloudKitFlushLocalChanges()
+                try await host.cloudKitFlushLocalChangesAsync()
+                try check(id, gate: gate)
                 let (batch, remaining) = try await database(gate: gate) { store in
                     let batch = try store.claimCloudKitChanges(contextKey: context, limit: 50)
                     return (batch, try store.remainingCloudKitChangeCount(contextKey: context))
@@ -727,14 +736,47 @@ final class CloudKitJournalSyncCoordinator {
         }
     }
 
-    private func commitFetched(_ records: [CloudKitSyncRecord], token: Data?, context: String, id: UUID, gate: CloudKitPersistenceGate) throws {
+    /// Classification reads run on the database queue; only the final merge,
+    /// validation, and commit stay on the UI actor. A journal edit that lands
+    /// while the reads are suspended restarts them against the new outbox.
+    private func commitFetched(_ records: [CloudKitSyncRecord], token: Data?, startingToken: Data?, context: String, id: UUID, gate: CloudKitPersistenceGate) async throws {
+        try check(id, gate: gate)
+        guard host != nil else { throw CancellationError() }
+        if records.isEmpty {
+            // An idle pull has nothing to merge: no outbox read, no mirror scan,
+            // no graph republish. Only the checkpoint moves, and it moves on the
+            // database queue so the UI actor never waits on SQLite for it.
+            if token != startingToken {
+                try await database(gate: gate) { try $0.bindCloudKitChangeToken(token, contextKey: context) }
+            }
+            return
+        }
+        var attempt = 0
+        while true {
+            attempt += 1
+            guard let host else { throw CancellationError() }
+            try await host.cloudKitFlushLocalChangesAsync()
+            try check(id, gate: gate)
+            let flushed = CloudKitJournalSnapshot(data: host.cloudKitJournalData)
+            let fetched = records
+            let classification = try await database(gate: gate) { try $0.classifyCloudKitPull(fetched, contextKey: context) }
+            guard let current = self.host else { throw CancellationError() }
+            // The outbox read above must describe the journal that is about to
+            // be merged. A bounded retry keeps a busy editor from starving the
+            // pass; the SQLite candidate guard still rejects a stale merge.
+            if attempt < 3, !flushed.data.hasIdenticalContent(to: current.cloudKitJournalData) { continue }
+            try commitClassified(records, classification: classification, token: token, context: context, id: id, gate: gate)
+            return
+        }
+    }
+
+    private func commitClassified(_ records: [CloudKitSyncRecord], classification: CloudKitPullClassification, token: Data?, context: String, id: UUID, gate: CloudKitPersistenceGate) throws {
         try check(id, gate: gate)
         guard let host else { throw CancellationError() }
-        try host.cloudKitFlushLocalChanges()
         let store = host.cloudKitSQLiteStore
-        let pending = try store.pendingCloudKitRecords(contextKey: context)
-        let known = try store.knownCloudKitRecords(contextKey: context)
-        let versions = try store.pendingSyncRecordsByKey()
+        let pending = classification.pendingRecords
+        let known = classification.knownRecords
+        let versions = classification.pendingVersions
         var applicable: [CloudKitSyncRecord] = []
         var containsNewContent = false
         var changedReceiptIDs: Set<UUID> = []
@@ -743,7 +785,7 @@ final class CloudKitJournalSyncCoordinator {
             // They must not replace a newer accepted value, even when no local
             // edit is pending. A reset can rebuild absent CAS metadata safely.
             let hasKnownOrPending = known[remote.key] != nil || pending[remote.key] != nil
-            let acknowledgedEcho = try hasKnownOrPending && store.hasAcknowledgedCloudKitMutation(remote, contextKey: context)
+            let acknowledgedEcho = hasKnownOrPending && classification.acknowledgedKeys.contains(remote.key)
             if let current = known[remote.key], acknowledgedEcho,
                !CloudKitJournalMerger.sameValue(current, remote) { continue }
             if let local = pending[remote.key], !CloudKitJournalMerger.sameValue(local, remote) {
@@ -751,8 +793,7 @@ final class CloudKitJournalSyncCoordinator {
                 let isEarlierEcho = remote.recordType != "attachment_asset" && (versions[remote.key]?.inFlightVersions.contains {
                     $0.operation == remote.operation && ($0.operation == "delete" || $0.contentHash == remote.contentHash)
                 } ?? false)
-                let receiptEcho = try remote.recordType == "attachment_asset"
-                    && store.isCloudKitReceiptUploadEcho(remote, contextKey: context)
+                let receiptEcho = remote.recordType == "attachment_asset" && classification.receiptEchoKeys.contains(remote.key)
                 if isBaseReplay || isEarlierEcho || receiptEcho || acknowledgedEcho { continue }
                 if try Self.persistConflict(local: local, remote: remote, context: context, store: store, trackChange: !backgroundRequests.isEmpty) {
                     remoteChangeGeneration &+= 1
@@ -760,7 +801,7 @@ final class CloudKitJournalSyncCoordinator {
                 throw CloudKitSyncError.service("Both this device and iCloud changed the same item. Review sync conflicts to choose which version to keep.")
             }
             if remote.recordType == "ledger", remote.operation == "delete",
-               try store.hasPendingDescendantChanges(of: remote.recordID) {
+               classification.ledgerDeletionsWithPendingDescendants.contains(remote.recordID) {
                 throw CloudKitSyncError.service("iCloud deleted a journal that still contains unsynced local edits. Your local journal has been preserved.")
             }
             let equivalentLocal = pending[remote.key].map { CloudKitJournalMerger.sameValue($0, remote) } ?? false

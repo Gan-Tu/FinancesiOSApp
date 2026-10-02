@@ -497,6 +497,19 @@ struct JournalData: Codable {
             ?? preservesImportedRecurringMaterializations
     }
 
+    /// Whole-journal value equality. Array equality returns immediately for
+    /// shared copy-on-write storage, so comparing an unchanged snapshot against
+    /// the live journal costs a handful of pointer checks instead of a scan.
+    func hasIdenticalContent(to other: JournalData) -> Bool {
+        ledgers == other.ledgers && commodities == other.commodities && accounts == other.accounts
+            && transactions == other.transactions && sources == other.sources
+            && transactionTemplates == other.transactionTemplates
+            && selectedLedgerID == other.selectedLedgerID && lastSyncedAt == other.lastSyncedAt
+            && syncEnabled == other.syncEnabled && dateFormat == other.dateFormat
+            && appearance == other.appearance && security == other.security
+            && preservesImportedRecurringMaterializations == other.preservesImportedRecurringMaterializations
+    }
+
     private enum CodingKeys: String, CodingKey {
         case ledgers
         case commodities

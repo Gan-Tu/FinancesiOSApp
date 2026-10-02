@@ -382,6 +382,56 @@ final class SQLiteCloudKitSyncTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), newerBytes)
     }
 
+    func testPullClassificationMatchesIndividualQueriesAndIdleTokenBindLeavesJournalUntouched() throws {
+        let f = try fixture(receipt: true)
+        try f.store.prepareInitialCloudKitSnapshot(f.data, contextKey: context)
+        let claimed = try f.store.claimCloudKitChanges(contextKey: context, limit: 1_000)
+        let saved = claimed.map { value -> CloudKitSyncRecord in var copy = value; copy.systemFields = Data([1]); copy.assetFileURL = nil; return copy }
+        try f.store.acknowledgeCloudKitRecords(saved, submitted: claimed, contextKey: context)
+        var edited = f.data
+        edited.transactions[0].note = "Edited after the upload was acknowledged"
+        try f.store.persist(edited, previous: f.data)
+        var remoteRow = edited.transactions[0]
+        remoteRow.id = UUID(); remoteRow.note = "New on another device"
+        for index in remoteRow.postings.indices { remoteRow.postings[index].id = UUID() }
+        let ledgerID = f.data.ledgers[0].id
+        let fetched = try saved.filter { $0.recordType != "ledger" } + [
+            record("transaction", id: remoteRow.id, payload: remoteRow, tag: 2),
+            CloudKitSyncRecord(recordType: "ledger", recordID: ledgerID.uuidString, operation: "delete")
+        ]
+
+        // The single-transaction classifier must agree with the separate
+        // queries the coordinator used to run one by one on the UI actor.
+        let classification = try f.store.classifyCloudKitPull(fetched, contextKey: context)
+        let pending = try f.store.pendingCloudKitRecords(contextKey: context)
+        let known = try f.store.knownCloudKitRecords(contextKey: context)
+        XCTAssertFalse(pending.isEmpty); XCTAssertFalse(known.isEmpty)
+        XCTAssertEqual(classification.pendingRecords, pending)
+        XCTAssertEqual(classification.knownRecords, known.filter { entry in fetched.contains { $0.key == entry.key } })
+        XCTAssertEqual(classification.pendingVersions, try f.store.pendingSyncRecordsByKey())
+        var acknowledged = Set<String>(), receiptEchoes = Set<String>(), blockedDeletions = Set<String>()
+        for remote in fetched {
+            if known[remote.key] != nil || pending[remote.key] != nil,
+               try f.store.hasAcknowledgedCloudKitMutation(remote, contextKey: context) { acknowledged.insert(remote.key) }
+            if remote.recordType == "attachment_asset", let local = pending[remote.key], !CloudKitJournalMerger.sameValue(local, remote),
+               try f.store.isCloudKitReceiptUploadEcho(remote, contextKey: context) { receiptEchoes.insert(remote.key) }
+            if remote.recordType == "ledger", remote.operation == "delete",
+               try f.store.hasPendingDescendantChanges(of: remote.recordID) { blockedDeletions.insert(remote.recordID) }
+        }
+        XCTAssertFalse(acknowledged.isEmpty, "Acknowledged uploads echo back as known mutations")
+        XCTAssertEqual(classification.acknowledgedKeys, acknowledged)
+        XCTAssertEqual(classification.receiptEchoKeys, receiptEchoes)
+        XCTAssertEqual(classification.ledgerDeletionsWithPendingDescendants, blockedDeletions)
+        XCTAssertEqual(blockedDeletions, [ledgerID.uuidString], "The unsynced edit is a descendant of the deleted journal")
+
+        // An idle page moves only the checkpoint.
+        try f.store.bindCloudKitChangeToken(Data([9]), contextKey: context)
+        XCTAssertEqual(try f.store.cloudKitChangeToken(contextKey: context), Data([9]))
+        XCTAssertEqual(try f.store.loadData()?.transactions, edited.transactions)
+        XCTAssertEqual(try f.store.pendingCloudKitRecords(contextKey: context), pending)
+        XCTAssertEqual(try f.store.knownCloudKitRecords(contextKey: context), known)
+    }
+
     private struct Fixture {
         var store: SQLiteJournalStore
         var data: JournalData

@@ -70,12 +70,12 @@ struct SQLiteAcceptedSyncChange: Equatable {
     var serverRevision: Int64
 }
 
-struct SQLitePendingSyncRecordVersion: Equatable {
+struct SQLitePendingSyncRecordVersion: Equatable, Sendable {
     var operation: String
     var contentHash: String?
 }
 
-struct SQLitePendingSyncRecord: Equatable {
+struct SQLitePendingSyncRecord: Equatable, Sendable {
     var operation: String
     var contentHash: String?
     var baseRevision: Int64 = 0
@@ -89,6 +89,21 @@ struct SQLitePendingSyncRecord: Equatable {
             $0.operation == change.operation && $0.contentHash == change.contentHash
         }
     }
+}
+
+/// Everything the sync coordinator reads before merging one fetched page.
+/// Built in a single transaction off the UI actor; known records are limited
+/// to the fetched keys so a page never decodes the whole local mirror.
+struct CloudKitPullClassification: Sendable {
+    var pendingRecords: [String: CloudKitSyncRecord] = [:]
+    var knownRecords: [String: CloudKitSyncRecord] = [:]
+    var pendingVersions: [String: SQLitePendingSyncRecord] = [:]
+    /// Fetched keys whose mutation this device already saw acknowledged.
+    var acknowledgedKeys: Set<String> = []
+    /// Fetched receipt keys that echo a frozen local upload claim.
+    var receiptEchoKeys: Set<String> = []
+    /// Remote journal deletions that still have unsynced local descendants.
+    var ledgerDeletionsWithPendingDescendants: Set<String> = []
 }
 
 struct SQLiteRemoteSyncChange: Equatable, Decodable {
@@ -1259,6 +1274,14 @@ final class SQLiteJournalStore: @unchecked Sendable {
         }
     }
 
+    /// Advances the fetch checkpoint for a page that carried no records. The
+    /// journal, outbox, and known mirror are untouched.
+    func bindCloudKitChangeToken(_ token: Data?, contextKey: String) throws {
+        try withCloudKitDatabase(contextKey: contextKey) { database in
+            try bindCloudKitToken(token, contextKey: contextKey, database: database)
+        }
+    }
+
     func knownCloudKitRecords(contextKey: String) throws -> [String: CloudKitSyncRecord] {
         try withCloudKitDatabase(contextKey: contextKey) { try readKnownCloudKitRecords(contextKey: contextKey, database: $0) }
     }
@@ -1275,10 +1298,48 @@ final class SQLiteJournalStore: @unchecked Sendable {
 
     func pendingCloudKitRecords(contextKey: String) throws -> [String: CloudKitSyncRecord] {
         try withCloudKitDatabase(contextKey: contextKey) { database in
-            var result: [String: CloudKitSyncRecord] = [:]
-            let placeholders = try initialDefaultCloudKitMetadataIDs(contextKey: contextKey, database: database)
-            for record in try readCloudKitOutbox(database: database).reversed() where result[record.key] == nil && !placeholders.contains(record.clientChangeID ?? "") {
-                result[record.key] = try decorateCloudKitRecord(record, contextKey: contextKey, database: database)
+            try readPendingCloudKitRecords(contextKey: contextKey, database: database)
+        }
+    }
+
+    private func readPendingCloudKitRecords(contextKey: String, database: OpaquePointer) throws -> [String: CloudKitSyncRecord] {
+        var result: [String: CloudKitSyncRecord] = [:]
+        let placeholders = try initialDefaultCloudKitMetadataIDs(contextKey: contextKey, database: database)
+        for record in try readCloudKitOutbox(database: database).reversed() where result[record.key] == nil && !placeholders.contains(record.clientChangeID ?? "") {
+            result[record.key] = try decorateCloudKitRecord(record, contextKey: contextKey, database: database)
+        }
+        return result
+    }
+
+    /// Reads the pending outbox, the known mirror entries for the fetched keys,
+    /// in-flight versions, acknowledged-mutation receipts, receipt upload claims,
+    /// and pending-descendant state in one transaction. The coordinator used to
+    /// issue these as separate connections per record on the UI actor; the
+    /// per-record checks keep the same evaluation conditions as before.
+    func classifyCloudKitPull(_ records: [CloudKitSyncRecord], contextKey: String) throws -> CloudKitPullClassification {
+        try withCloudKitDatabase(contextKey: contextKey) { database in
+            var result = CloudKitPullClassification()
+            result.pendingRecords = try readPendingCloudKitRecords(contextKey: contextKey, database: database)
+            for record in records {
+                if let known = try readKnownCloudKitRecord(forKey: record.key, contextKey: contextKey, database: database) {
+                    result.knownRecords[record.key] = known
+                }
+            }
+            result.pendingVersions = try readPendingSyncRecordsByKey(database: database)
+            for record in records {
+                let hasKnownOrPending = result.knownRecords[record.key] != nil || result.pendingRecords[record.key] != nil
+                if hasKnownOrPending, try isKnownCloudKitMutation(record, contextKey: contextKey, database: database) {
+                    result.acknowledgedKeys.insert(record.key)
+                }
+                if record.recordType == "attachment_asset", let local = result.pendingRecords[record.key],
+                   !CloudKitJournalMerger.sameValue(local, record),
+                   try readIsCloudKitReceiptUploadEcho(record, contextKey: contextKey, database: database) {
+                    result.receiptEchoKeys.insert(record.key)
+                }
+                if record.recordType == "ledger", record.operation == "delete",
+                   try readHasPendingDescendantChanges(of: record.recordID, database: database) {
+                    result.ledgerDeletionsWithPendingDescendants.insert(record.recordID)
+                }
             }
             return result
         }
@@ -1623,13 +1684,18 @@ final class SQLiteJournalStore: @unchecked Sendable {
     private static let cloudKitDomainTypes: Set<String> = ["journal_metadata", "ledger", "commodity", "account", "source", "transaction", "transaction_template", "attachment_asset"]
 
     func isCloudKitReceiptUploadEcho(_ record: CloudKitSyncRecord, contextKey: String) throws -> Bool {
-        guard record.recordType == "attachment_asset", record.operation == "upsert", let id = record.clientChangeID else { return false }
+        guard record.recordType == "attachment_asset", record.operation == "upsert", record.clientChangeID != nil else { return false }
         return try withCloudKitDatabase(contextKey: contextKey) { database in
-            guard let json = try rows("SELECT record_json FROM cloudkit_receipt_claims WHERE context_key = ? AND client_change_id = ?", database: database, bindValues: {
-                try bind(contextKey, to: $0, at: 1, database); try bind(id, to: $0, at: 2, database)
-            }, map: { columnText($0, 0) }).first ?? nil else { return false }
-            return cloudKitExactMutationValueMatch(try decodeCloudKitRecord(json), record)
+            try readIsCloudKitReceiptUploadEcho(record, contextKey: contextKey, database: database)
         }
+    }
+
+    private func readIsCloudKitReceiptUploadEcho(_ record: CloudKitSyncRecord, contextKey: String, database: OpaquePointer) throws -> Bool {
+        guard record.recordType == "attachment_asset", record.operation == "upsert", let id = record.clientChangeID else { return false }
+        guard let json = try rows("SELECT record_json FROM cloudkit_receipt_claims WHERE context_key = ? AND client_change_id = ?", database: database, bindValues: {
+            try bind(contextKey, to: $0, at: 1, database); try bind(id, to: $0, at: 2, database)
+        }, map: { columnText($0, 0) }).first ?? nil else { return false }
+        return cloudKitExactMutationValueMatch(try decodeCloudKitRecord(json), record)
     }
 
     func hasAcknowledgedCloudKitMutation(_ record: CloudKitSyncRecord, contextKey: String) throws -> Bool {
@@ -1821,7 +1887,9 @@ final class SQLiteJournalStore: @unchecked Sendable {
     private func guardCloudKitCandidate(_ data: JournalData, contextKey: String, ignoringClientIDs: Set<String>, database: OpaquePointer) throws {
         let outstanding = try readCloudKitOutbox(database: database).filter { !ignoringClientIDs.contains($0.clientChangeID ?? "") }
         guard !outstanding.isEmpty else { return }
-        let envelopes = try syncEnvelopes(for: data)
+        // Only the outstanding keys are compared, so a handful of unsynced
+        // edits no longer re-encodes and hashes every record in the journal.
+        let envelopes = try syncEnvelopes(for: data, limitedTo: Set(outstanding.map(\.key)))
         let candidate = Dictionary(uniqueKeysWithValues: envelopes.map { (syncKey(type: $0.type, id: $0.id), $0.hash) })
         var checked = Set<String>()
         for pending in outstanding.reversed() where !checked.contains(pending.key) {
@@ -2117,6 +2185,10 @@ final class SQLiteJournalStore: @unchecked Sendable {
         let database = try open()
         defer { sqlite3_close(database) }
         try ensureSchema(in: database)
+        return try readPendingSyncRecordsByKey(database: database)
+    }
+
+    private func readPendingSyncRecordsByKey(database: OpaquePointer) throws -> [String: SQLitePendingSyncRecord] {
         let entries: [(String, SQLitePendingSyncRecord, Bool)] = try rows(
             """
             SELECT record_type, record_id, operation, content_hash, base_revision, state
@@ -2158,7 +2230,11 @@ final class SQLiteJournalStore: @unchecked Sendable {
         let database = try open()
         defer { sqlite3_close(database) }
         try ensureSchema(in: database)
-        return try rows(
+        return try readHasPendingDescendantChanges(of: recordID, database: database)
+    }
+
+    private func readHasPendingDescendantChanges(of recordID: String, database: OpaquePointer) throws -> Bool {
+        try rows(
             """
             WITH RECURSIVE descendants(record_type, record_id) AS (
                 SELECT record_type, record_id FROM sync_records WHERE parent_record_id = ?
@@ -3068,6 +3144,47 @@ final class SQLiteJournalStore: @unchecked Sendable {
             }
         }
         for template in data.transactionTemplates {
+            try envelopes.append(envelope("transaction_template", id: template.id, parentID: template.ledgerID, payload: template))
+        }
+        var seen: Set<String> = []
+        return envelopes.filter { envelope in
+            seen.insert(syncKey(type: envelope.type, id: envelope.id)).inserted
+        }
+    }
+
+    /// The subset of `syncEnvelopes(for:)` whose keys appear in `keys`, in the
+    /// same order and with the same first-wins duplicate handling.
+    private func syncEnvelopes(for data: JournalData, limitedTo keys: Set<String>) throws -> [SyncEnvelope] {
+        guard !keys.isEmpty else { return [] }
+        var envelopes: [SyncEnvelope] = []
+        func wanted(_ type: String, _ id: UUID) -> Bool { keys.contains(syncKey(type: type, id: id)) }
+        if wanted("journal_metadata", SQLiteSyncedJournalMetadata.recordID) {
+            try envelopes.append(envelope("journal_metadata", id: SQLiteSyncedJournalMetadata.recordID, parentID: nil,
+                                          payload: SQLiteSyncedJournalMetadata(data: data)))
+        }
+        for ledger in data.ledgers where wanted("ledger", ledger.id) {
+            try envelopes.append(envelope("ledger", id: ledger.id, parentID: nil, payload: ledger))
+        }
+        for commodity in data.commodities where wanted("commodity", commodity.id) {
+            try envelopes.append(envelope("commodity", id: commodity.id, parentID: commodity.ledgerID, payload: commodity))
+        }
+        for account in data.accounts where wanted("account", account.id) {
+            try envelopes.append(envelope("account", id: account.id, parentID: account.parentID ?? account.ledgerID, payload: account))
+        }
+        for source in data.sources where wanted("source", source.id) {
+            try envelopes.append(envelope("source", id: source.id, parentID: source.ledgerID, payload: source))
+        }
+        for transaction in data.transactions {
+            if wanted("transaction", transaction.id) {
+                try envelopes.append(envelope("transaction", id: transaction.id, parentID: transaction.ledgerID, payload: transaction))
+            }
+            if let container = transaction.attachment {
+                for asset in container.assets where wanted("attachment_asset", asset.id) {
+                    try envelopes.append(envelope("attachment_asset", id: asset.id, parentID: container.id, payload: asset))
+                }
+            }
+        }
+        for template in data.transactionTemplates where wanted("transaction_template", template.id) {
             try envelopes.append(envelope("transaction_template", id: template.id, parentID: template.ledgerID, payload: template))
         }
         var seen: Set<String> = []

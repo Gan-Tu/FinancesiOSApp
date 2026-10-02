@@ -20,3 +20,21 @@ Changes:
 - Refresh sync conflicts on completion, cancellation, or failure instead of querying SQLite for every progress update.
 
 Focused checks cover split totals/transaction IDs, filtered running balances, multi-currency transitions, single-currency group totals, and content invalidation. Receipt previews already use asynchronous Quick Look thumbnails; their implementation is unchanged.
+
+## iCloud sync passes and the main thread (October 2, 2026)
+
+Reports of random freezes and unresponsive taps pointed at work that every iCloud sync pass performed on the main actor. Passes run on each foreground activation, five minutes apart, half a second after every edit, on network changes, and on every push notification, so the cost repeated throughout a session:
+
+- Each pass flushed local changes three to four times with a synchronous wait on the serial SQLite writer, validating the whole journal and collecting every stored receipt path each time.
+- The pull commit ran even when iCloud returned no records. It read the entire known-record mirror and the outbox on the main thread, opened one SQLite connection per fetched record to check acknowledgement receipts, rebuilt every derived cache (sorted transactions, balances, account trees, search text), invalidated every cached register, and republished the journal to every view.
+- When unsynced edits were waiting, the SQLite candidate guard re-encoded and hashed every record in the journal while the main thread waited.
+
+Changes:
+
+- A page with no records now binds the change token on the sync database queue and returns. Nothing is read, merged, rebuilt, or republished.
+- Record classification (pending outbox, known mirror entries for the fetched keys only, in-flight versions, acknowledgement receipts, receipt upload claims, pending descendants) runs in one SQLite transaction on the database queue. Only the merge, validation, and commit remain on the main actor; an edit that lands during the reads restarts them, and the existing SQLite guard still rejects a stale merge.
+- Echo-only pages (this device's own uploads coming back) update sync bookkeeping without rebuilding derived caches, invalidating registers, or reassigning the published journal.
+- Sync-driven flushes await the serial writer instead of blocking on it, validate the journal once per value, and skip the receipt-path scan when transaction storage is unchanged.
+- The candidate guard encodes only the records with outstanding local edits.
+
+Verification: `SQLiteCloudKitSyncTests` compares the batched classifier against the individual queries it replaced and checks that an idle token bind leaves the journal, outbox, and mirror untouched. `CloudKitJournalSyncTests` confirms that an empty page advances the checkpoint without reaching the host commit while echo pages still do. Device profiling of frame pacing during a pass was not part of this change.
