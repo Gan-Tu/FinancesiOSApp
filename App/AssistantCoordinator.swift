@@ -96,6 +96,13 @@ final class AssistantCoordinator: ObservableObject {
     var backgroundLease: any AssistantBackgroundLeasing = AssistantSystemBackgroundLease()
     private var continuesWhileAway = false
     private var holdsBackgroundLease = false
+    /// One serial writer for conversation checkpoints. The run loop awaits its
+    /// writes so the main actor stays free; immediate user actions join the
+    /// same queue so no write lands behind an older one.
+    private static let historyQueue = DispatchQueue(label: "FinancesMobile.Assistant.history", qos: .userInitiated)
+    /// Streamed tokens are published in small batches rather than one by one.
+    private var pendingStreamingText = ""
+    private var streamingFlushTask: Task<Void, Never>?
     private var restoreRecentOnConnect = false
     private let now: () -> Date
     private var task: Task<Void, Never>?
@@ -289,9 +296,54 @@ final class AssistantCoordinator: ObservableObject {
         guard !identity.isEmpty else { throw AssistantFailure("not_connected", "Connect before saving assistant history.") }
         var saved = value; saved.updated = now()
         if presented && foreground { saved.lastActiveAt = saved.updated }
-        try store.assistantDatabase.saveAssistantHistory(scope: identity, id: saved.id.uuidString, payload: JSONEncoder().encode(saved), now: saved.updated)
+        let database = store.assistantDatabase, scope = identity, snapshot = saved
+        try Self.historyQueue.sync {
+            try database.saveAssistantHistory(scope: scope, id: snapshot.id.uuidString, payload: JSONEncoder().encode(snapshot), now: snapshot.updated)
+        }
         conversation = saved
         history.removeAll { $0.id == saved.id }; history.insert(saved, at: 0)
+    }
+    /// The run loop's durable checkpoint. State publishes at once so the
+    /// transcript updates; encoding and the SQLite write run on the serial
+    /// writer while the user keeps typing. The loop awaits the write before
+    /// its next action, which keeps the durability order unchanged.
+    private func persistAsync(_ value: AssistantConversation? = nil) async throws {
+        guard !identity.isEmpty else { throw AssistantFailure("not_connected", "Connect before saving assistant history.") }
+        var saved = value ?? conversation; saved.updated = now()
+        if presented && foreground { saved.lastActiveAt = saved.updated }
+        conversation = saved
+        history.removeAll { $0.id == saved.id }; history.insert(saved, at: 0)
+        let database = store.assistantDatabase, scope = identity, snapshot = saved
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            Self.historyQueue.async {
+                do {
+                    try database.saveAssistantHistory(scope: scope, id: snapshot.id.uuidString, payload: JSONEncoder().encode(snapshot), now: snapshot.updated)
+                    continuation.resume()
+                } catch { continuation.resume(throwing: error) }
+            }
+        }
+    }
+    private func setActivity(_ value: String) {
+        if activity != value { activity = value }
+    }
+    private func appendStreamingText(_ text: String) {
+        pendingStreamingText += text
+        guard streamingFlushTask == nil else { return }
+        streamingFlushTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(60))
+            self?.flushStreamingText()
+        }
+    }
+    private func flushStreamingText() {
+        streamingFlushTask?.cancel(); streamingFlushTask = nil
+        guard !pendingStreamingText.isEmpty else { return }
+        streamingText += pendingStreamingText
+        pendingStreamingText = ""
+    }
+    private func clearStreamingText() {
+        streamingFlushTask?.cancel(); streamingFlushTask = nil
+        pendingStreamingText = ""
+        if !streamingText.isEmpty { streamingText = "" }
     }
     private func isRecent(_ value: AssistantConversation) -> Bool {
         let elapsed = now().timeIntervalSince(value.lastActiveAt ?? value.updated)
@@ -325,7 +377,7 @@ final class AssistantCoordinator: ObservableObject {
     }
     private func clearConversationPresentation() {
         pendingAttachment = nil; awaitingAttachmentActivation = false
-        uploadedFiles = []; error = nil; streamingText = ""; artifact = nil
+        uploadedFiles = []; error = nil; clearStreamingText(); artifact = nil
         approval = nil; approvalText = ""; approvalFingerprint = ""
         needsAttachmentRecovery = false; navigationRequest = nil; draftText = ""
     }
@@ -340,14 +392,18 @@ final class AssistantCoordinator: ObservableObject {
         conversation.lastActiveAt = now()
         tools?.context = value.context; uploadedFiles = []; error = nil
         do {
-            try store.assistantDatabase.saveAssistantHistory(scope: identity, id: value.id.uuidString, payload: JSONEncoder().encode(conversation), now: value.updated)
+            let database = store.assistantDatabase, scope = identity, snapshot = conversation
+            try Self.historyQueue.sync {
+                try database.saveAssistantHistory(scope: scope, id: value.id.uuidString, payload: JSONEncoder().encode(snapshot), now: value.updated)
+            }
             if let index = history.firstIndex(where: { $0.id == value.id }) { history[index] = conversation }
         } catch { self.error = "Could not save the active conversation: \(error.localizedDescription)" }
     }
     func deleteConversation(_ id: UUID) {
         do {
             if conversation.id == id { cancelRemaining(); conversation = AssistantConversation(context: conversation.context) }
-            try store.assistantDatabase.deleteAssistantHistory(scope: identity, id: id.uuidString)
+            let database = store.assistantDatabase, scope = identity
+            try Self.historyQueue.sync { try database.deleteAssistantHistory(scope: scope, id: id.uuidString) }
             history.removeAll { $0.id == id }
         } catch { self.error = error.localizedDescription }
     }
@@ -370,9 +426,11 @@ final class AssistantCoordinator: ObservableObject {
         let result = AssistantJSON.object(["ok": .bool(true), "result": .object([
             "conversation_id": .string(id.uuidString), "title": .string(name), "status": .string("saved_on_device")
         ])])
-        try store.assistantDatabase.saveAssistantHistory(scope: identity, id: id.uuidString,
-            payload: JSONEncoder().encode(updated), now: updated.updated,
-            action: action.map { (id: $0.operationID, digest: $0.digest, result: result.jsonString) })
+        let database = store.assistantDatabase, scope = identity, snapshot = updated
+        let receipt = action.map { (id: $0.operationID, digest: $0.digest, result: result.jsonString) }
+        try Self.historyQueue.sync {
+            try database.saveAssistantHistory(scope: scope, id: id.uuidString, payload: JSONEncoder().encode(snapshot), now: snapshot.updated, action: receipt)
+        }
         if conversation.id == id { conversation.title = name; conversation.customTitle = true }
         history[index] = updated
         return result
@@ -414,11 +472,11 @@ final class AssistantCoordinator: ObservableObject {
         error = nil; approval = nil
         let stamp = UUID(); generation = stamp
         isRunning = true; conversation.paused = false
-        if conversation.hasPendingSteering { activity = "Updating request…" }
+        if conversation.hasPendingSteering { setActivity("Updating request…") }
         let previousTask = retiringTask; retiringTask = nil
         task = Task { [weak self] in
             guard let self else { return }
-            defer { if generation == stamp { isRunning = false; isConnecting = false; activity = ""; task = nil; finishAwayWork() } }
+            defer { if generation == stamp { isRunning = false; isConnecting = false; setActivity(""); task = nil; finishAwayWork() } }
             do {
                 await previousTask?.value
                 guard generation == stamp else { return }
@@ -437,7 +495,8 @@ final class AssistantCoordinator: ObservableObject {
                     await Task.yield()
                     guard generation == stamp else { return }
                     try requireActive()
-                    try applyPendingSteering(using: tools)
+                    try await applyPendingSteering(using: tools)
+                    guard generation == stamp else { return }
                     if let call = conversation.calls.first {
                         let definition = try tools.definition(call.name)
                         let replay = try store.assistantDatabase.assistantAction(scope: identity, id: call.operationID, digest: call.digest)
@@ -446,16 +505,17 @@ final class AssistantCoordinator: ObservableObject {
                                 let preview = try tools.approvalPreview(call)
                                 if call.approvedDigest != preview.fingerprint {
                                     approval = call; approvalText = preview.text; approvalFingerprint = preview.fingerprint
-                                    conversation.paused = true; try persist(); return
+                                    conversation.paused = true; try await persistAsync(); return
                                 }
                             } catch {
-                                finishCall(call, result: tools.failure(error)); try persist(); continue
+                                finishCall(call, result: tools.failure(error)); try await persistAsync(); continue
                             }
                         }
-                        activity = "Thinking…"
+                        setActivity("Thinking…")
                         // The in-memory call may come from a failed checkpoint
                         // write. No new action starts until its intent is durable.
-                        try persist()
+                        try await persistAsync()
+                        guard generation == stamp else { return }
                         let started = ContinuousClock.now
                         let output: AssistantJSON
                         if let replay { output = try JSONDecoder().decode(AssistantJSON.self, from: Data(replay.utf8)) }
@@ -468,14 +528,15 @@ final class AssistantCoordinator: ObservableObject {
                         // A committed operation may outlive a transport. Its
                         // receipt is already durable before publishing success.
                         finishCall(call, result: output)
-                        try persist()
+                        try await persistAsync()
                         logger.info("tool_finished duration=\(String(describing: started.duration(to: .now)), privacy: .public)")
                         continue
                     }
                     guard conversation.hasPendingInference else { break }
                     guard conversation.turnSteps < 30 else { throw AssistantFailure("turn_limit", "This request reached its step limit. Start a new request to continue.") }
-                    conversation.turnSteps += 1; try persist()
-                    activity = "Thinking…"; streamingText = ""
+                    conversation.turnSteps += 1; try await persistAsync()
+                    guard generation == stamp else { return }
+                    setActivity("Thinking…"); clearStreamingText()
                     var completed = false
                     var context = [AssistantTimeContext.message(now: now())]
                     let instructions = tools.receiptPreferences().instructions.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -486,26 +547,28 @@ final class AssistantCoordinator: ObservableObject {
                     try await gateway.step(items: context + conversation.items, settings: conversation.settings) { [weak self] event in
                         guard let self, self.generation == stamp else { throw CancellationError() }
                         try self.requireActive()
-                        if event.type == "text_delta" { self.streamingText += event.text ?? "" }
+                        if event.type == "text_delta" { self.appendStreamingText(event.text ?? "") }
                         if event.type == "step_completed" {
                             guard !completed, let continuation = event.continuation else { throw AssistantFailure("invalid_response", "Missing assistant continuation.") }
                             completed = true
                             let calls = event.calls ?? []
                             guard Set(calls.map(\.id)).count == calls.count else { throw AssistantFailure("invalid_response", "Duplicate tool call identifiers.") }
+                            self.flushStreamingText()
                             self.conversation.items.append(.object(["type": .string("continuation"), "value": .string(continuation)]))
                             self.conversation.calls = calls
                             let text = event.text ?? self.streamingText
                             if !text.isEmpty { self.conversation.messages.append(AssistantMessage(role: "assistant", text: text)) }
-                            self.streamingText = ""
+                            self.clearStreamingText()
                             self.conversation.hasPendingInference = !calls.isEmpty || event.needsFollowUp == true
-                            try self.persist()
                         }
                     }
                     guard generation == stamp else { return }
                     guard completed else { throw AssistantFailure("interrupted", "The reply was interrupted.") }
+                    // The accepted continuation is durable before the next action.
+                    try await persistAsync()
                 }
                 guard generation == stamp else { return }
-                conversation.paused = false; try persist()
+                conversation.paused = false; try await persistAsync()
             } catch is CancellationError {
                 if generation == stamp { conversation.paused = true; try? persist() }
             } catch {
@@ -517,7 +580,7 @@ final class AssistantCoordinator: ObservableObject {
             }
         }
     }
-    private func applyPendingSteering(using tools: AssistantTools) throws {
+    private func applyPendingSteering(using tools: AssistantTools) async throws {
         guard let updates = conversation.pendingSteering, !updates.isEmpty else { return }
         var next = conversation
         for call in next.calls {
@@ -533,7 +596,7 @@ final class AssistantCoordinator: ObservableObject {
         next.pendingSteering = nil; next.turnSteps = 0
         next.hasPendingInference = true; next.paused = false
         // Publish the reconciled calls and consume the updates in one checkpoint.
-        try persist(next)
+        try await persistAsync(next)
     }
     private func finishCall(_ call: AssistantToolCall, result: AssistantJSON) {
         Self.finishCall(call, result: result, in: &conversation)
@@ -579,7 +642,7 @@ final class AssistantCoordinator: ObservableObject {
         if let task { task.cancel(); retiringTask = task }
         task = nil; isRunning = false; isConnecting = false
         store.assistantCancelConflictResolution()
-        approval = nil; activity = ""; streamingText = ""
+        approval = nil; setActivity(""); clearStreamingText()
         if conversation.hasPendingInference || !conversation.calls.isEmpty || conversation.hasPendingSteering { conversation.paused = true }
         fileContinuation?.resume(throwing: CancellationError()); fileContinuation = nil; filePurpose = nil
         dictation.cancel()
@@ -649,16 +712,16 @@ final class AssistantCoordinator: ObservableObject {
         guard isCurrentAttachmentContext(context), let tools else { return }
         isRunning = true; let stamp = generation
         task = Task {
-            defer { if generation == stamp { isRunning = false; isConnecting = false; task = nil; activity = ""; finishAwayWork() } }
+            defer { if generation == stamp { isRunning = false; isConnecting = false; task = nil; setActivity(""); finishAwayWork() } }
             do {
-                activity = "Connecting…"
+                setActivity("Connecting…")
                 isConnecting = true
                 let subject = try await gateway.connect()
                 try requireActive(); guard generation == stamp else { return }
                 try verifyIdentity(subject)
                 guard subject == identity else { throw AssistantFailure("identity_mismatch", "Reconnect with the account that owns this conversation.") }
                 isConnecting = false
-                activity = "Preparing attachment…"
+                setActivity("Preparing attachment…")
                 let inputs = try await load()
                 try Task.checkCancellation()
                 guard generation == stamp, isCurrentAttachmentContext(context) else { throw CancellationError() }

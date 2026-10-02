@@ -49,4 +49,8 @@ Changes:
 - `AppShellView` holds the coordinator as a plain reference and receives navigation requests through the request publisher instead of observing the whole object.
 - The root content view owns the coordinator through a non-publishing holder object, so streamed tokens and status changes no longer re-render the navigation shell.
 
-Verification: `AssistantTests` asserts that appending to the draft publishes the draft object only, never the coordinator. Device frame pacing while typing and streaming was not measured as part of this change.
+- Run-loop checkpoints (`persistAsync`) publish state at once and run JSON encoding plus the SQLite write on a serial history queue that the loop awaits. Immediate user actions still write synchronously through the same queue, so write order is unchanged. A long conversation no longer stalls the main thread several times per step while the user types a follow-up.
+- Streamed tokens are published in 60 ms batches instead of one Markdown re-render per token; `activity` publishes only when its text changes.
+- `MobileLedgerStore.data` is published by hand so the sync-timestamp write at the end of every pass, which no view renders, no longer re-renders every screen.
+
+Verification: `AssistantTests` asserts that appending to the draft publishes the draft object only, never the coordinator; its run-loop tests cover the awaited checkpoints. Device frame pacing while typing and streaming was not measured as part of this change.

@@ -353,7 +353,11 @@ final class MobileCloudSyncState: ObservableObject {
 final class MobileLedgerStore: ObservableObject {
     private static let deferredPersistenceQueue = DispatchQueue(label: "FinancesMobile.MobileLedgerStore.deferredPersistence", qos: .utility)
 
-    @Published private(set) var data: JournalData {
+    /// Published by hand so a bookkeeping-only write (the sync timestamp,
+    /// which no view renders) can be installed without re-rendering every
+    /// screen. Every other assignment publishes exactly as `@Published` did.
+    private(set) var data: JournalData {
+        willSet { if !installsJournalSilently { objectWillChange.send() } }
         didSet {
             lastValidatedJournal = nil
             guard !assistantMutationInProgress else { return }
@@ -391,6 +395,7 @@ final class MobileLedgerStore: ObservableObject {
     /// storage with `data` until the next assignment clears it, so repeated
     /// sync flushes of an unchanged journal skip the whole-journal scan.
     private var lastValidatedJournal: JournalData?
+    private var installsJournalSilently = false
     private var persistenceSequence: UInt64 = 0
     private var persistenceOutcomes = MobilePersistenceOutcomeState()
     @Published private(set) var localPersistenceError: ValidationError?
@@ -4214,7 +4219,11 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
         // Publish the completion timestamp only after the current journal and
         // any edit made during network awaits have reached the same save queue.
         try persistSnapshot(snapshot, trackSyncChanges: true, collectCompletedReceipts: true)
+        // Only the timestamp changed. Nothing renders it, so skip the
+        // app-wide re-render that closed every pass.
+        installsJournalSilently = true
         data = snapshot
+        installsJournalSilently = false
         if validationError != nil { validationError = nil }
         refreshCloudSyncDataAvailability()
     }
