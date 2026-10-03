@@ -41,6 +41,7 @@ struct CloudSyncProgress: Equatable {
         case idle
         case running
         case succeeded
+        case needsReview
         case failed
     }
 
@@ -62,6 +63,10 @@ struct CloudSyncProgress: Equatable {
             fractionCompleted: fractionCompleted.map { min(max($0, 0), 1) },
             phase: phase
         )
+    }
+
+    static func needsReview(count: Int) -> CloudSyncProgress {
+        CloudSyncProgress(state: .needsReview, message: "\(count) \(count == 1 ? "item needs" : "items need") review", detail: "Choose versions in Review Conflicts. Other choices remain saved.", fractionCompleted: nil)
     }
 
     static func succeeded(message: String, detail: String? = nil) -> CloudSyncProgress {

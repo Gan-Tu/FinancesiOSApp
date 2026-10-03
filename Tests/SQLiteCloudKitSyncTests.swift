@@ -432,6 +432,131 @@ final class SQLiteCloudKitSyncTests: XCTestCase {
         XCTAssertEqual(try f.store.knownCloudKitRecords(contextKey: context), known)
     }
 
+    func testBatchResolutionAppliesMixedChoicesTogetherAndLeavesUnselectedConflicts() throws {
+        let f = try fixture()
+        try f.store.prepareInitialCloudKitSnapshot(f.data, contextKey: context)
+        let local = try f.store.pendingCloudKitRecords(contextKey: context)
+        var remote = f.data
+        remote.ledgers[0].name = "Remote journal"
+        remote.accounts[0].name = "Remote cash"
+        remote.transactions[0].note = "Unselected remote note"
+        let records = [try record("ledger", id: remote.ledgers[0].id, payload: remote.ledgers[0], tag: 9),
+                       try record("account", id: remote.accounts[0].id, payload: remote.accounts[0], tag: 10),
+                       try record("transaction", id: remote.transactions[0].id, payload: remote.transactions[0], tag: 11)]
+        for value in records { try f.store.saveCloudKitConflict(local: try XCTUnwrap(local[value.key]), remote: value, contextKey: context) }
+        let conflicts = try f.store.unresolvedCloudKitConflicts(contextKey: context)
+        let choices = conflicts.filter { $0.local.recordType != "transaction" }.map { CloudKitConflictResolution(conflict: $0, keepLocal: $0.local.recordType == "ledger") }
+        var candidate = f.data; candidate.accounts[0] = remote.accounts[0]
+        try f.store.resolveCloudKitConflicts(choices, contextKey: context, data: candidate, previous: f.data)
+        XCTAssertEqual(try f.store.loadData()?.accounts[0].name, "Remote cash")
+        XCTAssertEqual(try f.store.loadData()?.ledgers[0].name, f.data.ledgers[0].name)
+        XCTAssertEqual(try f.store.unresolvedCloudKitConflicts(contextKey: context).count, 1)
+        XCTAssertNotNil(try f.store.pendingCloudKitRecords(contextKey: context)[records[0].key])
+        XCTAssertNil(try f.store.pendingCloudKitRecords(contextKey: context)[records[1].key])
+    }
+
+    func testBatchUseRemoteRetiresAllSelectedVersionsInOneValidatedCommit() throws {
+        let f = try fixture()
+        try f.store.prepareInitialCloudKitSnapshot(f.data, contextKey: context)
+        let local = try f.store.pendingCloudKitRecords(contextKey: context)
+        var remote = f.data; remote.ledgers[0].name = "Cloud journal"; remote.accounts[0].name = "Cloud cash"
+        for value in [try record("ledger", id: remote.ledgers[0].id, payload: remote.ledgers[0], tag: 9),
+                      try record("account", id: remote.accounts[0].id, payload: remote.accounts[0], tag: 10)] {
+            try f.store.saveCloudKitConflict(local: try XCTUnwrap(local[value.key]), remote: value, contextKey: context)
+        }
+        let choices = try f.store.unresolvedCloudKitConflicts(contextKey: context).map { CloudKitConflictResolution(conflict: $0, keepLocal: false) }
+        try f.store.resolveCloudKitConflicts(choices, contextKey: context, data: remote, previous: f.data)
+        XCTAssertEqual(try f.store.loadData()?.ledgers, remote.ledgers)
+        XCTAssertEqual(try f.store.loadData()?.accounts, remote.accounts)
+        XCTAssertTrue(try f.store.unresolvedCloudKitConflicts(contextKey: context).isEmpty)
+        let pending = try f.store.pendingCloudKitRecords(contextKey: context)
+        XCTAssertTrue(choices.allSatisfy { pending[$0.conflict.local.key] == nil })
+    }
+
+    func testStaleBatchPreservesEveryConflictAndNewerLocalEdit() throws {
+        let f = try fixture()
+        try f.store.prepareInitialCloudKitSnapshot(f.data, contextKey: context)
+        let local = try f.store.pendingCloudKitRecords(contextKey: context)
+        var remote = f.data; remote.ledgers[0].name = "Cloud journal"; remote.accounts[0].name = "Cloud cash"
+        for value in [try record("ledger", id: remote.ledgers[0].id, payload: remote.ledgers[0], tag: 9),
+                      try record("account", id: remote.accounts[0].id, payload: remote.accounts[0], tag: 10)] {
+            try f.store.saveCloudKitConflict(local: try XCTUnwrap(local[value.key]), remote: value, contextKey: context)
+        }
+        let conflicts = try f.store.unresolvedCloudKitConflicts(contextKey: context)
+        let choices = conflicts.map { CloudKitConflictResolution(conflict: $0, keepLocal: false) }
+        var newer = f.data; newer.accounts[0].name = "Edited during review"
+        try f.store.persist(newer, previous: f.data)
+        let before = try f.store.pendingSyncChanges(limit: 1_000)
+        XCTAssertThrowsError(try f.store.resolveCloudKitConflicts(choices, contextKey: context, data: remote, previous: newer))
+        XCTAssertEqual(try f.store.unresolvedCloudKitConflicts(contextKey: context), conflicts)
+        XCTAssertEqual(try f.store.pendingSyncChanges(limit: 1_000), before)
+        XCTAssertEqual(try f.store.loadData()?.accounts, newer.accounts)
+        XCTAssertEqual(try f.store.loadData()?.ledgers, newer.ledgers)
+    }
+
+    func testConflictComparisonIncludesClearedNumberRecurrenceAndReceiptContents() throws {
+        let f = try fixture(receipt: true)
+        var remote = f.data.transactions[0]
+        remote.cleared = true; remote.number = "42"; remote.recurrenceRule = RecurrenceRule()
+        let local = try record("transaction", id: remote.id, payload: f.data.transactions[0], tag: 1)
+        let cloud = try record("transaction", id: remote.id, payload: remote, tag: 2)
+        let fields = CloudKitConflictComparison.fields(.init(id: "review", local: local, remote: cloud), data: f.data)
+        XCTAssertEqual(fields.first { $0.id == "cleared" }?.remote, "Yes")
+        XCTAssertTrue(fields.contains { $0.id == "number" && $0.changed })
+        XCTAssertTrue(fields.contains { $0.id.hasPrefix("recurrenceRule.") && $0.changed })
+        var asset = try record("attachment_asset", id: try XCTUnwrap(f.asset).id, payload: try XCTUnwrap(f.asset), tag: 3)
+        asset.assetSHA256 = String(repeating: "a", count: 64)
+        var changed = asset; changed.assetSHA256 = String(repeating: "b", count: 64)
+        XCTAssertTrue(CloudKitConflictComparison.fields(.init(id: "receipt", local: asset, remote: changed), data: f.data).contains { $0.label == "Receipt checksum" && $0.changed })
+    }
+
+    func testConflictComparisonPreservesExactHighPrecisionAmountDifferences() throws {
+        let f = try fixture()
+        var local = f.data.transactions[0], remote = local
+        local.postings[0].amount = try XCTUnwrap(Decimal(string: "123456789012345678901234567890.12"))
+        remote.postings[0].amount = try XCTUnwrap(Decimal(string: "123456789012345678901234567890.13"))
+        let left = try record("transaction", id: local.id, payload: local, tag: 1)
+        let right = try record("transaction", id: remote.id, payload: remote, tag: 2)
+        let amount = try XCTUnwrap(CloudKitConflictComparison.fields(.init(id: "decimal", local: left, remote: right), data: f.data).first { $0.id == "postings.0.amount" })
+        XCTAssertTrue(amount.changed)
+        XCTAssertEqual(amount.local, "123456789012345678901234567890.12")
+        XCTAssertEqual(amount.remote, "123456789012345678901234567890.13")
+    }
+
+    func testBatchKeepLocalUsesFreshVerifiedCloudKitCASMetadata() throws {
+        let f = try fixture()
+        try f.store.prepareInitialCloudKitSnapshot(f.data, contextKey: context)
+        let local = try XCTUnwrap(f.store.pendingCloudKitRecords(contextKey: context).values.first { $0.recordType == "ledger" })
+        var ledger = f.data.ledgers[0]; ledger.name = "Cloud name"
+        let remote = try record("ledger", id: ledger.id, payload: ledger, tag: 9)
+        try f.store.saveCloudKitConflict(local: local, remote: remote, contextKey: context)
+        let conflict = try XCTUnwrap(f.store.unresolvedCloudKitConflicts(contextKey: context).first)
+        var fresh = remote; fresh.systemFields = Data([22]); fresh.clientChangeID = UUID().uuidString
+        try f.store.resolveCloudKitConflicts([.init(conflict: conflict, keepLocal: true)], contextKey: context,
+            data: f.data, previous: f.data, verifiedRemote: [fresh.key: fresh])
+        let next = try XCTUnwrap(f.store.claimCloudKitChanges(contextKey: context, limit: 1_000).first { $0.key == local.key })
+        XCTAssertEqual(next.systemFields, fresh.systemFields)
+        XCTAssertEqual(next.payloadJSON, local.payloadJSON)
+        XCTAssertTrue(try f.store.unresolvedCloudKitConflicts(contextKey: context).isEmpty)
+    }
+
+    func testConflictCollectionBatchRollsBackEveryRowOnInvalidIdentity() throws {
+        let f = try fixture()
+        try f.store.prepareInitialCloudKitSnapshot(f.data, contextKey: context)
+        let local = try f.store.pendingCloudKitRecords(contextKey: context)
+        var ledger = f.data.ledgers[0]; ledger.name = "Cloud journal"
+        let remote = try record("ledger", id: ledger.id, payload: ledger, tag: 9)
+        let account = try record("account", id: f.data.accounts[0].id, payload: f.data.accounts[0], tag: 10)
+        var invalid = account; invalid.recordID = UUID().uuidString
+        XCTAssertThrowsError(try f.store.saveCloudKitConflicts([
+            (local: try XCTUnwrap(local[remote.key]), remote: remote),
+            (local: try XCTUnwrap(local[account.key]), remote: invalid)
+        ], contextKey: context))
+        XCTAssertTrue(try f.store.unresolvedCloudKitConflicts(contextKey: context).isEmpty)
+        XCTAssertEqual(try f.store.loadData()?.transactions, f.data.transactions)
+        XCTAssertEqual(try f.store.pendingCloudKitRecords(contextKey: context), local)
+    }
+
     private struct Fixture {
         var store: SQLiteJournalStore
         var data: JournalData

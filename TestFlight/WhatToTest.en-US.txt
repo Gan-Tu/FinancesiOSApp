@@ -1,1 +1,3 @@
 Test transactions, note and payee suggestions, iCloud sync, and backups, and report any bugs with the build number.
+
+Review iCloud conflicts in a larger dedicated screen. Choose several versions or use Keep This Device / Use iCloud for all, then apply and sync once. Differences are highlighted by field, including cleared status, splits, recurrence, receipts, and deletions. Check that changing one staged choice does not sync until Apply, and that remaining undecided conflicts show Needs Review without repeated alerts.

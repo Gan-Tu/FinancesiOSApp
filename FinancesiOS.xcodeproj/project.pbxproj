@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		020AD84EEC25EDD7B4EEF8DF /* CloudSyncConflictReview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 010F51768888F11CCE434F63 /* CloudSyncConflictReview.swift */; };
 		02FFEB9793F9A04381C5541C /* HistoricalSuggestionCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69DCDB44EDCAD072AE7E8162 /* HistoricalSuggestionCacheTests.swift */; };
 		09900F281EB6EA2962611344 /* CloudKitSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17797728AE53448A820518DB /* CloudKitSyncService.swift */; };
 		0A6B2535C20F9326102CBE81 /* AssistantBackup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52C1417BCB9E523919783153 /* AssistantBackup.swift */; };
@@ -45,6 +46,7 @@
 		34E3369F9440ACC3A4329BE1 /* MobileCompanionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1548C3C8C0B03D7A03A6215B /* MobileCompanionTests.swift */; };
 		365E59A84D13B94E80911260 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 5E78F564BDEF0B05B196B23A /* ZIPFoundation */; };
 		36A1CBF3A99B7A6D1A5BAB86 /* LayoutAuditTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCBDFF5A7BA12D148161FF03 /* LayoutAuditTests.swift */; };
+		37B0B91913EFFBACC0CF6534 /* CloudKitConflictReview.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF13A3DA850CFB0FDA1353ED /* CloudKitConflictReview.swift */; };
 		37F3A12C3BB99CD8C124A363 /* AssistantMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = 600D621ECA835D4A089E65D6 /* AssistantMarkdown.swift */; };
 		3821F420F8AAA79FF41E767D /* RecurringJournalEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ACC2C03AF40231D12945107 /* RecurringJournalEditor.swift */; };
 		388058A2EF0746B69FBA437D /* HomeScreenQuickActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1162C3714D2FFAEDE39A192 /* HomeScreenQuickActions.swift */; };
@@ -238,6 +240,7 @@
 
 /* Begin PBXFileReference section */
 		006C16A110DCAEE9D8241EB0 /* SharedReceiptAI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedReceiptAI.swift; sourceTree = "<group>"; };
+		010F51768888F11CCE434F63 /* CloudSyncConflictReview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudSyncConflictReview.swift; sourceTree = "<group>"; };
 		02C18AA6F4DD1210C5FF2880 /* SharedReceiptHandoff.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedReceiptHandoff.swift; sourceTree = "<group>"; };
 		051025E46B7B73A862F5B102 /* FinancesiOSTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = FinancesiOSTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		052313D4E1BFC2F0632D22F0 /* JournalVisibilityAndSearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JournalVisibilityAndSearchTests.swift; sourceTree = "<group>"; };
@@ -375,6 +378,7 @@
 		D8062FB2C4A6969B2FA2788C /* AccountBalanceProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountBalanceProjection.swift; sourceTree = "<group>"; };
 		DC6D2400CBE07051817D7997 /* AssistantToolFiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantToolFiles.swift; sourceTree = "<group>"; };
 		DCDEF59CF1ECC61824DD7109 /* AmountExpressionEvaluatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AmountExpressionEvaluatorTests.swift; sourceTree = "<group>"; };
+		DF13A3DA850CFB0FDA1353ED /* CloudKitConflictReview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitConflictReview.swift; sourceTree = "<group>"; };
 		E049D5A25B6E0E4121652A89 /* HiddenJournalsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HiddenJournalsView.swift; sourceTree = "<group>"; };
 		E0554736B64DAB8F4C2A1003 /* SharedReceiptProviderLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedReceiptProviderLoader.swift; sourceTree = "<group>"; };
 		E06C3C3000BC78FFEFC1832F /* DemoData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoData.swift; sourceTree = "<group>"; };
@@ -454,6 +458,7 @@
 				A28F865AE186E9BDF8486D20 /* CaptureEntryViews.swift */,
 				3F97AF51BFB8193F170361BC /* CaptureSuggestions.swift */,
 				25974F9B7E22B3998E791C21 /* CloudKitLiveVerificationScene.swift */,
+				010F51768888F11CCE434F63 /* CloudSyncConflictReview.swift */,
 				5F62E975F0C8BE20162D7CA8 /* CurrencyCatalogPicker.swift */,
 				E06C3C3000BC78FFEFC1832F /* DemoData.swift */,
 				3288B0BA96F43F72A89C35CC /* Editors.swift */,
@@ -626,6 +631,7 @@
 				249A40D26106636B2DB37E52 /* AssistantPreferencesStore.swift */,
 				13D968B89685C6F8CBB70B08 /* AttachmentDuplicator.swift */,
 				E471E67CBC5110720103E4C6 /* BackupArchive.swift */,
+				DF13A3DA850CFB0FDA1353ED /* CloudKitConflictReview.swift */,
 				373409D19DBB842FA8DBF66B /* CloudKitForegroundSyncTriggers.swift */,
 				24ED3D7B11C16498B8799B27 /* CloudKitJournalSyncCoordinator.swift */,
 				B699F730EDBC2E09BA478486 /* CloudKitLiveVerification.swift */,
@@ -993,6 +999,7 @@
 				A6ED9B3721FC8F66A8F162FC /* BackupTransfer.swift in Sources */,
 				26E1D8203409FB887A7A4139 /* CaptureEntryViews.swift in Sources */,
 				162BD739ED57935732EEFF33 /* CaptureSuggestions.swift in Sources */,
+				37B0B91913EFFBACC0CF6534 /* CloudKitConflictReview.swift in Sources */,
 				1E7101472456F582591DBCDD /* CloudKitForegroundSyncTriggers.swift in Sources */,
 				9F31014BB5272FB0FC30CF3B /* CloudKitJournalSyncCoordinator.swift in Sources */,
 				AADCECC96B8EDF240467EE08 /* CloudKitLiveVerification.swift in Sources */,
@@ -1002,6 +1009,7 @@
 				9EF442A7D8E1781D105C0181 /* CloudKitReceiptFileTransaction.swift in Sources */,
 				D6544A74597410A673E3BC87 /* CloudKitSyncConfiguration.swift in Sources */,
 				09900F281EB6EA2962611344 /* CloudKitSyncService.swift in Sources */,
+				020AD84EEC25EDD7B4EEF8DF /* CloudSyncConflictReview.swift in Sources */,
 				F863C071D018BD9C37CDE443 /* CurrencyCatalogPicker.swift in Sources */,
 				2715B02450F90A81EE36BA28 /* DemoData.swift in Sources */,
 				AB26A21DF842505D1576DD4E /* Editors.swift in Sources */,

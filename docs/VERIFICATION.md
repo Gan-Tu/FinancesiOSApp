@@ -140,3 +140,10 @@ Confirmation tests now use a visible Cancel action or the system popover-dismiss
 ## TestFlight smoke-test budget (September 15, 2026)
 
 At Gan's request, the cloud release scheme now selects 13 fast, app-hosted unit tests and excludes the long UI audit and stress-test suite. The exact smoke selection passed locally on iOS 27: 13 executed, zero failures, zero skips, approximately 0.4 seconds of test execution (build and simulator startup are additional). The complete suite remains available through `FinancesiOSFullTests` and the default `scripts/test.sh` command. `scripts/test.sh --smoke` uses the release selection. Project preflight guards against accidentally removing the selection or adding the UI target to the cloud scheme.
+
+
+## Core test selection (October 2, 2026)
+
+Routine Xcode Cloud releases select 15 behavior checks, including atomic mixed conflict choices and the complete review-and-sync flow. The local default now selects 33 core checks with deterministic mocks, including durable transaction edits, balances, backups, receipts, assistant actions, stale-choice protection, and precise field comparisons. Explicit `-only-testing:` runs only the requested area; `scripts/test.sh --full` retains the complete unit/UI suite for broader audits. Tests continue asserting corrected user behavior; optional stress, performance, and UI sweeps are excluded from routine local runs. The preflight validates every selected method and keeps all cloud checks in the local core selection.
+
+Validation: the 33 local core checks and exact 15 cloud smoke checks passed with zero failures. The four targeted sync/store/suggestion suites passed 113 checks, and the unsigned shipping Release build succeeded. Default, smoke, full, and targeted harness modes were verified. These local results do not establish signed Xcode Cloud archive or TestFlight delivery.

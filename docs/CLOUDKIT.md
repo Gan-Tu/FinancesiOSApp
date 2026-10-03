@@ -39,3 +39,9 @@ The signed iOS app was installed and launched on a physical iPhone 17 Pro Max (i
 On September 6, 2026, the installed Mac TestFlight build 86 was independently checked: its signed entitlements select Production CloudKit/APNs, and its Sync screen reports “Everything is up to date.” The Mac repository records the schema deployment after build 80. The iOS build uses the same record schema and container; its external TestFlight review is pending.
 
 Both clients now preserve the original schedule anchor inside recurrence template-history JSON when the first occurrence is deleted. This requires the matching Mac change, commits `847ecaa` and `54e63a9`, delivered through its existing TestFlight pipeline as build **88**. Older Mac versions may discard the optional metadata during edits. Use the updated Mac companion when testing first-occurrence deletion across devices. No CloudKit schema-field migration is required.
+
+## Review conflicting versions together
+
+Open **Review Conflicts** from iCloud Sync. Each item shows the fields that differ between This Device and iCloud; **Show all fields** reveals the complete stored values. Changed values are bold, and deletion, recurrence, split, and receipt-content differences are included.
+
+Choose versions per item, use **Choose for Selected**, or choose a version for all items. Choices are drafts until **Apply N Choices & Sync**. The app verifies the reviewed versions, validates related records together, commits all selected decisions atomically, and starts one follow-up sync. A changed version is returned for fresh review without applying a stale batch. Unselected conflicts remain saved and appear as **Needs Review**, rather than repeating a failure alert. The downloaded checkpoint remains protected while unresolved conflicts prevent a complete safe merge.

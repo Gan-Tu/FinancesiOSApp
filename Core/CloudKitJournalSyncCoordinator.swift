@@ -118,6 +118,7 @@ protocol CloudKitJournalSyncHost: AnyObject {
     func cloudKitValidate(_ candidate: JournalData) throws
     func cloudKitCommitRemote(_ records: [CloudKitSyncRecord], data: JournalData, contextKey: String, changeToken: Data?, receiptInstallationID: UUID?) throws
     func cloudKitCommitConflictResolution(id: String, keepLocal: Bool, data: JournalData, contextKey: String, receiptInstallationID: UUID?) throws
+    func cloudKitCommitConflictResolutions(_ choices: [CloudKitConflictResolution], data: JournalData, contextKey: String, verifiedRemote: [String: CloudKitSyncRecord], receiptInstallationID: UUID?) throws
     func cloudKitAttachmentURL(for asset: AttachmentAsset) throws -> URL
     func cloudKitSyncDidUpdate(_ progress: CloudSyncProgress)
     func cloudKitSyncDidFail(_ message: String)
@@ -454,6 +455,92 @@ final class CloudKitJournalSyncCoordinator {
         return try host.cloudKitSQLiteStore.unresolvedCloudKitConflicts(contextKey: context)
     }
 
+    /// Resolves one reviewed batch, then schedules exactly one ordinary sync pass.
+    func resolveConflicts(_ choices: [CloudKitConflictResolution]) async throws {
+        guard !choices.isEmpty else { return }
+        cancel()
+        guard let host, let context = try host.cloudKitSQLiteStore.cloudKitBoundContextKey() else {
+            throw CloudKitSyncError.unavailable("The journal is not connected to iCloud.")
+        }
+        let passID = UUID(), gate = CloudKitPersistenceGate()
+        activeID = passID; self.gate = gate; persistenceGates[passID] = gate; reportsProgress = true
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                tasks[passID] = Task { [self] in
+                    do {
+                        try await applyConflictBatch(choices, context: context, id: passID, gate: gate)
+                        finishPass(passID, succeeded: true, canceled: false)
+                        continuation.resume()
+                        if host.cloudKitJournalData.syncEnabled { synchronize(requireFollowUpIfBusy: false) }
+                    } catch {
+                        if activeID == passID {
+                            host.cloudKitSyncDidUpdate(error is CancellationError ? .idle : .failed(message: "Choices were not applied", detail: error.localizedDescription))
+                        }
+                        finishPass(passID, succeeded: false, canceled: error is CancellationError)
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+        } onCancel: { gate.closeAdmission() }
+    }
+
+    private func applyConflictBatch(_ choices: [CloudKitConflictResolution], context: String, id: UUID, gate: CloudKitPersistenceGate) async throws {
+        try check(id, gate: gate)
+        guard let host else { throw CancellationError() }
+        try await host.cloudKitFlushLocalChangesAsync()
+        try check(id, gate: gate)
+        let pending = try host.cloudKitSQLiteStore.pendingCloudKitRecords(contextKey: context)
+        for choice in choices {
+            if let local = pending[choice.conflict.local.key], !CloudKitJournalMerger.sameValue(local, choice.conflict.local) {
+                _ = try Self.persistConflict(local: local, remote: choice.conflict.remote, context: context, store: host.cloudKitSQLiteStore, trackChange: false)
+                throw CloudKitSyncError.service("An item changed on this device. Your other choices are retained; review the updated item.")
+            }
+        }
+        let current = try host.cloudKitSQLiteStore.unresolvedCloudKitConflicts(contextKey: context)
+        guard choices.allSatisfy({ current.contains($0.conflict) }) else {
+            throw CloudKitSyncError.service("A selected conflict changed. Review the latest versions before applying.")
+        }
+        var remoteRecords = choices.filter { !$0.keepLocal }.map { $0.conflict.remote }
+        var verifiedRemote: [String: CloudKitSyncRecord] = [:]
+        var batchClient: (any CloudKitSyncTransport)?
+        defer { batchClient?.cancel() }
+        if host.cloudKitJournalData.syncEnabled {
+            guard let configuration = dependencies.configuration(),
+                  [configuration.containerIdentifier, configuration.environment, configuration.zoneName].joined(separator: "|") == context else {
+                throw CloudKitSyncError.unavailable("This build cannot verify the journal's iCloud environment.")
+            }
+            let transport = try dependencies.makeClient(configuration)
+            batchClient = transport; client = transport
+            let account = try await transport.accountIdentifier()
+            try check(id, gate: gate)
+            _ = try await database(gate: gate) { try $0.bindCloudKitAccount(contextKey: context, accountID: account) }
+            remoteRecords = []
+            for (index, choice) in choices.enumerated() {
+                progress(id, "Checking selected versions", phase: .downloading, detail: "\(index + 1) of \(choices.count)")
+                let fresh = try await transport.fetchRecord(recordType: choice.conflict.remote.recordType, recordID: choice.conflict.remote.recordID)
+                try check(id, gate: gate)
+                guard CloudKitJournalMerger.sameValue(fresh, choice.conflict.remote) else {
+                    _ = try Self.persistConflict(local: choice.conflict.local, remote: fresh, context: context, store: host.cloudKitSQLiteStore, trackChange: false)
+                    throw CloudKitSyncError.service("An iCloud item changed during review. Your other choices are retained; review the updated item.")
+                }
+                verifiedRemote[fresh.key] = fresh
+                if !choice.keepLocal { remoteRecords.append(fresh) }
+            }
+        } else if remoteRecords.contains(where: { $0.recordType == "attachment_asset" && $0.operation != "delete" }) {
+            throw CloudKitSyncError.unavailable("Turn on iCloud Sync to download selected receipts.")
+        }
+        try host.cloudKitFlushLocalChanges()
+        try check(id, gate: gate)
+        let candidate = try CloudKitJournalMerger.applying(remoteRecords, to: host.cloudKitJournalData)
+        try host.cloudKitValidate(candidate)
+        let retained = candidate.transactions.flatMap { $0.attachment?.assets ?? [] }
+        try withInstalledReceipts(remoteRecords, retainedAssets: retained, knownRecords: [:], gate: gate) { installationID in
+            try check(id, gate: gate)
+            try host.cloudKitCommitConflictResolutions(choices, data: candidate, contextKey: context, verifiedRemote: verifiedRemote, receiptInstallationID: installationID)
+        }
+        host.cloudKitSyncDidUpdate(.succeeded(message: "\(choices.count) choices applied", detail: "Your choices are saved on this device."))
+    }
+
     func resolveConflict(id: String, keepLocal: Bool) throws {
         cancel()
         guard let host, let context = try host.cloudKitSQLiteStore.cloudKitBoundContextKey(),
@@ -693,15 +780,13 @@ final class CloudKitJournalSyncCoordinator {
                     try check(id, gate: gate)
                     uploaded += equivalent.count
                 }
-                for (local, remote) in conflicts {
-                    // A background watcher may join while this write is suspended.
-                    let changed = try await database(gate: gate) {
-                        try Self.persistConflict(local: local, remote: remote, context: context, store: $0, trackChange: true)
-                    }
+                if !conflicts.isEmpty {
+                    let pairs = conflicts
+                    let changed = try await database(gate: gate) { try $0.saveCloudKitConflicts(pairs, contextKey: context) }
                     try check(id, gate: gate)
                     if changed { remoteChangeGeneration &+= 1 }
                 }
-                if !conflicts.isEmpty { throw CloudKitSyncError.service("Both this device and iCloud changed the same item. Review sync conflicts to choose which version to keep.") }
+                if !conflicts.isEmpty { throw CloudKitSyncError.reviewRequired(try host.cloudKitSQLiteStore.unresolvedCloudKitConflicts(contextKey: context).count) }
                 if let message = response.failureMessage {
                     throw CloudKitSyncError.retryable(message, response.retryAfter)
                 }
@@ -712,7 +797,7 @@ final class CloudKitJournalSyncCoordinator {
             let unresolved = try await database(gate: gate) { try $0.unresolvedCloudKitConflicts(contextKey: context) }
             try check(id, gate: gate)
             guard unresolved.isEmpty else {
-                throw CloudKitSyncError.service("Some iCloud changes need review. Choose which version to keep in Sync settings.")
+                throw CloudKitSyncError.reviewRequired(unresolved.count)
             }
             try host.cloudKitSyncDidFinish(at: dependencies.now())
             try check(id, gate: gate)
@@ -725,6 +810,10 @@ final class CloudKitJournalSyncCoordinator {
             if error is CancellationError || host?.cloudKitJournalData.syncEnabled != true {
                 canceled = true
                 host?.cloudKitSyncDidUpdate(.idle)
+                return
+            }
+            if case CloudKitSyncError.reviewRequired(let count) = error {
+                host?.cloudKitSyncDidUpdate(.needsReview(count: count))
                 return
             }
             if case CloudKitSyncError.retryable(_, let delay) = error {
@@ -765,12 +854,12 @@ final class CloudKitJournalSyncCoordinator {
             // be merged. A bounded retry keeps a busy editor from starving the
             // pass; the SQLite candidate guard still rejects a stale merge.
             if attempt < 3, !flushed.data.hasIdenticalContent(to: current.cloudKitJournalData) { continue }
-            try commitClassified(records, classification: classification, token: token, context: context, id: id, gate: gate)
+            try await commitClassified(records, classification: classification, token: token, context: context, id: id, gate: gate)
             return
         }
     }
 
-    private func commitClassified(_ records: [CloudKitSyncRecord], classification: CloudKitPullClassification, token: Data?, context: String, id: UUID, gate: CloudKitPersistenceGate) throws {
+    private func commitClassified(_ records: [CloudKitSyncRecord], classification: CloudKitPullClassification, token: Data?, context: String, id: UUID, gate: CloudKitPersistenceGate) async throws {
         try check(id, gate: gate)
         guard let host else { throw CancellationError() }
         let store = host.cloudKitSQLiteStore
@@ -780,6 +869,7 @@ final class CloudKitJournalSyncCoordinator {
         var applicable: [CloudKitSyncRecord] = []
         var containsNewContent = false
         var changedReceiptIDs: Set<UUID> = []
+        var discoveredConflicts: [(local: CloudKitSyncRecord, remote: CloudKitSyncRecord)] = []
         for remote in records {
             // Earlier, already-accepted mutations can be replayed by a pull.
             // They must not replace a newer accepted value, even when no local
@@ -795,10 +885,8 @@ final class CloudKitJournalSyncCoordinator {
                 } ?? false)
                 let receiptEcho = remote.recordType == "attachment_asset" && classification.receiptEchoKeys.contains(remote.key)
                 if isBaseReplay || isEarlierEcho || receiptEcho || acknowledgedEcho { continue }
-                if try Self.persistConflict(local: local, remote: remote, context: context, store: store, trackChange: !backgroundRequests.isEmpty) {
-                    remoteChangeGeneration &+= 1
-                }
-                throw CloudKitSyncError.service("Both this device and iCloud changed the same item. Review sync conflicts to choose which version to keep.")
+                discoveredConflicts.append((local: local, remote: remote))
+                continue
             }
             if remote.recordType == "ledger", remote.operation == "delete",
                classification.ledgerDeletionsWithPendingDescendants.contains(remote.recordID) {
@@ -812,6 +900,15 @@ final class CloudKitJournalSyncCoordinator {
                 changedReceiptIDs.insert(id)
             }
             applicable.append(remote)
+        }
+        if !discoveredConflicts.isEmpty {
+            let pairs = discoveredConflicts
+            let result = try await database(gate: gate) { store in
+                let changed = try store.saveCloudKitConflicts(pairs, contextKey: context)
+                return (changed, try store.unresolvedCloudKitConflicts(contextKey: context).count)
+            }
+            if result.0 { remoteChangeGeneration &+= 1 }
+            throw CloudKitSyncError.reviewRequired(result.1)
         }
         let previous = host.cloudKitJournalData
         let candidate = try CloudKitJournalMerger.applying(applicable, to: previous)

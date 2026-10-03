@@ -90,6 +90,12 @@
                <Test
                   Identifier = "SharedReceiptEntryTests/testCancelledSharePreviewCannotBecomeARecoveredTransaction()">
                </Test>
+               <Test
+                  Identifier = "SQLiteCloudKitSyncTests/testBatchResolutionAppliesMixedChoicesTogetherAndLeavesUnselectedConflicts()">
+               </Test>
+               <Test
+                  Identifier = "CloudKitJournalSyncTests/testReviewCollectsAllConflictsAndAppliesMixedBatchWithOneFollowUpPass()">
+               </Test>
             </SelectedTests>
          </TestableReference>
       </Testables>

@@ -30,12 +30,16 @@ extension CloudKitSyncTransport {
     /// The native client overrides this with one record fetch.
     func fetchRecord(recordType: String, recordID: String) async throws -> CloudKitSyncRecord {
         var token: Data?
+        var latest: CloudKitSyncRecord?
         while true {
             try Task.checkCancellation()
             let page = try await fetchChanges(since: token)
             try Task.checkCancellation()
-            if let record = page.records.first(where: { $0.recordType == recordType && $0.recordID == recordID }) { return record }
-            guard page.moreComing else { throw CloudKitSyncError.invalidData("The selected iCloud record is no longer available.") }
+            for record in page.records where record.recordType == recordType && record.recordID == recordID { latest = record }
+            if !page.moreComing {
+                guard let latest else { throw CloudKitSyncError.invalidData("The selected iCloud record is no longer available.") }
+                return latest
+            }
             guard let next = page.changeToken, next != token else { throw CloudKitSyncError.invalidData("iCloud returned a non-advancing page.") }
             token = next
         }
@@ -45,11 +49,12 @@ extension CloudKitSyncTransport {
 enum CloudKitSyncError: LocalizedError, Equatable {
     case unavailable(String), accountUnavailable, permissionDenied, quotaExceeded
     case changeTokenExpired, zoneDeleted, invalidData(String)
-    case retryable(String, TimeInterval?), service(String)
+    case retryable(String, TimeInterval?), service(String), reviewRequired(Int)
 
     var errorDescription: String? {
         switch self {
         case .unavailable(let message), .invalidData(let message), .retryable(let message, _), .service(let message): message
+        case .reviewRequired(let count): "\(count) items need review. Your local edits remain saved."
         case .accountUnavailable: "Sign in to iCloud to sync this journal."
         case .permissionDenied: "This app does not have permission to use the configured iCloud container."
         case .quotaExceeded: "iCloud storage is full. Local changes remain queued."

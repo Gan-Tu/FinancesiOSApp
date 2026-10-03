@@ -1538,34 +1538,50 @@ final class SQLiteJournalStore: @unchecked Sendable {
     }
 
     func saveCloudKitConflict(local: CloudKitSyncRecord, remote: CloudKitSyncRecord, contextKey: String) throws {
+        _ = try saveCloudKitConflicts([(local: local, remote: remote)], contextKey: contextKey)
+    }
+
+    /// A pull or upload response records all conflicts in one SQLite transaction.
+    @discardableResult
+    func saveCloudKitConflicts(_ pairs: [(local: CloudKitSyncRecord, remote: CloudKitSyncRecord)], contextKey: String) throws -> Bool {
         try withCloudKitDatabase(contextKey: contextKey) { database in
-            guard local.key == remote.key else { throw cloudKitError("CloudKit conflict record identities differ.") }
-            let localJSON = try encodeCloudKitRecord(local)
-            let remoteJSON = try encodeCloudKitRecord(remote)
-            let known = try readKnownCloudKitRecords(contextKey: contextKey, database: database)[local.key]
-            let duplicate = try rows("SELECT id FROM cloudkit_conflicts WHERE context_key = ? AND local_record = ? AND remote_record = ? AND resolved_at IS NULL", database: database, bindValues: {
-                try bind(contextKey, to: $0, at: 1, database); try bind(localJSON, to: $0, at: 2, database); try bind(remoteJSON, to: $0, at: 3, database)
-            }, map: { columnText($0, 0) }).first ?? nil
-            if let duplicate {
-                // A fresh observation of the same conflict can have a newer
-                // local CAS baseline. Refresh it without changing UI values.
-                try executePrepared("UPDATE cloudkit_conflicts SET known_system_fields = ? WHERE id = ?", database) {
-                    try bindCloudKitBlob(known?.systemFields, to: $0, at: 1, database); try bind(duplicate, to: $0, at: 2, database)
+            let previous = Dictionary(grouping: try readCloudKitConflicts(contextKey: contextKey, database: database), by: { $0.local.key })
+            let changed = pairs.contains { pair in
+                !(previous[pair.local.key] ?? []).contains {
+                    CloudKitJournalMerger.sameValue($0.local, pair.local) && CloudKitJournalMerger.sameValue($0.remote, pair.remote)
                 }
-                return
             }
-            // Keep prior versions as audit, but only one current unresolved
-            // pair per key. Stale dialog IDs then fail instead of retiring a
-            // different local version than the one the user reviewed.
-            try executePrepared("UPDATE cloudkit_conflicts SET resolved_at = ? WHERE context_key = ? AND record_key = ? AND resolved_at IS NULL", database) {
-                try bind(isoString(Date()), to: $0, at: 1, database); try bind(contextKey, to: $0, at: 2, database); try bind(local.key, to: $0, at: 3, database)
+            let knownRecords = try readKnownCloudKitRecords(contextKey: contextKey, database: database)
+            for (local, remote) in pairs {
+                guard local.key == remote.key else { throw cloudKitError("CloudKit conflict record identities differ.") }
+                let localJSON = try encodeCloudKitRecord(local)
+                let remoteJSON = try encodeCloudKitRecord(remote)
+                let known = knownRecords[local.key]
+                let duplicate = try rows("SELECT id FROM cloudkit_conflicts WHERE context_key = ? AND local_record = ? AND remote_record = ? AND resolved_at IS NULL", database: database, bindValues: {
+                    try bind(contextKey, to: $0, at: 1, database); try bind(localJSON, to: $0, at: 2, database); try bind(remoteJSON, to: $0, at: 3, database)
+                }, map: { columnText($0, 0) }).first ?? nil
+                if let duplicate {
+                    // A fresh observation of the same conflict can have a newer
+                    // local CAS baseline. Refresh it without changing UI values.
+                    try executePrepared("UPDATE cloudkit_conflicts SET known_system_fields = ? WHERE id = ?", database) {
+                        try bindCloudKitBlob(known?.systemFields, to: $0, at: 1, database); try bind(duplicate, to: $0, at: 2, database)
+                    }
+                    continue
+                }
+                // Keep prior versions as audit, but only one current unresolved
+                // pair per key. Stale dialog IDs then fail instead of retiring a
+                // different local version than the one the user reviewed.
+                try executePrepared("UPDATE cloudkit_conflicts SET resolved_at = ? WHERE context_key = ? AND record_key = ? AND resolved_at IS NULL", database) {
+                    try bind(isoString(Date()), to: $0, at: 1, database); try bind(contextKey, to: $0, at: 2, database); try bind(local.key, to: $0, at: 3, database)
+                }
+                try executePrepared("INSERT INTO cloudkit_conflicts(id, context_key, record_key, local_record, remote_record, known_system_fields, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", database) {
+                    try bind(UUID().uuidString, to: $0, at: 1, database); try bind(contextKey, to: $0, at: 2, database)
+                    try bind(local.key, to: $0, at: 3, database); try bind(localJSON, to: $0, at: 4, database); try bind(remoteJSON, to: $0, at: 5, database)
+                    try bindCloudKitBlob(known?.systemFields, to: $0, at: 6, database)
+                    try bind(isoString(Date()), to: $0, at: 7, database)
+                }
             }
-            try executePrepared("INSERT INTO cloudkit_conflicts(id, context_key, record_key, local_record, remote_record, known_system_fields, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", database) {
-                try bind(UUID().uuidString, to: $0, at: 1, database); try bind(contextKey, to: $0, at: 2, database)
-                try bind(local.key, to: $0, at: 3, database); try bind(localJSON, to: $0, at: 4, database); try bind(remoteJSON, to: $0, at: 5, database)
-                try bindCloudKitBlob(known?.systemFields, to: $0, at: 6, database)
-                try bind(isoString(Date()), to: $0, at: 7, database)
-            }
+            return changed
         }
     }
 
@@ -1574,40 +1590,70 @@ final class SQLiteJournalStore: @unchecked Sendable {
     }
 
     func resolveCloudKitConflict(id: String, keepLocal: Bool, contextKey: String, data: JournalData, previous: JournalData?, receiptInstallationID: UUID? = nil, assistantReceipt: SQLiteAssistantActionReceipt? = nil) throws {
+        guard let conflict = try unresolvedCloudKitConflicts(contextKey: contextKey).first(where: { $0.id == id }) else {
+            throw cloudKitError("This CloudKit conflict is no longer available.")
+        }
+        try resolveCloudKitConflicts([.init(conflict: conflict, keepLocal: keepLocal)], contextKey: contextKey,
+                                    data: data, previous: previous, strictReview: false, receiptInstallationID: receiptInstallationID, assistantReceipt: assistantReceipt)
+    }
+
+    func resolveCloudKitConflicts(_ choices: [CloudKitConflictResolution], contextKey: String, data: JournalData,
+                                 previous: JournalData?, verifiedRemote: [String: CloudKitSyncRecord] = [:], strictReview: Bool = true, receiptInstallationID: UUID? = nil, assistantReceipt: SQLiteAssistantActionReceipt? = nil) throws {
+        guard !choices.isEmpty, Set(choices.map { $0.conflict.local.key }).count == choices.count else {
+            throw cloudKitError("Choose each conflict once before applying.")
+        }
         try withCloudKitDatabase(contextKey: contextKey) { database in
-            guard let conflict = try readCloudKitConflicts(contextKey: contextKey, database: database).first(where: { $0.id == id }) else { throw cloudKitError("This CloudKit conflict is no longer available.") }
-            let originalKnown = try rows("SELECT known_system_fields FROM cloudkit_conflicts WHERE id = ? AND context_key = ?", database: database, bindValues: {
-                try bind(id, to: $0, at: 1, database); try bind(contextKey, to: $0, at: 2, database)
-            }, map: { columnData($0, 0) }).first ?? nil
-            let known = try readKnownCloudKitRecords(contextKey: contextKey, database: database)[conflict.local.key]
-            guard known?.systemFields == originalKnown || known?.systemFields == conflict.remote.systemFields else {
-                throw cloudKitError("This conflict has changed since it was shown. Refresh before resolving it.")
-            }
+            let conflicts = Dictionary(uniqueKeysWithValues: try readCloudKitConflicts(contextKey: contextKey, database: database).map { ($0.id, $0) })
+            let known = try readKnownCloudKitRecords(contextKey: contextKey, database: database)
+            let outbox = try readCloudKitOutbox(database: database)
+            let pending = try readPendingCloudKitRecords(contextKey: contextKey, database: database)
             var retire = Set<String>()
-            if !keepLocal, let localID = conflict.local.clientChangeID,
-               let durable = try readCloudKitOutbox(database: database).first(where: { $0.clientChangeID == localID }),
-               durable.key == conflict.local.key, durable.operation == conflict.local.operation,
-               durable.contentHash == conflict.local.contentHash, durable.payloadJSON == conflict.local.payloadJSON {
-                retire.insert(localID)
+            for choice in choices {
+                let id = choice.conflict.id
+                guard let conflict = conflicts[id], conflict == choice.conflict else {
+                    throw cloudKitError("A selected conflict changed. Review its latest versions before applying.")
+                }
+                if let fresh = verifiedRemote[conflict.local.key], !CloudKitJournalMerger.sameValue(fresh, conflict.remote) {
+                    throw cloudKitError("The verified iCloud version differs from the selected review.")
+                }
+                if strictReview, let local = pending[conflict.local.key] ?? known[conflict.local.key],
+                   !CloudKitJournalMerger.sameValue(local, conflict.local) {
+                    throw cloudKitError("A selected item changed on this device. Review it again before applying.")
+                }
+                let originalKnown = try rows("SELECT known_system_fields FROM cloudkit_conflicts WHERE id = ? AND context_key = ?", database: database, bindValues: {
+                    try bind(id, to: $0, at: 1, database); try bind(contextKey, to: $0, at: 2, database)
+                }, map: { columnData($0, 0) }).first ?? nil
+                guard known[conflict.local.key]?.systemFields == originalKnown || known[conflict.local.key]?.systemFields == conflict.remote.systemFields else {
+                    throw cloudKitError("This conflict has changed since it was shown. Refresh before resolving it.")
+                }
+                if !choice.keepLocal, let localID = conflict.local.clientChangeID,
+                   let durable = outbox.first(where: { $0.clientChangeID == localID }),
+                   durable.key == conflict.local.key, durable.operation == conflict.local.operation,
+                   durable.contentHash == conflict.local.contentHash, durable.payloadJSON == conflict.local.payloadJSON {
+                    retire.insert(localID)
+                }
             }
+            // Validate the combined candidate before any selected choice is committed.
             try guardCloudKitCandidate(data, contextKey: contextKey, ignoringClientIDs: retire, database: database)
-            try persistCloudKitDomain(data, previous: previous, records: [conflict.remote], database: database)
+            try persistCloudKitDomain(data, previous: previous, records: choices.map { verifiedRemote[$0.conflict.local.key] ?? $0.conflict.remote }, database: database)
             for localID in retire {
                 try executePrepared("DELETE FROM sync_outbox WHERE client_change_id = ?", database) { try bind(localID, to: $0, at: 1, database) }
             }
-            try writeKnownCloudKitRecord(conflict.remote, contextKey: contextKey, database: database)
-            if keepLocal {
-                let outstanding = try readCloudKitOutbox(database: database).contains { $0.key == conflict.local.key }
-                if !outstanding {
-                    let current = try currentCloudKitRecords(database: database).first { $0.key == conflict.local.key } ?? conflict.local
-                    try enqueueCloudKitRecord(current, database: database)
+            for choice in choices {
+                let conflict = choice.conflict
+                let remote = verifiedRemote[conflict.local.key] ?? conflict.remote
+                try writeKnownCloudKitRecord(remote, contextKey: contextKey, database: database)
+                if choice.keepLocal {
+                    if !(try readCloudKitOutbox(database: database).contains { $0.key == conflict.local.key }) {
+                        let value = try strictReview ? conflict.local : (currentCloudKitRecords(database: database).first { $0.key == conflict.local.key } ?? conflict.local)
+                        try enqueueCloudKitRecord(value, database: database)
+                    }
+                } else { try markCloudKitReceiptStored(remote, database: database) }
+                try executePrepared("UPDATE cloudkit_conflicts SET resolved_at = ? WHERE id = ? AND context_key = ?", database) {
+                    try bind(isoString(Date()), to: $0, at: 1, database); try bind(conflict.id, to: $0, at: 2, database); try bind(contextKey, to: $0, at: 3, database)
                 }
-            } else {
-                try markCloudKitReceiptStored(conflict.remote, database: database)
             }
-            try executePrepared("UPDATE cloudkit_conflicts SET resolved_at = ? WHERE id = ? AND context_key = ?", database) {
-                try bind(isoString(Date()), to: $0, at: 1, database); try bind(id, to: $0, at: 2, database); try bind(contextKey, to: $0, at: 3, database)
-            }
+
             if let receiptInstallationID { try markReceiptInstallationCommitted(receiptInstallationID, database: database) }
             if let receipt = assistantReceipt {
                 try ensureAssistantSchema(database)

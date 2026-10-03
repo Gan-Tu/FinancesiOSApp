@@ -21,7 +21,8 @@
 ## Xcode Cloud Usage Budget
 
 - Keep the `FinancesiOS` release scheme limited to its small smoke-test selection. Do not add UI audits, performance sweeps, or large-file stress tests to routine TestFlight builds without Gan's request.
-- Preserve the complete suite in `FinancesiOSFullTests`. Use `scripts/test.sh` for full or targeted local regression checks and `scripts/test.sh --smoke` for the exact cloud selection.
+- Keep routine CI and local verification focused on core, current user behavior. `scripts/test.sh` runs the curated core selection; `scripts/test.sh --smoke` reproduces the exact cloud selection. Explicit `-only-testing:` arguments run only the requested regressions.
+- Preserve useful broader coverage in `FinancesiOSFullTests`, available through `scripts/test.sh --full`. Heavy UI audits, stress tests, and performance sweeps are opt-in locally. Remove obsolete implementation assumptions only when the intended behavior has changed; retain regression assertions that protect the corrected behavior.
 - Reducing cloud coverage is an intentional cost limit, not permission to ignore a failure. Run the smoke suite and the relevant local regressions before pushing, and fix failures first.
 
 ## Agent Skills

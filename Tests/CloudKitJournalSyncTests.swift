@@ -300,7 +300,7 @@ final class CloudKitJournalSyncTests: XCTestCase {
             }
             fixture.coordinator.synchronize(reportProgress: false)
             try await settled(fixture)
-            XCTAssertEqual(fixture.host.progress.state, .failed, producesConflict ? "Background conflict" : "Background quota")
+            XCTAssertEqual(fixture.host.progress.state, producesConflict ? .needsReview : .failed, producesConflict ? "Background conflict" : "Background quota")
             XCTAssertFalse(fixture.host.progress.detail?.isEmpty ?? true)
             XCTAssertNil(fixture.host.failure, "Background errors should not invoke the modal failure callback")
             XCTAssertEqual(fixture.host.modalFailureCount, 0)
@@ -429,6 +429,39 @@ final class CloudKitJournalSyncTests: XCTestCase {
         XCTAssertNil(first.host.failure)
     }
 
+    func testReviewCollectsAllConflictsAndAppliesMixedBatchWithOneFollowUpPass() async throws {
+        let server = try CKJournalTestServer()
+        let first = try fixture(server: server, transactionCount: 2)
+        first.enable(); try await settled(first)
+        let second = try fixture(server: server, empty: true)
+        second.enable(); try await settled(second)
+        for index in 0..<2 {
+            first.host.data.transactions[index].note = "Cloud \(index)"
+            second.host.data.transactions[index].note = "Device \(index)"
+        }
+        try first.host.cloudKitFlushLocalChanges(); try second.host.cloudKitFlushLocalChanges()
+        first.coordinator.synchronize(); try await settled(first)
+        let checkpoint = try second.host.sqlite.cloudKitChangeToken(contextKey: context)
+        second.coordinator.synchronize(); try await settled(second)
+        let conflicts = try second.coordinator.conflicts()
+        XCTAssertEqual(conflicts.count, 2)
+        XCTAssertEqual(second.host.progress.state, .needsReview)
+        XCTAssertEqual(second.host.modalFailureCount, 0)
+        XCTAssertEqual(try second.host.sqlite.cloudKitChangeToken(contextKey: context), checkpoint)
+        let remoteID = second.host.data.transactions[0].id.uuidString
+        let localID = second.host.data.transactions[1].id
+        let expectedRemote = try JSONDecoder.appDecoder.decode(LedgerTransaction.self, from: Data(try XCTUnwrap(conflicts.first { $0.local.recordID == remoteID }?.remote.payloadJSON).utf8)).note
+        let choices = conflicts.map { CloudKitConflictResolution(conflict: $0, keepLocal: $0.local.recordID != remoteID) }
+        let fetches = second.network.calls.filter { $0.kind == .fetch }.count
+        try await second.coordinator.resolveConflicts(choices)
+        try await settled(second)
+        XCTAssertTrue(try second.coordinator.conflicts().isEmpty)
+        XCTAssertEqual(second.host.data.transactions.first { $0.id.uuidString == remoteID }?.note, expectedRemote)
+        XCTAssertEqual(second.host.data.transactions.first { $0.id == localID }?.note, "Device 1")
+        XCTAssertEqual(second.host.progress.state, .succeeded)
+        XCTAssertEqual(second.network.calls.filter { $0.kind == .fetch }.count, fetches + choices.count + 1, "Fixture transports revalidate each choice through their value-only fetch fallback, followed by one ordinary sync pass")
+    }
+
     func testConcurrentEditsPreserveLocalAndStoreRemoteConflict() async throws {
         let server = try CKJournalTestServer()
         let first = try fixture(server: server)
@@ -447,7 +480,8 @@ final class CloudKitJournalSyncTests: XCTestCase {
         XCTAssertEqual(conflicts.count, 1)
         XCTAssertEqual(try JSONDecoder.appDecoder.decode(LedgerTransaction.self, from: Data(try XCTUnwrap(conflicts.first?.remote.payloadJSON).utf8)).note, "First Mac edit")
         XCTAssertFalse(try second.host.sqlite.pendingCloudKitRecords(contextKey: context).isEmpty)
-        XCTAssertNotNil(second.host.failure)
+        XCTAssertEqual(second.host.progress.state, .needsReview)
+        XCTAssertNil(second.host.failure)
     }
 
     func testExpiredTokenRetriesOnceFromNilAndCommitsCompleteReplacement() async throws {
@@ -1110,6 +1144,10 @@ private final class CKJournalHost: CloudKitJournalSyncHost {
     }
     func cloudKitCommitConflictResolution(id: String, keepLocal: Bool, data: JournalData, contextKey: String, receiptInstallationID: UUID?) throws {
         throw CloudKitSyncError.service("Conflict choice is outside this host fixture's scope")
+    }
+    func cloudKitCommitConflictResolutions(_ choices: [CloudKitConflictResolution], data candidate: JournalData, contextKey: String, verifiedRemote: [String: CloudKitSyncRecord], receiptInstallationID: UUID?) throws {
+        try sqlite.resolveCloudKitConflicts(choices, contextKey: contextKey, data: candidate, previous: baseline, verifiedRemote: verifiedRemote, receiptInstallationID: receiptInstallationID)
+        data = candidate; baseline = candidate
     }
     func cloudKitAttachmentURL(for asset: AttachmentAsset) throws -> URL {
         let path = asset.storedPath

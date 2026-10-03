@@ -54,6 +54,15 @@ for identifier in selected:
     assert method.endswith('()')
     source = (root / 'Tests' / (test_class + '.swift')).read_text()
     assert re.search(r'\bfunc\s+' + re.escape(method[:-2]) + r'\s*\(', source), identifier
+core = [line.strip() for line in (root / 'scripts/core-tests.txt').read_text().splitlines()
+        if line.strip() and not line.lstrip().startswith('#')]
+assert 20 <= len(core) <= 40 and len(core) == len(set(core))
+assert set(selected).issubset(core), 'Local core checks must include every cloud smoke check'
+for identifier in core:
+    test_class, method = identifier.split('/')
+    assert method.endswith('()')
+    source = (root / 'Tests' / (test_class + '.swift')).read_text()
+    assert re.search(r'\bfunc\s+' + re.escape(method[:-2]) + r'\s*\(', source), identifier
 full = ET.parse(schemes / 'FinancesiOSFullTests.xcscheme').getroot()
 full_targets = full.findall('./TestAction/Testables/TestableReference')
 assert not full.findall('./TestAction/TestPlans/TestPlanReference')

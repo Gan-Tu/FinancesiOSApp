@@ -275,6 +275,8 @@ schemes:
         - SharedReceiptProviderTests/testUnsavedEditedScreenshotBytesSurviveProviderAndInboxRecreation()
         - SharedTransactionTests/testSavePersistsCompleteDraftAndReceiptThenImportsExactlyOnce()
         - SharedReceiptEntryTests/testCancelledSharePreviewCannotBecomeARecoveredTransaction()
+        - SQLiteCloudKitSyncTests/testBatchResolutionAppliesMixedChoicesTogetherAndLeavesUnselectedConflicts()
+        - CloudKitJournalSyncTests/testReviewCollectsAllConflictsAndAppliesMixedBatchWithOneFollowUpPass()
   FinancesiOSFullTests:
     build:
       targets:

@@ -8,7 +8,7 @@ The independent repository is [Gan-Tu/FinancesiOSApp](https://github.com/Gan-Tu/
 
 - Primary repository `https://github.com/Gan-Tu/FinancesiOSApp.git` and project `FinancesiOS.xcodeproj`.
 - Branch Changes on `main`, triggered by any changed file; superseded runs may be canceled.
-- Required smoke tests using scheme `FinancesiOS`: 13 selected, app-hosted unit tests covering arithmetic, balances, transaction validation, split preservation, recurring-edit policy, backup round trips, Keychain, create-once saves, and shared receipts.
+- Required smoke tests using scheme `FinancesiOS`: 15 selected, app-hosted unit tests covering arithmetic, balances, transaction validation, split preservation, recurring-edit policy, backup round trips, Keychain, create-once saves, shared receipts, and mixed batch conflict resolution.
 - An iOS archive prepared for App Store Connect, using Apple-managed signing.
 - TestFlight Internal Testing delivery to **Internal Testing** (`dab76ac6-fee0-4017-9348-8287ff48c3b9`).
 
@@ -16,7 +16,7 @@ The iOS Cloud product is **DD1BB18D-ED95-4E32-A428-D109B0906D51**, separate from
 
 The owner-requested Hotmail tester was invited to Internal Testing and build **1.0.0 (100)** was assigned. The Gmail tester remains in external **Personal Beta**; build100 replaced build3 in Apple's beta-review queue with automatic notification enabled. Internal builds do not require that external review. Accept the TestFlight invitation with the corresponding Apple Account.
 
-Xcode Cloud runs the small smoke suite, release signing, and upload. Routine TestFlight builds exclude the long UI audit, performance benchmarks, and large-file stress tests to conserve the monthly compute allowance. The complete unit/UI suite remains in `FinancesiOSFullTests`: use `scripts/test.sh` locally, or `scripts/test.sh --smoke` to reproduce the cloud selection. The project preflight rejects an empty or oversized smoke selection and ensures the full local suite remains available.
+Xcode Cloud runs the small smoke suite, release signing, and upload. Routine TestFlight builds exclude the long UI audit, performance benchmarks, and large-file stress tests to conserve the monthly compute allowance. Local `scripts/test.sh` defaults to 33 core behavior checks. The complete unit/UI suite remains in `FinancesiOSFullTests`: use `scripts/test.sh --full` for broader coverage, explicit `-only-testing:` arguments for changed areas, or `scripts/test.sh --smoke` to reproduce the cloud selection. The project preflight rejects an empty or oversized smoke selection and ensures the full local suite remains available.
 
 The duplicate GitHub Actions workflow was removed. No GitHub signing secrets or App Store Connect API key are required. `TestFlight/WhatToTest.en-US.txt` supplies testing guidance for future Cloud releases.
 

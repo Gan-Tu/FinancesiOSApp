@@ -1317,6 +1317,8 @@ struct FinanceSyncTitle: View {
             syncState.progress.phase.title
         case .succeeded:
             "Up to date"
+        case .needsReview:
+            syncState.progress.message
         case .failed:
             "Sync failed"
         }
@@ -1782,63 +1784,19 @@ struct MobileCloudSyncSheet: View {
 
 struct MobileCloudSyncConflictsSection: View {
     @EnvironmentObject private var store: MobileLedgerStore
-    @EnvironmentObject private var syncState: MobileCloudSyncState
+    @State private var showingReview = false
 
     var body: some View {
-        if !store.cloudSyncConflicts.isEmpty {
-            Section("Needs Review") {
-                ForEach(store.cloudSyncConflicts, id: \.id) { conflict in
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(title(for: conflict.local))
-                            .font(.headline)
-                        Text("This item changed on this device and in iCloud. Choose the version to keep.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                        LabeledContent("This Device", value: summary(for: conflict.local))
-                        LabeledContent("iCloud", value: summary(for: conflict.remote))
-                        HStack {
-                            Button("Keep This Device") {
-                                store.resolveCloudKitSyncConflict(id: conflict.id, keepLocal: true)
-                            }
-                            Button("Use iCloud") {
-                                store.resolveCloudKitSyncConflict(id: conflict.id, keepLocal: false)
-                            }
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(syncState.progress.isRunning)
-                    }
-                    .padding(.vertical, 4)
-                }
+        Section {
+            if !store.cloudSyncConflicts.isEmpty {
+                Button("Review \(store.cloudSyncConflicts.count) Conflicts…") { showingReview = true }
+                Text("Choose several versions, then apply and sync together.").font(.footnote).foregroundStyle(.secondary)
             }
-            .onAppear { store.refreshCloudSyncConflicts() }
-        }
-    }
-
-    private func title(for record: CloudKitSyncRecord) -> String {
-        values(for: record).first ?? record.recordType.replacingOccurrences(of: "_", with: " ").capitalized
-    }
-
-    private func summary(for record: CloudKitSyncRecord) -> String {
-        if record.operation == "delete" { return "Deleted" }
-        var fields = values(for: record)
-        if record.recordType == "transaction",
-           let json = record.payloadJSON?.data(using: .utf8),
-           let transaction = try? JSONDecoder.appDecoder.decode(LedgerTransaction.self, from: json) {
-            fields += transaction.postings.map { posting in
-                let account = store.account(posting.accountID)
-                let symbol = store.symbol(for: posting.commodityID ?? account?.commodityID)
-                return "\(account?.name ?? "Account"): \(moneyString(posting.amount, symbol: symbol))"
-            }
-        }
-        return fields.isEmpty ? "Updated" : fields.joined(separator: " · ")
-    }
-
-    private func values(for record: CloudKitSyncRecord) -> [String] {
-        guard let json = record.payloadJSON?.data(using: .utf8),
-              let fields = try? JSONSerialization.jsonObject(with: json) as? [String: Any] else { return [] }
-        return ["name", "symbol", "payee", "note", "date"].compactMap { key in
-            guard let value = fields[key] as? String, !value.isEmpty else { return nil }
-            return value
+        } header: { if !store.cloudSyncConflicts.isEmpty { Text("Needs Review") } }
+        .onAppear { store.refreshCloudSyncConflicts() }
+        .fullScreenCover(isPresented: $showingReview) {
+            CloudSyncConflictReview(conflicts: store.cloudSyncConflicts, data: store.data,
+                onApply: store.resolveCloudKitSyncConflicts, onRefresh: store.refreshCloudSyncConflicts)
         }
     }
 }

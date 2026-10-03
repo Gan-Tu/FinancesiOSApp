@@ -360,6 +360,7 @@ struct CloudSyncManagementView: View {
         case .idle: store.data.syncEnabled ? "Ready to Sync" : "Sync Disabled"
         case .running: syncState.progress.phase.title
         case .succeeded: "Up to date"
+        case .needsReview: syncState.progress.message
         case .failed: "Sync failed"
         }
     }
@@ -610,6 +611,8 @@ struct FinancesForMacView: View {
             syncState.progress.message.isEmpty ? "Synchronizing" : syncState.progress.message
         case .succeeded:
             "Up to date"
+        case .needsReview:
+            syncState.progress.message
         case .failed:
             syncState.progress.message.isEmpty ? "Sync failed" : syncState.progress.message
         }
@@ -617,6 +620,8 @@ struct FinancesForMacView: View {
 
     private var syncStatusIcon: String {
         switch syncState.progress.state {
+        case .needsReview:
+            "exclamationmark.bubble"
         case .failed:
             "icloud.slash"
         case .running:
@@ -628,6 +633,8 @@ struct FinancesForMacView: View {
 
     private var syncStatusColor: Color {
         switch syncState.progress.state {
+        case .needsReview:
+            .orange
         case .failed:
             .red
         case .running:

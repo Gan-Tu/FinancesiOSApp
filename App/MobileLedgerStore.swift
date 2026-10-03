@@ -3217,6 +3217,13 @@ final class MobileLedgerStore: ObservableObject {
 
     func refreshCloudSyncConflicts() { refreshCloudSyncDataAvailability() }
 
+    func resolveCloudKitSyncConflicts(_ choices: [CloudKitConflictResolution]) async throws {
+        guard allowJournalMutation() else { throw ValidationError(message: "The journal is not available for editing.") }
+        do { try await cloudSyncCoordinator.resolveConflicts(choices) }
+        catch { refreshCloudSyncConflicts(); throw error }
+        refreshCloudSyncConflicts()
+    }
+
     func resolveCloudKitSyncConflict(id: String, keepLocal: Bool) {
         do {
             // The shared resolver cancels the active pass before inspecting and
@@ -4183,6 +4190,47 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
         let suggestionJournals = changedSuggestionJournals(in: candidate.transactions)
         data = candidate
         refreshDerivedCache()
+        refreshHistoricalTextSuggestions(in: suggestionJournals)
+        receiptContentRevisions.invalidateAll()
+        refreshUnlockStateForLoadedData(previousSecurity: previousSecurity)
+        reloadDeletedTransactionTombstones()
+        refreshCloudSyncDataAvailability()
+    }
+
+    func cloudKitCommitConflictResolutions(
+        _ choices: [CloudKitConflictResolution],
+        data candidate: JournalData,
+        contextKey: String,
+        verifiedRemote: [String: CloudKitSyncRecord],
+        receiptInstallationID: UUID? = nil
+    ) throws {
+        try cloudKitFlushLocalChanges()
+        try cloudKitValidate(candidate)
+        let databaseURL = sqliteStore.databaseURL
+        let baseline = persistenceBaseline
+        let supportDirectory = supportDirectory
+        sealPendingDeferredWrite()
+        try Self.deferredPersistenceQueue.sync {
+            do {
+                let previous = baseline.snapshot
+                try SQLiteJournalStore(databaseURL: databaseURL).resolveCloudKitConflicts(
+                    choices,
+                    contextKey: contextKey,
+                    data: candidate,
+                    previous: baseline.snapshot,
+                    verifiedRemote: verifiedRemote,
+                    receiptInstallationID: receiptInstallationID
+                )
+                baseline.snapshot = candidate
+                Self.removeObsoleteAttachmentFiles(supportDirectory: supportDirectory, previous: previous, data: candidate)
+            } catch {
+                baseline.snapshot = nil
+                throw error
+            }
+        }
+        let previousSecurity = data.security
+        let suggestionJournals = changedSuggestionJournals(in: candidate.transactions)
+        if !data.hasIdenticalContent(to: candidate) { data = candidate; refreshDerivedCache() }
         refreshHistoricalTextSuggestions(in: suggestionJournals)
         receiptContentRevisions.invalidateAll()
         refreshUnlockStateForLoadedData(previousSecurity: previousSecurity)

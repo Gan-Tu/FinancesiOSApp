@@ -33,10 +33,11 @@ Registers open near today with future entries reachable above. An enabled chart 
 ```sh
 scripts/test.sh --smoke
 scripts/test.sh
+scripts/test.sh --full
 scripts/archive.sh CODE_SIGNING_ALLOWED=NO
 ```
 
-The smoke command runs the same 13 fast unit checks used by Xcode Cloud. The default test command runs all unit and UI tests; pass `-only-testing:FinancesiOSUITests/ClassName/testName` for a targeted local run. The archive command verifies a Release archive without uploading or producing a distributable signature. Build/test outputs stay in ignored `build/`. Tests select an available iPhone by UDID, preferring iPhone 17 Pro Max on an installed iOS runtime. Set `SIMULATOR_DESTINATION` to override that selection. Simulator tests use ad hoc signing so Keychain and App Group access work without a developer certificate.
+The smoke command runs the same 15 fast unit checks used by Xcode Cloud. The default test command runs 33 core behavior checks covering durable edits, balances, backups, receipts, mocked assistant actions, and conflict resolution. Use `--full` for the complete unit/UI suite, including optional stress and performance coverage; pass `-only-testing:FinancesiOSUITests/ClassName/testName` for a targeted local run. The archive command verifies a Release archive without uploading or producing a distributable signature. Build/test outputs stay in ignored `build/`. Tests select an available iPhone by UDID, preferring iPhone 17 Pro Max on an installed iOS runtime. Set `SIMULATOR_DESTINATION` to override that selection. Simulator tests use ad hoc signing so Keychain and App Group access work without a developer certificate.
 
 For a local demonstration, add `--demo --reset-demo` to the scheme’s launch arguments. This creates synthetic data in a separate temporary directory and blocks CloudKit. Remove both arguments for normal use. The demo code is excluded from Release.
 
@@ -44,7 +45,7 @@ For a local demonstration, add `--demo --reset-demo` to the scheme’s launch ar
 
 ## Distribution
 
-Source lives at [Gan-Tu/FinancesiOSApp](https://github.com/Gan-Tu/FinancesiOSApp). Every push to `main` starts the **Finances v2 iOS Release** Xcode Cloud workflow: 13 smoke checks, a signed archive, and delivery to the **Internal Testing** group. The long UI audit and stress tests run locally through **FinancesiOSFullTests** to conserve Xcode Cloud hours. See [Release Setup](docs/RELEASE.md) for the workflow and tester details.
+Source lives at [Gan-Tu/FinancesiOSApp](https://github.com/Gan-Tu/FinancesiOSApp). Every push to `main` starts the **Finances v2 iOS Release** Xcode Cloud workflow: 15 smoke checks, a signed archive, and delivery to the **Internal Testing** group. The long UI audit and stress tests run locally through **FinancesiOSFullTests** to conserve Xcode Cloud hours. See [Release Setup](docs/RELEASE.md) for the workflow and tester details.
 
 See [UI reference and parity](docs/UI_REFERENCE.md), [CloudKit compatibility](docs/CLOUDKIT.md), [verification](docs/VERIFICATION.md), and [source provenance](docs/SOURCE_PROVENANCE.md).
 
