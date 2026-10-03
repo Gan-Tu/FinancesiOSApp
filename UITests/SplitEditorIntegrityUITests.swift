@@ -161,6 +161,26 @@ final class SplitEditorIntegrityUITests: XCTestCase {
         try assertLegs(app, [leg(20, 2, -100), leg(21, 2, 90), leg(22, 2, 10)])
     }
 
+    func testSavedNegativeAmountAcceptsSubtractionAfterNormalTap() throws {
+        let app = XCUIApplication(); defer { app.terminate() }
+        launch(app); open(app, transaction: 103)
+        removeFee(app)
+        enter("-24.99", into: fields(app).element(boundBy: 0))
+        dismissKeyboard(app)
+        save(app); reload(app, transaction: 103)
+
+        let amount = fields(app).element(boundBy: 0)
+        amount.tap()
+        app.buttons["amount-key-−"].tap()
+        XCTAssertEqual(amount.value as? String, "-24.99-", "A normal tap should continue the saved amount")
+        app.typeText("2"); app.buttons["amount-key-="].tap()
+        let expected = [leg(20, 2, Decimal(-2699) / 100), leg(21, 2, Decimal(2699) / 100)]
+        try assertLegs(app, expected)
+        dismissKeyboard(app)
+        save(app); reload(app, transaction: 103)
+        try assertLegs(app, expected)
+    }
+
     func testSwipeDeletesMiddleAccountAndPersistsRemainingPostings() throws {
         let app = XCUIApplication(); defer { app.terminate() }
         launch(app); open(app, transaction: 103)

@@ -51,6 +51,32 @@ final class ShareTransactionUITests: XCTestCase {
         XCTAssertFalse(app.navigationBars["New Transaction"].exists)
     }
 
+    func testRefocusedNegativeAmountAcceptsSubtraction() {
+        let app = launchShare()
+        let baseline = Int(app.staticTexts["share-qa-transaction-count"].label.split(separator: " ").first!)!
+        openExtension(app)
+        let amount = app.textFields["shared-transaction-amount-0"]
+        XCTAssertTrue(amount.waitForExistence(timeout: 10))
+        amount.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        amount.typeText("24.99")
+        XCTAssertEqual(amount.value as? String, "-24.99")
+        // Exercise refocusing without depending on the system share host's
+        // keyboard toolbar, which is not exposed in this UI test.
+        app.buttons["transaction-date-toggle"].tap()
+        app.buttons["transaction-date-toggle"].tap()
+
+        amount.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        amount.typeText("-2")
+        XCTAssertEqual(amount.value as? String, "-24.99-2")
+        XCTAssertEqual(app.textFields["shared-transaction-amount-1"].value as? String, "26.99")
+        app.buttons["receipt-share-save"].tap()
+        assertReturnedToHost(app)
+        let saved = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "\(baseline + 1) transactions"), object: app.staticTexts["share-qa-transaction-count"])
+        XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 10), .completed)
+    }
+
     func testSwipeDeletesFocusedSplitPostingAndSavesRemainingAccounts() {
         let app = launchShare()
         let baseline = Int(app.staticTexts["share-qa-transaction-count"].label.split(separator: " ").first!)!

@@ -232,6 +232,7 @@ final class AmountEntryTests: XCTestCase {
         let window = UIWindow(windowScene: scene)
         window.rootViewController = UIViewController()
         let field = UITextField(frame: CGRect(x: 20, y: 100, width: 240, height: 44))
+        field.keyboardType = .decimalPad
         window.rootViewController?.view.addSubview(field)
         window.makeKeyAndVisible()
         defer {
@@ -279,6 +280,21 @@ final class AmountEntryTests: XCTestCase {
         AmountKeyboardInput.insertOperator("+")
         XCTAssertEqual(field.text, "1+3", "An operator replaces selected text, rather than appending")
         XCTAssertEqual(changes.lastText, "1+3")
+
+        field.text = "-24.99"
+        try select(0)
+        AmountKeyboardInput.moveToEndOnFocus()
+        AmountKeyboardInput.insertOperator("−")
+        field.insertText("2")
+        XCTAssertEqual(field.text, "-24.99-2", "Focus should prepare an existing negative amount for arithmetic")
+        XCTAssertEqual(changes.lastText, "-24.99-2")
+        XCTAssertEqual(decimalFromInput(field.text ?? ""), Decimal(string: "-26.99"))
+
+        field.text = "123"
+        try select(1, length: 1)
+        AmountKeyboardInput.moveToEndOnFocus()
+        AmountKeyboardInput.insertOperator("+")
+        XCTAssertEqual(field.text, "1+3", "Focus must preserve explicit text selection")
     }
 }
 

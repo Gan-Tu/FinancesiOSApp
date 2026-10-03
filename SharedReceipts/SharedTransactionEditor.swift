@@ -284,7 +284,7 @@ private enum ShareAmountKeyboard {
         field?.sendActions(for: .editingChanged)
     }
 }
-/// Keep the caret after the initial minus sign without using UIApplication
+/// Start amount editing at the end without using UIApplication
 /// (which is unavailable inside a share extension).
 private struct ShareAmountField: UIViewRepresentable {
     @Binding var text: String
@@ -332,7 +332,7 @@ private struct ShareAmountField: UIViewRepresentable {
             ShareAmountKeyboard.field = field
             parent.focused = true
             DispatchQueue.main.async { [weak field] in
-                guard let field, field.isFirstResponder, field.text == "-" else { return }
+                guard let field, field.isFirstResponder, field.selectedTextRange?.isEmpty == true else { return }
                 field.selectedTextRange = field.textRange(from: field.endOfDocument, to: field.endOfDocument)
             }
         }

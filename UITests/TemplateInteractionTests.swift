@@ -165,6 +165,47 @@ final class TemplateInteractionTests: XCTestCase {
         XCTAssertEqual(amounts.element(boundBy: 1).value as? String, "5.00")
     }
 
+    func testSubtractingFromNegativeAmountAfterCalculationAndRefocus() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        defer { app.terminate() }
+        app.launchArguments = ["--demo", "--reset-demo"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Journals"].waitForExistence(timeout: 10))
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Personal,")).firstMatch.tap()
+        app.buttons["New Transaction"].tap(); app.buttons["Expense"].tap(); app.chooseTemplateAccount()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        let amounts = app.textFields.matching(NSPredicate(format: "label BEGINSWITH %@", "Amount for"))
+        let amount = amounts.firstMatch
+        app.typeText("24.99")
+        XCTAssertEqual(amount.value as? String, "-24.99")
+        app.buttons["amount-key-−"].tap()
+        XCTAssertEqual(amount.value as? String, "-24.99-", "A leading minus must not prevent subtraction")
+        app.typeText("2"); app.buttons["amount-key-="].tap()
+        XCTAssertEqual(amount.value as? String, "-26.99")
+        XCTAssertEqual(amounts.element(boundBy: 1).value as? String, "26.99")
+
+        app.buttons["amount-key-±"].tap()
+        app.buttons["amount-key-±"].tap()
+        XCTAssertEqual(amount.value as? String, "-26.99")
+        app.buttons["amount-key-−"].tap()
+        XCTAssertEqual(amount.value as? String, "-26.99-", "Sign changes must leave the caret ready to continue arithmetic")
+        app.typeText("2"); app.buttons["amount-key-="].tap()
+        XCTAssertEqual(amount.value as? String, "-28.99")
+        app.buttons["amount-key-−"].tap()
+        XCTAssertEqual(amount.value as? String, "-28.99-", "Calculation must leave the caret ready to continue arithmetic")
+        app.typeText("2"); app.buttons["amount-key-="].tap()
+        XCTAssertEqual(amount.value as? String, "-30.99")
+
+        app.buttons["Done"].tap()
+        amount.tap()
+        app.buttons["amount-key-−"].tap()
+        XCTAssertEqual(amount.value as? String, "-30.99-")
+        app.typeText("2"); app.buttons["amount-key-="].tap()
+        XCTAssertEqual(amount.value as? String, "-32.99")
+        XCTAssertEqual(amounts.element(boundBy: 1).value as? String, "32.99")
+    }
+
     func testInvoiceTemplateRequestsReceiptScanning() throws {
         #if !targetEnvironment(simulator)
         throw XCTSkip("Physical camera capture requires an intentionally positioned test receipt.")

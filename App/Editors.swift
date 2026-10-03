@@ -34,6 +34,10 @@ enum AmountKeyboardInput {
         UIApplication.shared.sendAction(#selector(UIResponder.moveAfterLoneAmountSign), to: nil, from: nil, for: nil)
     }
 
+    static func moveToEndOnFocus() {
+        UIApplication.shared.sendAction(#selector(UIResponder.moveToEndOfAmountOnFocus), to: nil, from: nil, for: nil)
+    }
+
     static func togglingSign(of text: String) -> String? {
         switch text.trimmingCharacters(in: .whitespacesAndNewlines) {
         case "": return "-"
@@ -44,6 +48,12 @@ enum AmountKeyboardInput {
 }
 
 extension UIResponder {
+    @objc fileprivate func moveToEndOfAmountOnFocus() {
+        guard let field = self as? UITextField, field.keyboardType == .decimalPad,
+              field.selectedTextRange?.isEmpty == true else { return }
+        field.selectedTextRange = field.textRange(from: field.endOfDocument, to: field.endOfDocument)
+    }
+
     @objc fileprivate func moveAfterLoneAmountSign() {
         guard let field = self as? UITextField, field.text == "-", field.selectedTextRange?.isEmpty == true else { return }
         field.selectedTextRange = field.textRange(from: field.endOfDocument, to: field.endOfDocument)
@@ -333,6 +343,12 @@ struct TransactionEditorView: View {
             focusedField = draft.postings.first.map { .amount($0.id) }
         }
         .onChange(of: focusedField) { _, field in
+            if case .amount = field {
+                // The first tap can land before an existing negative amount.
+                // Start at the end so calculator keys continue that amount;
+                // taps while already focused still position the caret normally.
+                DispatchQueue.main.async { AmountKeyboardInput.moveToEndOnFocus() }
+            }
             if field != nil && showingDatePicker {
                 withAnimation(FinanceMotion.disclosure(reduceMotion: reduceMotion)) {
                     showingDatePicker = false
