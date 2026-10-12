@@ -656,7 +656,7 @@ private final class ReceiptSessionObservers {
             "commodities": commodities.filter { $0.ledgerID == ledgerID }.map {
                 ["id": $0.id.uuidString, "symbol": $0.symbol, "name": $0.name]
             },
-            "model": settings.model, "effort": settings.effort, "instructions": settings.instructions,
+            "model": settings.model, "effort": settings.effort, "speed": settings.speed, "instructions": settings.instructions,
             "draft": [
                 "date": formatter.string(from: draft.date), "payee": draft.payee, "note": draft.note,
                 "number": draft.number, "postings": postings,

@@ -140,7 +140,7 @@ private actor PreferencesTestCloud: CloudKitSyncTransport {
         let record = try value.record(previous: nil)
         XCTAssertEqual(try ReceiptPreferences.decode(record), value)
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(record.payloadJSON!.utf8)) as? [String: Any])
-        XCTAssertEqual(Set(object.keys), Set(["id", "version", "model", "effort", "instructions"]))
+        XCTAssertEqual(Set(object.keys), Set(["id", "version", "model", "effort", "speed", "instructions"]))
         let codec = CloudKitSyncRecordCodec(zoneID: CKRecordZone.ID(zoneName: ReceiptPreferences.zone, ownerName: CKCurrentUserDefaultName))
         XCTAssertNoThrow(try codec.recordID(type: ReceiptPreferences.domain, id: ReceiptPreferences.recordID))
         XCTAssertThrowsError(try codec.recordID(type: "account", id: ReceiptPreferences.recordID))
@@ -175,7 +175,7 @@ private actor PreferencesTestCloud: CloudKitSyncTransport {
         await a.refresh(); await b.refresh()
         try edit(a, model: "gpt-6-astra"); try edit(b, effort: "none")
         await a.refresh(); await b.refresh()
-        XCTAssertEqual(b.conflicts, ["Model and reasoning effort"])
+        XCTAssertEqual(b.conflicts, ["Model, reasoning effort and speed"])
         let oldRemote = b.remote
         try edit(a, effort: "high"); await a.refresh(); await b.refresh()
         XCTAssertThrowsError(try b.resolve(keepLocal: true, expectedLocal: b.value, expectedRemote: oldRemote))

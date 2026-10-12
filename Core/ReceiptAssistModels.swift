@@ -85,6 +85,7 @@ struct ReceiptAISettings: Codable, Equatable, Sendable {
     #endif
     var model = "gpt-5.6-terra"
     var effort = "medium"
+    var speed = "fast"
     var instructions = ""
     static let models = ["gpt-6.1-sol", "gpt-5.6-terra", "gpt-6-luna", "gpt-6-astra"]
     /// Preserve the selected tier when restoring settings from older model versions.
@@ -94,6 +95,15 @@ struct ReceiptAISettings: Codable, Equatable, Sendable {
         case "gpt-5.6-luna": return "gpt-6-luna"
         default: return model
         }
+    }
+    // https://developers.openai.com/api/docs/guides/ultrafast-mode
+    static func speeds(for model: String) -> [String] {
+        ["gpt-6.1-sol", "gpt-6-astra"].contains(upgradeModel(model))
+            ? ["standard", "fast", "ultrafast"] : ["standard", "fast"]
+    }
+    var speeds: [String] { Self.speeds(for: model) }
+    static func speedLabel(_ speed: String) -> String {
+        speed == "fast" ? "Fast (default)" : speed.capitalized
     }
     var efforts: [String] {
         (model == "gpt-6-astra" ? [] : ["none"]) + ["low", "medium", "high", "xhigh", "max"]
@@ -117,6 +127,7 @@ extension ReceiptAISettings {
         endpoint = try values.decode(String.self, forKey: .endpoint)
         model = Self.upgradeModel(try values.decode(String.self, forKey: .model))
         effort = try values.decode(String.self, forKey: .effort)
+        speed = try values.decodeIfPresent(String.self, forKey: .speed) ?? "fast"
         instructions = try values.decode(String.self, forKey: .instructions)
     }
 }

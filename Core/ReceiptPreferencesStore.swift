@@ -11,16 +11,17 @@ struct ReceiptPreferences: Codable, Equatable, Sendable {
     var version = 1
     var model = "gpt-5.6-terra"
     var effort = "medium"
+    var speed = "fast"
     var instructions = ""
 
     init() {}
     init(_ settings: ReceiptAISettings) {
-        model = settings.model; effort = settings.effort; instructions = settings.instructions
+        model = settings.model; effort = settings.effort; speed = settings.speed; instructions = settings.instructions
     }
     func validate() throws {
         let efforts = (model == "gpt-6-astra" ? [] : ["none"]) + ["low", "medium", "high", "xhigh", "max"]
         guard id == Self.recordID, version == 1, ReceiptAISettings.models.contains(model),
-              efforts.contains(effort), instructions.utf8.count <= 100_000 else {
+              efforts.contains(effort), ReceiptAISettings.speeds(for: model).contains(speed), instructions.utf8.count <= 100_000 else {
             throw AssistError.message("Invalid receipt AI settings.")
         }
     }
@@ -49,13 +50,13 @@ struct ReceiptPreferences: Codable, Equatable, Sendable {
     static func merge(base: Self, local: Self, remote: Self) -> (value: Self, conflicts: [String]) {
         var value = remote
         var conflicts: [String] = []
-        let localPairChanged = local.model != base.model || local.effort != base.effort
-        let remotePairChanged = remote.model != base.model || remote.effort != base.effort
+        let localPairChanged = local.model != base.model || local.effort != base.effort || local.speed != base.speed
+        let remotePairChanged = remote.model != base.model || remote.effort != base.effort || remote.speed != base.speed
         if localPairChanged {
-            if remotePairChanged && (local.model != remote.model || local.effort != remote.effort) {
-                conflicts.append("Model and reasoning effort")
+            if remotePairChanged && (local.model != remote.model || local.effort != remote.effort || local.speed != remote.speed) {
+                conflicts.append("Model, reasoning effort and speed")
             }
-            value.model = local.model; value.effort = local.effort
+            value.model = local.model; value.effort = local.effort; value.speed = local.speed
         }
         if local.instructions != base.instructions {
             if remote.instructions != base.instructions && local.instructions != remote.instructions {
@@ -68,7 +69,7 @@ struct ReceiptPreferences: Codable, Equatable, Sendable {
 }
 
 /// Preferences use their own account-scoped outbox and zone. Journal snapshots and
-/// old clients cannot overwrite them. Model/effort form one atomic merge field.
+/// old clients cannot overwrite them. Model/effort/speed form one atomic merge field.
 @MainActor final class ReceiptPreferencesStore: ObservableObject {
     static let shared = ReceiptPreferencesStore()
     struct Pending: Codable { var value: ReceiptPreferences; var base: CloudKitSyncRecord? }
@@ -110,7 +111,7 @@ struct ReceiptPreferences: Codable, Equatable, Sendable {
     }
     var settings: ReceiptAISettings {
         var result = ReceiptAISettings.load()
-        result.model = value.model; result.effort = value.effort; result.instructions = value.instructions
+        result.model = value.model; result.effort = value.effort; result.speed = value.speed; result.instructions = value.instructions
         return result
     }
     func disconnect() {
@@ -188,7 +189,7 @@ struct ReceiptPreferences: Codable, Equatable, Sendable {
         }
         var merged = ReceiptPreferences.merge(base: try ReceiptPreferences.decode(pending.base), local: pending.value, remote: remote)
         if !keepLocal {
-            if merged.conflicts.contains("Model and reasoning effort") { merged.value.model = remote.model; merged.value.effort = remote.effort }
+            if merged.conflicts.contains("Model, reasoning effort and speed") { merged.value.model = remote.model; merged.value.effort = remote.effort; merged.value.speed = remote.speed }
             if merged.conflicts.contains("Custom instructions") { merged.value.instructions = remote.instructions }
         }
         let before = cache
@@ -273,6 +274,7 @@ extension ReceiptPreferences {
         version = try values.decode(Int.self, forKey: .version)
         model = ReceiptAISettings.upgradeModel(try values.decode(String.self, forKey: .model))
         effort = try values.decode(String.self, forKey: .effort)
+        speed = try values.decodeIfPresent(String.self, forKey: .speed) ?? "fast"
         instructions = try values.decode(String.self, forKey: .instructions)
     }
 }

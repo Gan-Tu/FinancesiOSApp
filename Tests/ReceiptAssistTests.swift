@@ -34,6 +34,43 @@ private actor AssistTestTransport: CloudKitSyncTransport {
     nonisolated func cancel() {}
 }
 @MainActor final class ReceiptAssistTests: XCTestCase {
+    func testSpeedDefaultsLegacyDecodingAndModelSupport() throws {
+        var settings = ReceiptAISettings()
+        XCTAssertEqual(settings.speed, "fast")
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(settings)) as? [String: Any])
+        legacy.removeValue(forKey: "speed")
+        let restored = try JSONDecoder().decode(ReceiptAISettings.self, from: JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertEqual(restored.speed, "fast")
+        XCTAssertEqual(restored.model, settings.model)
+        for model in ReceiptAISettings.models {
+            settings.model = model
+            for speed in ["standard", "fast", "ultrafast"] {
+                settings.speed = speed
+                let supported = speed != "ultrafast" || ["gpt-6.1-sol", "gpt-6-astra"].contains(model)
+                XCTAssertEqual(settings.speeds.contains(speed), supported)
+                if supported {
+                    let preferences = ReceiptPreferences(settings)
+                    XCTAssertEqual(try ReceiptPreferences.decode(preferences.record(previous: nil)), preferences)
+                } else { XCTAssertThrowsError(try ReceiptPreferences(settings).validate()) }
+            }
+        }
+        var oldCloud = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(ReceiptPreferences())) as? [String: Any])
+        oldCloud.removeValue(forKey: "speed")
+        XCTAssertEqual(try JSONDecoder().decode(ReceiptPreferences.self, from: JSONSerialization.data(withJSONObject: oldCloud)).speed, "fast")
+    }
+
+    func testSpeedAndModelMergeAtomicallyWithIndependentInstructions() throws {
+        var base = ReceiptPreferences(); base.model = "gpt-6.1-sol"
+        var local = base; local.speed = "ultrafast"
+        var remote = base; remote.model = "gpt-6-luna"; remote.instructions = "Remote notes"
+        let merged = ReceiptPreferences.merge(base: base, local: local, remote: remote)
+        XCTAssertEqual(merged.conflicts, ["Model, reasoning effort and speed"])
+        XCTAssertEqual(merged.value.model, local.model)
+        XCTAssertEqual(merged.value.speed, "ultrafast")
+        XCTAssertEqual(merged.value.instructions, remote.instructions)
+        XCTAssertNoThrow(try merged.value.validate())
+    }
+
     func testLegacySolAndLunaSettingsUpgradeWithoutLosingPreferences() throws {
         for (old, current) in [("gpt-5.6-sol", "gpt-6.1-sol"), ("gpt-6-sol", "gpt-6.1-sol"), ("gpt-5.6-luna", "gpt-6-luna")] {
             var legacy = ReceiptAISettings()

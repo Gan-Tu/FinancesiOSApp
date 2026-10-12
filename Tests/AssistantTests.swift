@@ -5,6 +5,30 @@ import UIKit
 
 @MainActor
 final class AssistantTests: XCTestCase {
+    func testSpeedPersistsInConversationAndPreferencesWithLegacyFastDefault() throws {
+        let settings = AssistantSettings(model: "gpt-6.1-sol", effort: "high", speed: "ultrafast", customInstructions: "Keep this")
+        let encoded = try JSONEncoder().encode(settings)
+        XCTAssertEqual(try JSONDecoder().decode(AssistantSettings.self, from: encoded), settings)
+        let preferences = AssistantPreferences(settings)
+        XCTAssertEqual(try AssistantPreferences.decode(preferences.record(previous: nil)), preferences)
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        legacy.removeValue(forKey: "speed")
+        let restored = try JSONDecoder().decode(AssistantSettings.self, from: JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertEqual(restored.speed, "fast")
+        XCTAssertEqual(restored.model, settings.model)
+        XCTAssertEqual(restored.effort, settings.effort)
+        XCTAssertThrowsError(try AssistantPreferences(AssistantSettings(model: "gpt-6-luna", speed: "ultrafast")).validate())
+        var oldCloud = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(preferences)) as? [String: Any])
+        oldCloud.removeValue(forKey: "speed")
+        XCTAssertEqual(try JSONDecoder().decode(AssistantPreferences.self, from: JSONSerialization.data(withJSONObject: oldCloud)).speed, "fast")
+        var remote = preferences; remote.model = "gpt-6-luna"; remote.speed = "fast"
+        var base = preferences; base.speed = "fast"
+        let merged = AssistantPreferences.merge(base: base, local: preferences, remote: remote)
+        XCTAssertEqual(merged.conflicts, ["Model, reasoning effort and speed"])
+        XCTAssertEqual(merged.value.speed, "ultrafast")
+        XCTAssertNoThrow(try merged.value.validate())
+    }
+
     func testLegacyConversationAndCloudSettingsUpgradeModelOnly() throws {
         for (old, current) in [("gpt-5.6-sol", "gpt-6.1-sol"), ("gpt-6-sol", "gpt-6.1-sol"), ("gpt-5.6-luna", "gpt-6-luna")] {
             let legacy = AssistantSettings(model: old, effort: "max", customInstructions: "Keep my preferences")

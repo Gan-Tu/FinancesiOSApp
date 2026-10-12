@@ -24,6 +24,7 @@ struct AssistantSettings: Codable, Equatable, Sendable {
     static let models: [AssistantModelChoice] = (try? AssistantContract.load().models) ?? []
     var model = "gpt-5.6-terra"
     var effort = "medium"
+    var speed = "fast"
     var customInstructions = ""
 }
 
@@ -32,6 +33,7 @@ extension AssistantSettings {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         model = ReceiptAISettings.upgradeModel(try values.decode(String.self, forKey: .model))
         effort = try values.decode(String.self, forKey: .effort)
+        speed = try values.decodeIfPresent(String.self, forKey: .speed) ?? "fast"
         customInstructions = try values.decode(String.self, forKey: .customInstructions)
     }
 }

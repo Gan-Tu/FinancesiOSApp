@@ -337,6 +337,7 @@ struct AssistantPreferencesView: View {
                     var next = draft; next.model = model
                     let efforts = AssistantSettings.models.first { $0.id == model }?.efforts ?? []
                     if !efforts.contains(next.effort) { next.effort = efforts.contains("medium") ? "medium" : efforts.first ?? "low" }
+                    if !ReceiptAISettings.speeds(for: model).contains(next.speed) { next.speed = "fast" }
                     save(next)
                 })) {
                     ForEach(AssistantSettings.models) { Text($0.label).tag($0.id) }
@@ -344,6 +345,11 @@ struct AssistantPreferencesView: View {
                 Picker("Reasoning", selection: Binding(get: { draft.effort }, set: { var next = draft; next.effort = $0; save(next) })) {
                     ForEach(AssistantSettings.models.first { $0.id == draft.model }?.efforts ?? [draft.effort], id: \.self) { Text($0.capitalized).tag($0) }
                 }
+                Picker("Speed", selection: Binding(get: { draft.speed }, set: { var next = draft; next.speed = $0; save(next) })) {
+                    ForEach(ReceiptAISettings.speeds(for: draft.model), id: \.self) { Text(ReceiptAISettings.speedLabel($0)).tag($0) }
+                }
+                Text("Faster speeds may cost more. If unavailable, requests fall back to a slower speed.")
+                    .font(.caption).foregroundStyle(.secondary)
             }.disabled(!preferences.ready || !preferences.conflicts.isEmpty)
             Section {
                 TextEditor(text: Binding(get: { draft.customInstructions }, set: { var next = draft; next.customInstructions = $0; save(next) }))
@@ -358,9 +364,9 @@ struct AssistantPreferencesView: View {
                 let local = preferences.value, remote = preferences.remote
                 Section("Settings Changed on Both Devices") {
                     Text(preferences.conflicts.joined(separator: ", "))
-                    LabeledContent("This iPhone", value: "\(local.model) · \(local.effort)")
+                    LabeledContent("This iPhone", value: "\(local.model) · \(local.effort) · \(local.speed)")
                     Text(local.instructions.isEmpty ? "No custom instructions" : local.instructions).font(.footnote)
-                    LabeledContent("iCloud", value: "\(remote.model) · \(remote.effort)")
+                    LabeledContent("iCloud", value: "\(remote.model) · \(remote.effort) · \(remote.speed)")
                     Text(remote.instructions.isEmpty ? "No custom instructions" : remote.instructions).font(.footnote)
                     Button("Keep This iPhone") { resolve(true, local: local, remote: remote) }
                     Button("Use iCloud") { resolve(false, local: local, remote: remote) }

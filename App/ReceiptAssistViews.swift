@@ -189,6 +189,15 @@ struct ReceiptAISettingsView: View {
                     ForEach(settings.efforts, id: \.self) { Text($0.capitalized).tag($0) }
                 }.labelsHidden().disabled(!preferences.ready || !preferences.conflicts.isEmpty)
             }
+            HStack {
+                Text("Speed")
+                Spacer()
+                Picker("Speed", selection: $settings.speed) {
+                    ForEach(settings.speeds, id: \.self) { Text(ReceiptAISettings.speedLabel($0)).tag($0) }
+                }.labelsHidden().disabled(!preferences.ready || !preferences.conflicts.isEmpty)
+            }
+            Text("Faster speeds may cost more. If unavailable, requests fall back to a slower speed.")
+                .font(.caption).foregroundStyle(.secondary)
             Text("Additional instructions").font(.subheadline)
             TextEditor(text: $settings.instructions).frame(minHeight: 70, maxHeight: 100).overlay(
                 RoundedRectangle(cornerRadius: 4).stroke(.quaternary))
@@ -197,9 +206,9 @@ struct ReceiptAISettingsView: View {
                 .font(.caption).foregroundStyle(.secondary)
             if !preferences.conflicts.isEmpty {
                 Text("Changed on this device and in iCloud: " + preferences.conflicts.joined(separator: ", ")).font(.caption)
-                Text("This device: \(preferences.value.model) · \(preferences.value.effort)").font(.caption)
+                Text("This device: \(preferences.value.model) · \(preferences.value.effort) · \(preferences.value.speed)").font(.caption)
                 Text(preferences.value.instructions.isEmpty ? "No custom instructions" : preferences.value.instructions).font(.caption)
-                Text("iCloud: \(preferences.remote.model) · \(preferences.remote.effort)").font(.caption)
+                Text("iCloud: \(preferences.remote.model) · \(preferences.remote.effort) · \(preferences.remote.speed)").font(.caption)
                 Text(preferences.remote.instructions.isEmpty ? "No custom instructions" : preferences.remote.instructions).font(.caption)
                 HStack {
                     Button("Keep This Device") { resolveSettings(keepLocal: true) }
@@ -252,6 +261,7 @@ struct ReceiptAISettingsView: View {
         }
         .onChange(of: settings) { previous, value in
             if !value.efforts.contains(value.effort) { settings.effort = "medium" }
+            if !settings.speeds.contains(settings.speed) { settings.speed = "fast" }
             settings.save()
             do {
                 if ReceiptPreferences(settings) != preferences.value {
@@ -260,7 +270,7 @@ struct ReceiptAISettingsView: View {
             } catch { self.error = error.localizedDescription }
         }
         .onReceive(preferences.$value) { value in
-            settings.model = value.model; settings.effort = value.effort; settings.instructions = value.instructions
+            settings.model = value.model; settings.effort = value.effort; settings.speed = value.speed; settings.instructions = value.instructions
         }
         .task { await preferences.refresh() }
         .task(id: settings.endpoint) {

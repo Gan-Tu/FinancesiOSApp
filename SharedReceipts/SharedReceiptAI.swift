@@ -101,7 +101,7 @@ struct SharedReceiptAISection: View {
                 }
             }
             if let settings = catalog.receiptAI?.settings {
-                Text("\(settings.model) · \(settings.effort)").font(.caption).foregroundStyle(.secondary)
+                Text("\(settings.model) · \(settings.effort) · \(settings.speed)").font(.caption).foregroundStyle(.secondary)
             }
             if let proposal {
                 ForEach(replacements) { field in
