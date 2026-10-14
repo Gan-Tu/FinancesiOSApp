@@ -20,7 +20,14 @@ final class AssistantMockGateway: AssistantGatewayProtocol {
         let request = lastUser.map { items[$0]["text"].string ?? "" } ?? ""
         let results = lastUser.map { Array(items.dropFirst($0 + 1)).filter { $0["type"].string == "tool_result" } } ?? []
         let response: String
-        if request.contains("MID_TURN_STEER_OK") {
+        if request.contains("MOCK_TABLE_REPLY") {
+            response = """
+            | Category | Amount |
+            |:---|---:|
+            | Coffee | $5.50 |
+            | Lunch | $12.00 |
+            """
+        } else if request.contains("MID_TURN_STEER_OK") {
             response = "MID_TURN_STEER_OK"
         } else if request.contains("MOCK_SLOW_REPLY") {
             try receive(AssistantStepEvent(type: "text_delta", text: "Mock reply in progress…"))

@@ -4,6 +4,46 @@ import XCTest
 /// No test may request real inference or require an API key.
 @MainActor
 final class AssistantInteractionTests: XCTestCase {
+    func testTableSelectionCopiesAcrossCellsAndRows() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--demo", "--mock-ai"]
+        app.launch()
+        let open = app.buttons["assistant.open"]
+        XCTAssertTrue(open.waitForExistence(timeout: 10)); open.tap()
+        let consent = app.buttons["assistant.consent"]
+        if consent.waitForExistence(timeout: 2) { consent.tap() }
+        app.buttons["Assistant Options"].tap(); app.buttons["New Chat"].tap()
+        let composer = app.textFields["assistant.composer"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        composer.tap(); composer.typeText("MOCK_TABLE_REPLY")
+        app.buttons["assistant.send"].tap()
+        let table = app.webViews.firstMatch
+        let category = table.staticTexts["Category"]
+        XCTAssertTrue(category.waitForExistence(timeout: 15), app.debugDescription)
+        category.press(forDuration: 1.2)
+        XCTAssertTrue(app.menuItems["Copy"].waitForExistence(timeout: 5))
+        // Extend the native selection handle from the header through the last
+        // cell, crossing both column and row boundaries. Move below the last
+        // row because iOS keeps the selection caret above the dragging finger.
+        let lastCell = table.staticTexts["$12.00"]
+        category.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 1))
+            .withOffset(CGVector(dx: 0, dy: 5))
+            .press(forDuration: 0.1, thenDragTo: lastCell.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 1))
+                .withOffset(CGVector(dx: 4, dy: 50)), withVelocity: .slow, thenHoldForDuration: 1)
+        let expandedSelection = XCTAttachment(screenshot: app.screenshot())
+        expandedSelection.name = "Selection across table rows"; expandedSelection.lifetime = .keepAlways; add(expandedSelection)
+        let copy = app.menuItems["Copy"]
+        XCTAssertTrue(copy.waitForExistence(timeout: 5)); copy.tap()
+        composer.press(forDuration: 1.2)
+        let paste = app.menuItems["Paste"]
+        XCTAssertTrue(paste.waitForExistence(timeout: 5), app.debugDescription); paste.tap()
+        let pasted = try XCTUnwrap(composer.value as? String)
+        for value in ["Category", "Amount", "Coffee", "$5.50", "Lunch", "$12.00"] {
+            XCTAssertTrue(pasted.contains(value), "Missing copied cell: \(value); pasted: \(pasted)")
+        }
+    }
+
     func testDictationReviewsAndEditsTextBeforeSendingAndCanCancel() throws {
         continueAfterFailure = false
         let app = XCUIApplication()

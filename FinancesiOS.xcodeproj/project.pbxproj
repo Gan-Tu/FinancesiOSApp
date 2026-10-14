@@ -84,7 +84,7 @@
 		68DA50FBF3FFB87F94C6820F /* CloudKitRecurrenceConsistencyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CC17DE372AAEEF3CABB3531 /* CloudKitRecurrenceConsistencyTests.swift */; };
 		692404D6102A4B913D3854D4 /* IncomingCaptureCurrencyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11F684E49866EF7F9D34DC23 /* IncomingCaptureCurrencyTests.swift */; };
 		6C09B14E857D47D8F2585AD1 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = C3FE4DE9349447E40CA9A063 /* PrivacyInfo.xcprivacy */; };
-		6C8B0DFAC243D08238935C87 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 5AFE5B861B06CC23242E7B41 /* ZIPFoundation */; };
+		6C8B0DFAC243D08238935C87 /* cmark-gfm in Frameworks */ = {isa = PBXBuildFile; productRef = 60CE33672CEDBFEB7BAFA8C5 /* cmark-gfm */; };
 		6D9A7D460AFD412EAA0FBBA0 /* AsyncRecurrencePersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 600C8341210C80036086F4C1 /* AsyncRecurrencePersistenceTests.swift */; };
 		70FB4B7AE61BC0925F27E2ED /* AccountColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = E452C9FB3990874ED22CE41B /* AccountColors.swift */; };
 		72112E529D976720A45E9888 /* AmountExpressionEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D2918BF16A82E35047FA336 /* AmountExpressionEvaluator.swift */; };
@@ -119,6 +119,7 @@
 		962591F40C74001F176EC895 /* AssistantToolFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC6D2400CBE07051817D7997 /* AssistantToolFiles.swift */; };
 		98BA9271C60694888714887D /* CloudKitReceiptRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F186776890C6D747654EC41 /* CloudKitReceiptRecoveryTests.swift */; };
 		98D0253E54F5E52239219687 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8885C60EBEBC5C0A6714F69 /* ShareViewController.swift */; };
+		999A0773B7B98F64F7FCF9B1 /* cmark-gfm-extensions in Frameworks */ = {isa = PBXBuildFile; productRef = CD8414BFFDD14C6565A51CA6 /* cmark-gfm-extensions */; };
 		9D8763CD408C677A7AE81A2F /* ReceiptAssistInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4793209158CCE46D49E89DA /* ReceiptAssistInteractionTests.swift */; };
 		9DEB4E32629508EC4554F457 /* IncomingCaptureCurrency.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3D6C28192481A825906CC2A /* IncomingCaptureCurrency.swift */; };
 		9EF442A7D8E1781D105C0181 /* CloudKitReceiptFileTransaction.swift in Sources */ = {isa = PBXBuildFile; fileRef = E856660F3F681796EACC4F13 /* CloudKitReceiptFileTransaction.swift */; };
@@ -151,6 +152,7 @@
 		BC2CFEC2B20AEFEC03B23F02 /* BackupArchiveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D5403346BB22199DDE0FB93 /* BackupArchiveTests.swift */; };
 		BF90E29FF5A6F00F664E3265 /* AccountMovePlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19F24D00A92B6D0791D7A981 /* AccountMovePlan.swift */; };
 		C246CDB777BB1CFCA76F34C3 /* SplitTransactionPersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1FE3DE5514FEA9ED9E3E096 /* SplitTransactionPersistenceTests.swift */; };
+		C36451EF1DEF7CF616E62355 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 5AFE5B861B06CC23242E7B41 /* ZIPFoundation */; };
 		C3C1FBF76AFE2FA56CE79FF4 /* CloudKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08BF3F396D78651E71F52BE0 /* CloudKit.framework */; };
 		C5ADF8CB6D5A38D3FB95D432 /* CompanionParityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BF5FDC8D25578E85C46179B /* CompanionParityTests.swift */; };
 		C9D53A33CB74648F452FE833 /* HistoricalTextSuggestionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC2E67AF8B95C25562C34B4C /* HistoricalTextSuggestionUITests.swift */; };
@@ -426,7 +428,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				8F977A0B4310795829EBD5A5 /* MarkdownUI in Frameworks */,
-				6C8B0DFAC243D08238935C87 /* ZIPFoundation in Frameworks */,
+				6C8B0DFAC243D08238935C87 /* cmark-gfm in Frameworks */,
+				999A0773B7B98F64F7FCF9B1 /* cmark-gfm-extensions in Frameworks */,
+				C36451EF1DEF7CF616E62355 /* ZIPFoundation in Frameworks */,
 				1F649B78D9BF9D8140ADE4DC /* libsqlite3.tbd in Frameworks */,
 				C3C1FBF76AFE2FA56CE79FF4 /* CloudKit.framework in Frameworks */,
 			);
@@ -752,6 +756,8 @@
 			name = FinancesiOS;
 			packageProductDependencies = (
 				536CDF6E407CB169EB3AC214 /* MarkdownUI */,
+				60CE33672CEDBFEB7BAFA8C5 /* cmark-gfm */,
+				CD8414BFFDD14C6565A51CA6 /* cmark-gfm-extensions */,
 				5AFE5B861B06CC23242E7B41 /* ZIPFoundation */,
 			);
 			productName = FinancesiOS;
@@ -823,6 +829,7 @@
 			packageReferences = (
 				9D1BC7D1BF462A0FD450DB75 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */,
 				710371976F9CCFE8C959A800 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
+				23F8635514C9A49CE0954691 /* XCRemoteSwiftPackageReference "swift-cmark" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = ACC5B2497D75CBF3ECF0ECDB /* Products */;
@@ -1422,6 +1429,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		23F8635514C9A49CE0954691 /* XCRemoteSwiftPackageReference "swift-cmark" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/swiftlang/swift-cmark";
+			requirement = {
+				kind = exactVersion;
+				version = 0.8.0;
+			};
+		};
 		710371976F9CCFE8C959A800 /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/weichsel/ZIPFoundation.git";
@@ -1455,6 +1470,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 710371976F9CCFE8C959A800 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
 			productName = ZIPFoundation;
+		};
+		60CE33672CEDBFEB7BAFA8C5 /* cmark-gfm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 23F8635514C9A49CE0954691 /* XCRemoteSwiftPackageReference "swift-cmark" */;
+			productName = "cmark-gfm";
+		};
+		CD8414BFFDD14C6565A51CA6 /* cmark-gfm-extensions */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 23F8635514C9A49CE0954691 /* XCRemoteSwiftPackageReference "swift-cmark" */;
+			productName = "cmark-gfm-extensions";
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

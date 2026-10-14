@@ -10,6 +10,9 @@ packages:
   MarkdownUI:
     url: https://github.com/gonzalezreal/swift-markdown-ui.git
     exactVersion: 2.4.1
+  cmark:
+    url: https://github.com/swiftlang/swift-cmark
+    exactVersion: 0.8.0
   ZIPFoundation:
     url: https://github.com/weichsel/ZIPFoundation.git
     exactVersion: 0.9.20
@@ -164,6 +167,10 @@ targets:
     - target: FinancesShareExtension
       embed: true
     - package: MarkdownUI
+    - package: cmark
+      product: cmark-gfm
+    - package: cmark
+      product: cmark-gfm-extensions
     - package: ZIPFoundation
     - sdk: libsqlite3.tbd
     - sdk: CloudKit.framework
