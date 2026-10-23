@@ -9,25 +9,16 @@ struct SettingsView: View {
     @State private var confirmingCurrencyDelete: Commodity?
     @State private var editorRoute: EditorRoute?
     @AppStorage(JournalVisibility.preferenceKey, store: MobileDisplayPreferences.defaults) private var hiddenJournalIDs = ""
-    @AppStorage("FinancesClone.autocomplete.timeBoost") private var autocompleteTimeBoost = true
-    @AppStorage("FinancesClone.templates.suggestions") private var showSuggestedTemplates = true
     private var visibility: JournalVisibility { JournalVisibility(rawValue: hiddenJournalIDs) }
 
     var body: some View {
         NavigationStack {
             List {
                 Section {
-                    Toggle("Show frequent transactions in Add menu", isOn: $showSuggestedTemplates)
-                    Toggle("Boost suggestions by weekday and time", isOn: $autocompleteTimeBoost)
-                        .onChange(of: autocompleteTimeBoost) { _, _ in store.historicalTextSuggestions.invalidateAll() }
-                } header: { Text("Autocomplete") } footer: {
-                    Text("Prioritize payees and notes you use around this time of the week.")
-                }
-                Section {
                     NavigationLink { SystemIntegrationsSettingsView() } label: {
                         SettingsIconLabel(title: "Quick Entry & Shortcuts", systemImage: "bolt.fill", tint: .orange)
                     }
-                    NavigationLink { CaptureSuggestionsView() } label: {
+                    NavigationLink { SuggestionsSettingsView() } label: {
                         SettingsIconLabel(title: "Suggestions", systemImage: "tray", tint: .blue)
                     }
                 }
@@ -827,5 +818,35 @@ struct CloudSyncSettingsView: View {
                 }
             }
         }
+    }
+}
+
+private struct SuggestionsSettingsView: View {
+    @EnvironmentObject private var store: MobileLedgerStore
+    @AppStorage("FinancesClone.autocomplete.timeBoost") private var autocompleteTimeBoost = true
+    @AppStorage("FinancesClone.templates.suggestions") private var showSuggestedTemplates = true
+
+    var body: some View {
+        List {
+            Section {
+                Toggle("Boost suggestions by weekday and time", isOn: $autocompleteTimeBoost)
+                    .onChange(of: autocompleteTimeBoost) { _, _ in
+                        store.historicalTextSuggestions.invalidateAll()
+                    }
+            } header: {
+                Text("Autocomplete")
+            } footer: {
+                Text("Prioritize payees and notes you use around this time of the week.")
+            }
+            Section {
+                Toggle("Show frequent transactions in Add menu", isOn: $showSuggestedTemplates)
+            } header: {
+                Text("Suggested Templates")
+            } footer: {
+                Text("Suggest transactions used at least five times in roughly the last two months on the same weekday and hour.")
+            }
+        }
+        .navigationTitle("Suggestions")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
