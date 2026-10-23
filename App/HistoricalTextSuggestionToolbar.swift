@@ -2,6 +2,7 @@ import SwiftUI
 
 /// A single keyboard accessory row; never inserts content into the editor form.
 struct HistoricalTextSuggestionToolbar: View {
+    @AppStorage("FinancesClone.autocomplete.timeBoost") private var timeBoost = true
     @ObservedObject var cache: HistoricalTextSuggestionCache
     let data: JournalData
     let ledgerID: UUID
@@ -15,13 +16,14 @@ struct HistoricalTextSuggestionToolbar: View {
         let field: HistoricalTextSuggestionField
         let query: String
         let revision: UInt64
+        let timeBoost: Bool
     }
     @State private var loadedRequest: Request?
     @State private var suggestions: [HistoricalTextSuggestion] = []
     @State private var activeLoadID = UUID()
 
     private var request: Request {
-        Request(ledgerID: ledgerID, field: field, query: query, revision: cache.revision)
+        Request(ledgerID: ledgerID, field: field, query: query, revision: cache.revision, timeBoost: timeBoost)
     }
 
     var body: some View {

@@ -9,11 +9,20 @@ struct SettingsView: View {
     @State private var confirmingCurrencyDelete: Commodity?
     @State private var editorRoute: EditorRoute?
     @AppStorage(JournalVisibility.preferenceKey, store: MobileDisplayPreferences.defaults) private var hiddenJournalIDs = ""
+    @AppStorage("FinancesClone.autocomplete.timeBoost") private var autocompleteTimeBoost = true
+    @AppStorage("FinancesClone.templates.suggestions") private var showSuggestedTemplates = true
     private var visibility: JournalVisibility { JournalVisibility(rawValue: hiddenJournalIDs) }
 
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    Toggle("Show frequent transactions in Add menu", isOn: $showSuggestedTemplates)
+                    Toggle("Boost suggestions by weekday and time", isOn: $autocompleteTimeBoost)
+                        .onChange(of: autocompleteTimeBoost) { _, _ in store.historicalTextSuggestions.invalidateAll() }
+                } header: { Text("Autocomplete") } footer: {
+                    Text("Prioritize payees and notes you use around this time of the week.")
+                }
                 Section {
                     NavigationLink { SystemIntegrationsSettingsView() } label: {
                         SettingsIconLabel(title: "Quick Entry & Shortcuts", systemImage: "bolt.fill", tint: .orange)

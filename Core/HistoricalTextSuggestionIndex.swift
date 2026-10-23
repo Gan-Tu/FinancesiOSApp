@@ -15,6 +15,7 @@ struct HistoricalTextSuggestion: Equatable, Sendable {
 /// visit logarithmic key ranges and rank-tree nodes, never the transaction list.
 struct HistoricalTextSuggestionIndex: Sendable {
     private static let foldingLocale = Locale(identifier: "en_US_POSIX")
+    let timeBoostEnabled: Bool
     let asOf: Date
     /// The next instant at which a nonblank historical value becomes eligible.
     let nextFutureTransactionDate: Date?
@@ -23,12 +24,24 @@ struct HistoricalTextSuggestionIndex: Sendable {
     var distinctValueCount: Int { buckets.values.reduce(0) { $0 + $1.entries.count } }
     var rankTreeSlotCount: Int { buckets.values.reduce(0) { $0 + $1.tree.count } }
 
-    init(transactions: [LedgerTransaction], asOf: Date) {
-        self.init(transactions: transactions, asOf: asOf, checkCancellation: {})
+    init(transactions: [LedgerTransaction], asOf: Date, timeBoost: Bool = false, calendar: Calendar = .current) {
+        self.init(transactions: transactions, asOf: asOf, timeBoost: timeBoost, calendar: calendar, checkCancellation: {})
     }
 
-    init(transactions: [LedgerTransaction], asOf: Date, checkCancellation: () throws -> Void) rethrows {
+    init(transactions: [LedgerTransaction], asOf: Date, timeBoost: Bool = false, calendar: Calendar = .current, checkCancellation: () throws -> Void) rethrows {
         try checkCancellation()
+        self.timeBoostEnabled = timeBoost
+        func minuteOfWeek(_ date: Date) -> Double {
+            let c = calendar.dateComponents([.weekday, .hour, .minute, .second], from: date)
+            return Double((c.weekday! - 1) * 1440 + c.hour! * 60 + c.minute!) + Double(c.second!) / 60
+        }
+        let context = minuteOfWeek(asOf)
+        func bonus(_ date: Date) -> Double {
+            guard timeBoost else { return 0 }
+            let delta = abs(minuteOfWeek(date) - context)
+            let hours = min(delta, 10080 - delta) / 60
+            return exp(-0.5 * hours * hours)
+        }
         var grouped: [BucketKey: [String: Aggregate]] = [:]
         var nextFuture: Date?
 
@@ -40,7 +53,7 @@ struct HistoricalTextSuggestionIndex: Sendable {
             // Nested default subscripts mutate in place: copying the inner
             // dictionary per transaction would make index construction quadratic.
             grouped[bucket, default: [:]][key, default: Aggregate(text: display, frequency: 0, lastUsedAt: date)]
-                .include(display, at: date)
+                .include(display, at: date, bonus: bonus(date))
         }
 
         for (offset, row) in transactions.enumerated() {
@@ -108,10 +121,12 @@ struct HistoricalTextSuggestionIndex: Sendable {
     private struct Aggregate {
         var text: String
         var frequency: Int
+        var timeBonus: Double = 0
         var lastUsedAt: Date
 
-        mutating func include(_ value: String, at date: Date) {
+        mutating func include(_ value: String, at date: Date, bonus: Double) {
             frequency += 1
+            timeBonus += bonus
             if date > lastUsedAt || (date == lastUsedAt && value.utf8.lexicographicallyPrecedes(text.utf8)) {
                 text = value
                 lastUsedAt = date
@@ -121,6 +136,7 @@ struct HistoricalTextSuggestionIndex: Sendable {
 
     private struct Entry: Sendable {
         let key: String
+        let score: Double
         let suggestion: HistoricalTextSuggestion
     }
 
@@ -142,7 +158,7 @@ struct HistoricalTextSuggestionIndex: Sendable {
             entries.reserveCapacity(values.count)
             for (offset, pair) in values.enumerated() {
                 if offset.isMultiple(of: 128) { try checkCancellation() }
-                entries.append(Entry(key: pair.key, suggestion: HistoricalTextSuggestion(
+                entries.append(Entry(key: pair.key, score: Double(pair.value.frequency) + pair.value.timeBonus, suggestion: HistoricalTextSuggestion(
                     text: pair.value.text, frequency: pair.value.frequency, lastUsedAt: pair.value.lastUsedAt)))
             }
             var comparisons = 0
@@ -173,6 +189,7 @@ struct HistoricalTextSuggestionIndex: Sendable {
         private static func better(_ left: Int, _ right: Int, entries: [Entry]) -> Int {
             if left < 0 { return right }
             if right < 0 { return left }
+            if entries[left].score != entries[right].score { return entries[left].score > entries[right].score ? left : right }
             let lhs = entries[left].suggestion, rhs = entries[right].suggestion
             if lhs.frequency != rhs.frequency { return lhs.frequency > rhs.frequency ? left : right }
             if lhs.lastUsedAt != rhs.lastUsedAt { return lhs.lastUsedAt > rhs.lastUsedAt ? left : right }
@@ -255,5 +272,59 @@ struct HistoricalTextSuggestionIndex: Sendable {
             }
             return result
         }
+    }
+}
+
+
+/// Local-only patterns, precomputed for the 168 weekday/hour slots off the main thread.
+enum FrequentTransactionTemplate {
+    static func slot(at date: Date, calendar: Calendar = .current) -> Int {
+        (calendar.component(.weekday, from: date) - 1) * 24 + calendar.component(.hour, from: date)
+    }
+
+    static func catalogue(transactions: [LedgerTransaction], ledgerID: UUID?, now: Date = Date(),
+                          calendar: Calendar = .current) -> [Int: TransactionTemplate] {
+        guard let ledgerID else { return [:] }
+        let cutoff = now.addingTimeInterval(-60 * 24 * 3600)
+        struct Key: Hashable { let slot: Int; let note: String; let payee: String; let accounts: [UUID] }
+        struct Usage { var row: LedgerTransaction; var count: Int }
+        var groups: [Key: Usage] = [:]
+        for (index, row) in transactions.enumerated() {
+            if index.isMultiple(of: 128), Task.isCancelled { return [:] }
+            guard row.ledgerID == ledgerID && row.date >= cutoff && row.date <= now else { continue }
+            let note = row.note.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !note.isEmpty, row.postings.count >= 2 else { continue }
+            let key = Key(slot: slot(at: row.date, calendar: calendar), note: note,
+                          payee: row.payee.trimmingCharacters(in: .whitespacesAndNewlines),
+                          accounts: row.postings.map(\.accountID).sorted { $0.uuidString < $1.uuidString })
+            if var usage = groups[key] {
+                usage.count += 1
+                if row.date > usage.row.date { usage.row = row }
+                groups[key] = usage
+            } else { groups[key] = Usage(row: row, count: 1) }
+        }
+        func better(_ a: Usage, than b: Usage) -> Bool {
+            if a.count != b.count { return a.count > b.count }
+            if a.row.date != b.row.date { return a.row.date > b.row.date }
+            return a.row.id.uuidString < b.row.id.uuidString
+        }
+        var winners: [Int: Usage] = [:]
+        for (key, usage) in groups where usage.count >= 5 {
+            if let old = winners[key.slot], !better(usage, than: old) { continue }
+            winners[key.slot] = usage
+        }
+        return winners.mapValues { usage in
+            let row = usage.row
+            return TransactionTemplate(id: row.id, ledgerID: ledgerID,
+                name: row.note.trimmingCharacters(in: .whitespacesAndNewlines), note: row.note, payee: row.payee,
+                cleared: false, postings: row.postings.sorted { $0.listIndex < $1.listIndex }.enumerated().map {
+                    PostingTemplate(accountID: $0.element.accountID, listIndex: $0.offset)
+                })
+        }
+    }
+
+    static func suggestion(transactions: [LedgerTransaction], ledgerID: UUID?, now: Date = Date(),
+                           calendar: Calendar = .current) -> TransactionTemplate? {
+        catalogue(transactions: transactions, ledgerID: ledgerID, now: now, calendar: calendar)[slot(at: now, calendar: calendar)]
     }
 }

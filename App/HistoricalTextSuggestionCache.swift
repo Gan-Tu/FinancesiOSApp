@@ -24,6 +24,7 @@ private actor HistoricalSuggestionIndexWorker {
             if transaction.ledgerID == snapshot.ledgerID { transactions.append(transaction) }
         }
         return try HistoricalTextSuggestionIndex(transactions: transactions, asOf: snapshot.asOf,
+                                                  timeBoost: UserDefaults.standard.object(forKey: "FinancesClone.autocomplete.timeBoost") as? Bool ?? true,
                                                   checkCancellation: { try Task.checkCancellation() })
     }
 }
@@ -193,7 +194,7 @@ final class HistoricalTextSuggestionCache: ObservableObject {
     }
 
     private func usable(_ index: HistoricalTextSuggestionIndex, at date: Date) -> Bool {
-        index.asOf <= date && (index.nextFutureTransactionDate.map { date < $0 } ?? true)
+        (!index.timeBoostEnabled || date.timeIntervalSince(index.asOf) < 15 * 60) && index.asOf <= date && (index.nextFutureTransactionDate.map { date < $0 } ?? true)
     }
 
     private func releaseVisibleWaiter(_ waiterID: UUID, for ledgerID: UUID) {

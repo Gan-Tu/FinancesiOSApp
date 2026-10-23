@@ -7,6 +7,53 @@ final class HistoricalTextSuggestionIndexTests: XCTestCase {
     private let otherJournal = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    func testOptionalWeeklyTimeBoostUsesNearbyMinutes() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        func date(_ day: Int, _ hour: Int, _ minute: Int = 0) -> Date {
+            calendar.date(from: DateComponents(year: 2026, month: 10, day: day, hour: hour, minute: minute))!
+        }
+        let samples = [("Uber ride", date(7, 17)), ("Uber ride", date(14, 18)),
+                       ("Uber other", date(8, 9)), ("Uber other", date(15, 9)), ("Uber other", date(20, 9))]
+        let rows = samples.map { text, date in
+            var result = row(text, seconds: 0)
+            result.date = date
+            return result
+        }
+        let context = date(21, 16, 45)
+        let plain = HistoricalTextSuggestionIndex(transactions: rows, asOf: context)
+        let boosted = HistoricalTextSuggestionIndex(transactions: rows, asOf: context, timeBoost: true, calendar: calendar)
+        XCTAssertEqual(plain.suggestions(for: .note, in: journal, matching: "Uber").first?.text, "Uber other")
+        XCTAssertEqual(boosted.suggestions(for: .note, in: journal, matching: "Uber").first?.text, "Uber ride")
+        let otherDay = HistoricalTextSuggestionIndex(transactions: rows, asOf: date(22, 16, 45), timeBoost: true, calendar: calendar)
+        XCTAssertEqual(otherDay.suggestions(for: .note, in: journal, matching: "Uber").first?.text, "Uber other")
+    }
+
+    func testFrequentTemplateCatalogueRequiresFiveRecentMatchingSlots() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = calendar.date(from: DateComponents(year: 2026, month: 10, day: 21, hour: 17, minute: 30))!
+        let ledger = UUID(), firstAccount = UUID(), secondAccount = UUID()
+        let rows = [7, 14, 21, 28, 35].map { days in
+            LedgerTransaction(ledgerID: ledger, date: now.addingTimeInterval(-Double(days) * 86400),
+                payee: "Uber", note: "Ride home", number: "", cleared: false,
+                postings: [Posting(accountID: firstAccount, amount: -10), Posting(accountID: secondAccount, amount: 10)])
+        }
+        let catalogue = FrequentTransactionTemplate.catalogue(transactions: rows, ledgerID: ledger, now: now, calendar: calendar)
+        XCTAssertEqual(catalogue.count, 1)
+        let suggestion = catalogue[FrequentTransactionTemplate.slot(at: now, calendar: calendar)]
+        XCTAssertEqual(suggestion?.name, "Ride home")
+        XCTAssertEqual(suggestion?.postings.map(\.accountID), [firstAccount, secondAccount])
+        XCTAssertNil(FrequentTransactionTemplate.suggestion(transactions: Array(rows.dropFirst()), ledgerID: ledger, now: now, calendar: calendar))
+        XCTAssertNil(FrequentTransactionTemplate.suggestion(transactions: rows, ledgerID: UUID(), now: now, calendar: calendar))
+        XCTAssertNil(FrequentTransactionTemplate.suggestion(transactions: rows, ledgerID: ledger, now: now.addingTimeInterval(3600), calendar: calendar))
+        var old = rows[0]; old.id = UUID(); old.date = now.addingTimeInterval(-70 * 86400)
+        var future = rows[0]; future.id = UUID(); future.date = now.addingTimeInterval(7 * 86400)
+        XCTAssertNil(FrequentTransactionTemplate.suggestion(transactions: Array(rows.dropFirst()) + [old, future], ledgerID: ledger, now: now, calendar: calendar))
+        var different = rows[0]; different.postings[0].accountID = UUID()
+        XCTAssertNil(FrequentTransactionTemplate.suggestion(transactions: Array(rows.dropFirst()) + [different], ledgerID: ledger, now: now, calendar: calendar))
+    }
+
     func testEligibilityUsesExactInstantAndNextNonblankFutureValue() {
         let rows = [
             row("Past", seconds: -1), row("Now", seconds: 0),

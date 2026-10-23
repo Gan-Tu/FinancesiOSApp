@@ -330,6 +330,7 @@ private enum TemplatePickerSelection {
 }
 
 private struct TransactionTemplatePicker: View {
+    @AppStorage("FinancesClone.templates.suggestions") private var showSuggestedTemplates = true
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var store: MobileLedgerStore
     @ScaledMetric(relativeTo: .title3) private var rowHeight = 56.0
@@ -352,6 +353,13 @@ private struct TransactionTemplatePicker: View {
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: .infinity)
                         .padding(16)
+                    if showSuggestedTemplates {
+                        SuggestedTemplateMenuRow(transactions: store.data.transactions, ledgerID: ledgerID,
+                            revision: String(store.historicalTextSuggestions.revision)) { suggestion in
+                            selection = .template(suggestion, accountID: accountID)
+                            dismiss()
+                        }
+                    }
                     ForEach(templates) { template in
                         Divider()
                         action(template.name) {
@@ -562,6 +570,50 @@ struct EditorSheet: View {
         .background { SystemEntryEditorLifetimeAnchor(id: editorPresentationID).frame(width: 0, height: 0) }
         .onAppear {
             receiptImports.configureDiscard { [weak store] assets in store?.discardUnreferencedImportedAttachments(assets) }
+        }
+    }
+}
+
+/// Scans a copy-on-write snapshot only when the menu appears, never during rendering.
+private struct SuggestedTemplateMenuRow: View {
+    let transactions: [LedgerTransaction]
+    let ledgerID: UUID?
+    let revision: String
+    let choose: (TransactionTemplate) -> Void
+    @State private var catalogue: [Int: TransactionTemplate] = [:]
+    @State private var loadedRequest: String?
+
+    private var request: String {
+        "\(ledgerID?.uuidString ?? "")-\(revision)-\(Int(Date().timeIntervalSince1970 / (24 * 3600)))-\(TimeZone.current.identifier)"
+    }
+
+    var body: some View {
+        let requested = request
+        Group {
+            if loadedRequest == requested, let suggestion = catalogue[FrequentTransactionTemplate.slot(at: Date())] {
+                Button { choose(suggestion) } label: {
+                    Label(suggestion.name, systemImage: "sparkles")
+                    .font(.title3).foregroundStyle(.blue)
+                    .frame(maxWidth: .infinity, minHeight: 56)
+                    .padding(.horizontal, 16)
+                }
+                .accessibilityLabel("Suggested template: \(suggestion.name)")
+            } else if loadedRequest != requested {
+                Text("Finding suggestions…").foregroundStyle(.secondary)
+            }
+        }
+        .task(id: requested) {
+            guard loadedRequest != requested else { return }
+            let rows = transactions, ledger = ledgerID
+            let worker = Task.detached(priority: .utility) {
+                FrequentTransactionTemplate.catalogue(transactions: rows, ledgerID: ledger)
+            }
+            let result = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: { worker.cancel() }
+            guard !Task.isCancelled else { return }
+            catalogue = result
+            loadedRequest = requested
         }
     }
 }
