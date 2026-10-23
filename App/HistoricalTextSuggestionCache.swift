@@ -87,7 +87,7 @@ final class HistoricalTextSuggestionCache: ObservableObject {
 
     func suggestions(data: JournalData, ledgerID: UUID, field: HistoricalTextSuggestionField,
                      query: String, revision expectedRevision: UInt64, limit: Int = 5,
-                     now: Date = Date()) async throws -> [HistoricalTextSuggestion] {
+                     now: Date = Date(), accountID: UUID? = nil) async throws -> [HistoricalTextSuggestion] {
         try Task.checkCancellation()
         // The caller captures this with its data snapshot, not when a delayed
         // task finally starts. Otherwise old data could acquire a new revision.
@@ -106,7 +106,7 @@ final class HistoricalTextSuggestionCache: ObservableObject {
         }
         try Task.checkCancellation()
         guard expectedRevision == revision else { throw CancellationError() }
-        return index.suggestions(for: field, in: ledgerID, matching: query, limit: limit)
+        return index.suggestions(for: field, in: ledgerID, matching: query, limit: limit, accountID: accountID)
     }
 
     func hasCachedIndex(for ledgerID: UUID, now: Date = Date()) -> Bool {

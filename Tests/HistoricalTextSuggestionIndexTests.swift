@@ -7,6 +7,21 @@ final class HistoricalTextSuggestionIndexTests: XCTestCase {
     private let otherJournal = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    func testAccountScopeIsolatesPayeesNotesAndRanking() {
+        let a = UUID(), b = UUID()
+        var amazon = row("Card B purchase", payee: "Amazon")
+        amazon.postings = [Posting(accountID: b, amount: -10)]
+        var cafe = row("Card A purchase", payee: "Cafe")
+        cafe.postings = [Posting(accountID: a, amount: -10), Posting(accountID: a, amount: 10)]
+        let index = HistoricalTextSuggestionIndex(transactions: [amazon, cafe], asOf: now)
+        XCTAssertEqual(index.suggestions(for: .payee, in: journal, matching: "", accountID: a).map(\.text), ["Cafe"])
+        XCTAssertEqual(index.suggestions(for: .note, in: journal, matching: "", accountID: a).map(\.text), ["Card A purchase"])
+        XCTAssertEqual(index.suggestions(for: .payee, in: journal, matching: "", accountID: a).first?.frequency, 1)
+        XCTAssertEqual(index.suggestions(for: .payee, in: journal, matching: "", accountID: b).map(\.text), ["Amazon"])
+        XCTAssertTrue(index.suggestions(for: .payee, in: journal, matching: "Ama", accountID: a).isEmpty)
+        XCTAssertTrue(index.suggestions(for: .payee, in: journal, matching: "", accountID: UUID()).isEmpty)
+    }
+
     func testOptionalWeeklyTimeBoostUsesNearbyMinutes() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!

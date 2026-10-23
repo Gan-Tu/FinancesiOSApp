@@ -411,7 +411,10 @@ struct TransactionEditorView: View {
         if let field = historicalSuggestionField, let ledgerID = draft.ledgerID {
             let query = field == .note ? draft.note : draft.payee
             HistoricalTextSuggestionToolbar(cache: store.historicalTextSuggestions, data: store.data,
-                ledgerID: ledgerID, field: field, query: query,
+                ledgerID: ledgerID, accountID: draft.postings.first(where: {
+                    guard let account = store.account($0.accountID) else { return false }
+                    return account.kind == .asset || account.kind == .liability
+                })?.accountID, field: field, query: query,
                 select: { text in
                     guard !isSaving, historicalSuggestionField == field,
                           (field == .note ? draft.note : draft.payee) == query else { return }
@@ -1027,7 +1030,10 @@ struct TemplateEditorView: View {
         if let field = historicalSuggestionField, let ledgerID = draft.ledgerID {
             let query = field == .note ? draft.note : draft.payee
             HistoricalTextSuggestionToolbar(cache: store.historicalTextSuggestions, data: store.data,
-                ledgerID: ledgerID, field: field, query: query,
+                ledgerID: ledgerID, accountID: draft.postings.first(where: {
+                    guard let account = store.account($0.accountID) else { return false }
+                    return account.kind == .asset || account.kind == .liability
+                })?.accountID, field: field, query: query,
                 select: { text in
                     guard !isSaving, historicalSuggestionField == field,
                           (field == .note ? draft.note : draft.payee) == query else { return }

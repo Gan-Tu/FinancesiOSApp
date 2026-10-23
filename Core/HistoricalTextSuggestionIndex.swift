@@ -45,11 +45,11 @@ struct HistoricalTextSuggestionIndex: Sendable {
         var grouped: [BucketKey: [String: Aggregate]] = [:]
         var nextFuture: Date?
 
-        func add(_ raw: String, field: HistoricalTextSuggestionField, ledgerID: UUID, date: Date) {
+        func add(_ raw: String, field: HistoricalTextSuggestionField, ledgerID: UUID, accountID: UUID?, date: Date) {
             let key = Self.normalizedStoredKey(raw)
             guard !key.isEmpty else { return }
             let display = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            let bucket = BucketKey(ledgerID: ledgerID, field: field)
+            let bucket = BucketKey(ledgerID: ledgerID, field: field, accountID: accountID)
             // Nested default subscripts mutate in place: copying the inner
             // dictionary per transaction would make index construction quadratic.
             grouped[bucket, default: [:]][key, default: Aggregate(text: display, frequency: 0, lastUsedAt: date)]
@@ -64,8 +64,12 @@ struct HistoricalTextSuggestionIndex: Sendable {
                    nextFuture == nil || row.date < nextFuture! { nextFuture = row.date }
                 continue
             }
-            add(row.note, field: .note, ledgerID: row.ledgerID, date: row.date)
-            add(row.payee, field: .payee, ledgerID: row.ledgerID, date: row.date)
+            // Build account buckets once on the worker, never scan history per query.
+            let scopes: [UUID?] = [nil] + Set(row.postings.map(\.accountID)).map { Optional($0) }
+            for accountID in scopes {
+                add(row.note, field: .note, ledgerID: row.ledgerID, accountID: accountID, date: row.date)
+                add(row.payee, field: .payee, ledgerID: row.ledgerID, accountID: accountID, date: row.date)
+            }
         }
         try checkCancellation()
         var built: [BucketKey: Bucket] = [:]
@@ -78,8 +82,8 @@ struct HistoricalTextSuggestionIndex: Sendable {
         buckets = built
     }
 
-    func suggestions(for field: HistoricalTextSuggestionField, in ledgerID: UUID, matching query: String, limit: Int = 5) -> [HistoricalTextSuggestion] {
-        guard limit > 0, let bucket = buckets[BucketKey(ledgerID: ledgerID, field: field)] else { return [] }
+    func suggestions(for field: HistoricalTextSuggestionField, in ledgerID: UUID, matching query: String, limit: Int = 5, accountID: UUID? = nil) -> [HistoricalTextSuggestion] {
+        guard limit > 0, let bucket = buckets[BucketKey(ledgerID: ledgerID, field: field, accountID: accountID)] else { return [] }
         let limit = min(limit, bucket.entries.count)
         let exact = Self.normalizedStoredKey(query)
         let prefix = !exact.isEmpty && query.last?.isWhitespace == true ? exact + " " : exact
@@ -116,6 +120,7 @@ struct HistoricalTextSuggestionIndex: Sendable {
     private struct BucketKey: Hashable, Sendable {
         let ledgerID: UUID
         let field: HistoricalTextSuggestionField
+        let accountID: UUID?
     }
 
     private struct Aggregate {

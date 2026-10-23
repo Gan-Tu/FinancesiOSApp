@@ -6,6 +6,7 @@ struct HistoricalTextSuggestionToolbar: View {
     @ObservedObject var cache: HistoricalTextSuggestionCache
     let data: JournalData
     let ledgerID: UUID
+    var accountID: UUID? = nil
     let field: HistoricalTextSuggestionField
     let query: String
     let select: (String) -> Void
@@ -13,6 +14,7 @@ struct HistoricalTextSuggestionToolbar: View {
 
     private struct Request: Hashable {
         let ledgerID: UUID
+        let accountID: UUID?
         let field: HistoricalTextSuggestionField
         let query: String
         let revision: UInt64
@@ -23,7 +25,7 @@ struct HistoricalTextSuggestionToolbar: View {
     @State private var activeLoadID = UUID()
 
     private var request: Request {
-        Request(ledgerID: ledgerID, field: field, query: query, revision: cache.revision, timeBoost: timeBoost)
+        Request(ledgerID: ledgerID, accountID: accountID, field: field, query: query, revision: cache.revision, timeBoost: timeBoost)
     }
 
     var body: some View {
@@ -81,7 +83,7 @@ struct HistoricalTextSuggestionToolbar: View {
             activeLoadID = loadID
             do {
                 let result = try await cache.suggestions(data: data, ledgerID: requested.ledgerID,
-                    field: requested.field, query: requested.query, revision: requested.revision, limit: 5)
+                    field: requested.field, query: requested.query, revision: requested.revision, limit: 5, accountID: requested.accountID)
                 guard !Task.isCancelled, activeLoadID == loadID, cache.revision == requested.revision else { return }
                 suggestions = result
                 loadedRequest = requested
