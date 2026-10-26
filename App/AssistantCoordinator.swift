@@ -544,7 +544,8 @@ final class AssistantCoordinator: ObservableObject {
                         // Refresh saved receipt preferences per step without adding them to history.
                         context.append(.object(["type": .string("message"), "role": .string("user"), "text": .string("My saved receipt suggestion instructions (also apply to relevant finance chat requests):\n\(instructions)")]))
                     }
-                    try await gateway.step(items: context + conversation.items, settings: conversation.settings) { [weak self] event in
+                    // Keep prior turns unchanged; fresh clock/preferences must not invalidate their cache.
+                    try await gateway.step(items: conversation.items + context, settings: conversation.settings) { [weak self] event in
                         guard let self, self.generation == stamp else { throw CancellationError() }
                         try self.requireActive()
                         if event.type == "text_delta" { self.appendStreamingText(event.text ?? "") }

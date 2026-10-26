@@ -140,7 +140,7 @@ final class AssistantTests: XCTestCase {
         XCTAssertEqual(try f.store.assistantDatabase.recordCounts().outboxRows, outboxBefore)
         XCTAssertTrue(coordinator.send("Read these attachments"))
         try await wait { !coordinator.isRunning }
-        XCTAssertEqual(gateway.itemsSeen.first?.dropFirst().first?["attachments"].array.count, 2)
+        XCTAssertEqual(gateway.itemsSeen.first?.first?["attachments"].array.count, 2)
         coordinator.dismiss()
     }
 
@@ -1156,8 +1156,11 @@ final class AssistantTests: XCTestCase {
         XCTAssertTrue(coordinator.send("Add lunch"))
         try await wait { !coordinator.isRunning }
         XCTAssertEqual(gateway.itemsSeen.count, 2)
-        let first = try XCTUnwrap(gateway.itemsSeen.first?.first?["text"].string)
-        let second = try XCTUnwrap(gateway.itemsSeen.last?.first?["text"].string)
+        let first = try XCTUnwrap(gateway.itemsSeen.first?.last?["text"].string)
+        let second = try XCTUnwrap(gateway.itemsSeen.last?.last?["text"].string)
+        XCTAssertEqual(gateway.itemsSeen[0].first?["text"].string, "Add lunch")
+        XCTAssertEqual(gateway.itemsSeen[1].first, gateway.itemsSeen[0].first)
+        XCTAssertEqual(gateway.itemsSeen[1].dropLast().last?["type"].string, "continuation")
         XCTAssertTrue(first.contains(initialTime))
         XCTAssertTrue(second.contains(AssistantTimeContext.timestamp(clock.addingTimeInterval(-65))))
         XCTAssertTrue(first.contains(TimeZone.current.identifier))
