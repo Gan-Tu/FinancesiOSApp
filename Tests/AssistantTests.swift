@@ -30,7 +30,7 @@ final class AssistantTests: XCTestCase {
     }
 
     func testLegacyConversationAndCloudSettingsUpgradeModelOnly() throws {
-        for (old, current) in [("gpt-5.6-sol", "gpt-6.1-sol"), ("gpt-6-sol", "gpt-6.1-sol"), ("gpt-5.6-luna", "gpt-6-luna")] {
+        for (old, current) in [("gpt-5.6-sol", "gpt-6.1-sol"), ("gpt-5.6-terra", "gpt-6.1-terra"), ("gpt-6-sol", "gpt-6.1-sol"), ("gpt-5.6-luna", "gpt-6-luna")] {
             let legacy = AssistantSettings(model: old, effort: "max", customInstructions: "Keep my preferences")
             let restored = try JSONDecoder().decode(AssistantSettings.self, from: JSONEncoder().encode(legacy))
             XCTAssertEqual(restored.model, current)
@@ -46,8 +46,8 @@ final class AssistantTests: XCTestCase {
     }
 
     func testTerraDefaultsPreserveExplicitModelOverrides() throws {
-        XCTAssertEqual(AssistantSettings().model, "gpt-5.6-terra")
-        XCTAssertEqual(AssistantPreferences().model, "gpt-5.6-terra")
+        XCTAssertEqual(AssistantSettings().model, "gpt-6.1-terra")
+        XCTAssertEqual(AssistantPreferences().model, "gpt-6.1-terra")
         XCTAssertEqual(AssistantSettings().effort, "medium")
         let explicit = AssistantSettings(model: "gpt-6-astra", effort: "high")
         let decoded = try JSONDecoder().decode(AssistantPreferences.self, from: JSONEncoder().encode(AssistantPreferences(explicit)))

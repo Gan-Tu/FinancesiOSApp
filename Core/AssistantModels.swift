@@ -22,7 +22,7 @@ struct AssistantModelChoice: Decodable, Sendable, Identifiable {
 
 struct AssistantSettings: Codable, Equatable, Sendable {
     static let models: [AssistantModelChoice] = (try? AssistantContract.load().models) ?? []
-    var model = "gpt-5.6-terra"
+    var model = "gpt-6.1-terra"
     var effort = "medium"
     var speed = "fast"
     var customInstructions = ""

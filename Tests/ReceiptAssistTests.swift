@@ -71,8 +71,8 @@ private actor AssistTestTransport: CloudKitSyncTransport {
         XCTAssertNoThrow(try merged.value.validate())
     }
 
-    func testLegacySolAndLunaSettingsUpgradeWithoutLosingPreferences() throws {
-        for (old, current) in [("gpt-5.6-sol", "gpt-6.1-sol"), ("gpt-6-sol", "gpt-6.1-sol"), ("gpt-5.6-luna", "gpt-6-luna")] {
+    func testLegacyModelSettingsUpgradeWithoutLosingPreferences() throws {
+        for (old, current) in [("gpt-5.6-sol", "gpt-6.1-sol"), ("gpt-5.6-terra", "gpt-6.1-terra"), ("gpt-6-sol", "gpt-6.1-sol"), ("gpt-5.6-luna", "gpt-6-luna")] {
             var legacy = ReceiptAISettings()
             legacy.model = old; legacy.effort = "high"; legacy.instructions = "Keep merchant names"
             let data = try JSONEncoder().encode(legacy)
@@ -255,7 +255,7 @@ private actor AssistTestTransport: CloudKitSyncTransport {
                 assets: Array(repeating: (asset, URL(fileURLWithPath: "/missing.png")), count: 11),
                 boundary: "test"))
         var settings = ReceiptAISettings()
-        XCTAssertEqual(settings.model, "gpt-5.6-terra")
+        XCTAssertEqual(settings.model, "gpt-6.1-terra")
         XCTAssertEqual(settings.effort, "medium")
         settings.model = "gpt-6-astra"
         XCTAssertFalse(settings.efforts.contains("none"))

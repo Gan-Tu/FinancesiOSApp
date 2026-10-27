@@ -181,7 +181,7 @@ private actor PreferencesTestCloud: CloudKitSyncTransport {
         XCTAssertThrowsError(try b.resolve(keepLocal: true, expectedLocal: b.value, expectedRemote: oldRemote))
         try b.resolve(keepLocal: true, expectedLocal: b.value, expectedRemote: b.remote)
         await cloud.setConflict(); await b.refresh(); await a.refresh()
-        XCTAssertEqual(a.value.model, "gpt-5.6-terra"); XCTAssertEqual(a.value.effort, "none")
+        XCTAssertEqual(a.value.model, "gpt-6.1-terra"); XCTAssertEqual(a.value.effort, "none")
     }
     func testOfflinePersistenceAndEditDuringUpload() async throws {
         let cloud = PreferencesTestCloud(), dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
