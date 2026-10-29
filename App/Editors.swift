@@ -646,6 +646,8 @@ struct AccountEditorView: View {
     @State private var draft: MobileAccountDraft
     @State private var isSaving = false
     @State private var isActive = false
+    @StateObject private var cards = PaymentIdentityDraft()
+    @State private var cardSaveError = ""
 
     init(initialDraft: MobileAccountDraft) {
         isNew = initialDraft.id == nil
@@ -682,7 +684,7 @@ struct AccountEditorView: View {
                     }
                 }
                 if [.asset, .liability, .equity].contains(draft.kind), let id = draft.id, let ledgerID = draft.ledgerID ?? store.selectedLedgerID {
-                    FinanceFormCard { FinanceFormRow(last: true) { PaymentIdentityEditor(accountID: id, ledgerID: ledgerID) } }
+                    FinanceFormCard { FinanceFormRow(last: true) { PaymentIdentityEditor(accountID: id, ledgerID: ledgerID, draft: cards) } }
                 }
                 FinanceFormCard {
                     ForEach(AppColors.names, id: \.self) { name in
@@ -706,6 +708,12 @@ struct AccountEditorView: View {
             .onAppear { isActive = true }
             .onDisappear { isActive = false }
             .journalEditorValidation()
+            .alert("Unable to Save Cards", isPresented: Binding(
+                get: { !cardSaveError.isEmpty },
+                set: { if !$0 { cardSaveError = "" } }
+            )) {
+                Button("OK", role: .cancel) { cardSaveError = "" }
+            } message: { Text(cardSaveError) }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
@@ -720,8 +728,15 @@ struct AccountEditorView: View {
                         draft.id = savedID
                         Task {
                             defer { isSaving = false }
-                            do { try await store.flushLocalChangesAsync(); if isActive { dismiss() } }
-                            catch { /* The store retains and orders persistence errors. Keep this draft for retry. */ }
+                            do { try await store.flushLocalChangesAsync() }
+                            catch { return /* Keep this draft for retry; the store presents persistence errors. */ }
+                            do {
+                                if [.asset, .liability, .equity].contains(draft.kind),
+                                   let ledgerID = draft.ledgerID ?? store.selectedLedgerID {
+                                    try await cards.save(accountID: savedID, ledgerID: ledgerID, store: .shared)
+                                }
+                                if isActive { dismiss() }
+                            } catch { cardSaveError = error.localizedDescription }
                         }
                     } label: { EditorSaveLabel(isSaving: isSaving) }
                     .disabled(isSaving || draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)

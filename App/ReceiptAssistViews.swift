@@ -2,21 +2,40 @@ import AuthenticationServices
 import SwiftUI
 import UniformTypeIdentifiers
 
+@MainActor final class PaymentIdentityDraft: ObservableObject {
+    @Published var identities: [PaymentIdentity] = []
+    private var original: PaymentAccountMetadata?
+    private var loaded = false
+
+    func reload(accountID: UUID, store: PaymentMetadataStore) {
+        original = store.metadata[accountID]
+        identities = original?.identities ?? []
+        loaded = true
+    }
+
+    func save(accountID: UUID, ledgerID: UUID, store: PaymentMetadataStore) async throws {
+        guard loaded, identities != (original?.identities ?? []) else { return }
+        try await store.save(
+            PaymentAccountMetadata(id: accountID, ledgerID: ledgerID, identities: identities),
+            expected: original)
+        reload(accountID: accountID, store: store)
+    }
+}
+
 struct PaymentIdentityEditor: View {
     let accountID: UUID
     let ledgerID: UUID
     @ObservedObject private var store = PaymentMetadataStore.shared
-    @State private var identities: [PaymentIdentity] = []
-    @State private var original: PaymentAccountMetadata?
+    @ObservedObject var draft: PaymentIdentityDraft
     @State private var message = ""
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Cards").font(.headline)
                 Spacer()
-                Button("Add card", systemImage: "plus") { identities.append(PaymentIdentity()) }
+                Button("Add card", systemImage: "plus") { draft.identities.append(PaymentIdentity()) }
             }
-            ForEach($identities) { $identity in
+            ForEach($draft.identities) { $identity in
                 VStack(alignment: .leading, spacing: 10) {
                     TextField("Card label", text: $identity.label)
                         .accessibilityLabel("Card label")
@@ -47,7 +66,7 @@ struct PaymentIdentityEditor: View {
                                 .frame(width: 82)
                                 .accessibilityLabel("Last four digits")
                             Button("Remove card", systemImage: "minus.circle") {
-                                identities.removeAll { $0.id == identity.id }
+                                draft.identities.removeAll { $0.id == identity.id }
                             }.labelStyle(.iconOnly).foregroundStyle(.red)
                         }.frame(minHeight: 32)
                     #else
@@ -66,14 +85,14 @@ struct PaymentIdentityEditor: View {
                             TextField("Last four", text: $identity.last4).frame(width: 64)
                                 .accessibilityLabel("Last four digits")
                             Button("Remove card", systemImage: "xmark") {
-                                identities.removeAll { $0.id == identity.id }
+                                draft.identities.removeAll { $0.id == identity.id }
                             }.labelStyle(.iconOnly)
                         }
                     #endif
                 }
                 .padding(.vertical, 6)
                 .fixedSize(horizontal: false, vertical: true)
-                if identity.id != identities.last?.id { Divider() }
+                if identity.id != draft.identities.last?.id { Divider() }
             }
             if store.conflicts.contains(accountID) {
                 Text("Cards changed on another device.").foregroundStyle(.orange)
@@ -100,10 +119,7 @@ struct PaymentIdentityEditor: View {
                     Button("Save cards") {
                         Task {
                             do {
-                                try await store.save(
-                                    PaymentAccountMetadata(
-                                        id: accountID, ledgerID: ledgerID, identities: identities),
-                                    expected: original)
+                                try await draft.save(accountID: accountID, ledgerID: ledgerID, store: store)
                                 reload()
                                 message =
                                     store.pendingCount == 0
@@ -138,8 +154,7 @@ struct PaymentIdentityEditor: View {
         ][network] ?? network
     }
     private func reload() {
-        original = store.metadata[accountID]
-        identities = original?.identities ?? []
+        draft.reload(accountID: accountID, store: store)
     }
 }
 struct CardMetadataDocument: FileDocument {

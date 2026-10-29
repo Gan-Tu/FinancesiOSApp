@@ -123,6 +123,36 @@ private actor AssistTestTransport: CloudKitSyncTransport {
         XCTAssertThrowsError(try assist.recordID(type: "transaction", id: UUID().uuidString))
         XCTAssertNoThrow(try assist.recordID(type: "assist_account", id: UUID().uuidString))
     }
+    #if os(iOS)
+    func testAccountCardDraftSavesEditsAndRemovals() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PaymentMetadataStore(directory: directory, network: AssistTestTransport())
+        await store.refresh()
+        let value = metadata()
+        try await store.save(value, expected: nil)
+        let draft = PaymentIdentityDraft()
+        draft.reload(accountID: value.id, store: store)
+        draft.identities[0].label = "Updated with account"
+        try await draft.save(accountID: value.id, ledgerID: value.ledgerID, store: store)
+        XCTAssertEqual(store.metadata[value.id]?.identities[0].label, "Updated with account")
+        draft.identities.append(PaymentIdentity(label: "Second card", last4: "1234"))
+        try await draft.save(accountID: value.id, ledgerID: value.ledgerID, store: store)
+        XCTAssertEqual(store.metadata[value.id]?.identities.count, 2)
+        draft.identities.removeAll()
+        try await draft.save(accountID: value.id, ledgerID: value.ledgerID, store: store)
+        XCTAssertEqual(store.metadata[value.id]?.identities, [])
+        draft.identities.append(PaymentIdentity(label: "Invalid", last4: "12"))
+        do {
+            try await draft.save(accountID: value.id, ledgerID: value.ledgerID, store: store)
+            XCTFail("Invalid card edits must keep the account editor open for correction")
+        } catch {
+            XCTAssertEqual(draft.identities[0].last4, "12")
+            XCTAssertEqual(store.metadata[value.id]?.identities, [])
+        }
+    }
+    #endif
+
     func testOfflinePendingWritesConflictsAndAccountIsolation() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
