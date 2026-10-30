@@ -138,7 +138,29 @@ enum RecurringJournalEditor {
                 throw ValidationError(message: "An existing occurrence must keep its repeating series.")
             }
             if !isAnchor && !scheduleMatches(canonicalRule, edited.recurrenceRule) {
-                throw ValidationError(message: "Change Repeat settings from the first entry in this series.")
+                guard scope == .future else {
+                    throw ValidationError(message: "Confirm Update Repeating Schedule to change Repeat settings from this entry forward.")
+                }
+                guard let previous, edited.date >= previous.date else {
+                    throw ValidationError(message: "A restarted schedule cannot begin before the selected occurrence.")
+                }
+                if canonicalRule?.frequency == .custom && edited.recurrenceRule?.frequency == .custom {
+                    throw ValidationError(message: "Choose a daily, weekly, monthly, or yearly schedule before changing this imported custom pattern.")
+                }
+                // End the old series at this boundary. A fresh rule identity
+                // keeps history intact and prevents deleted future slot IDs
+                // from suppressing occurrences in the resumed schedule.
+                let stopped = try deleting(previous.id, scope: .future, in: journal,
+                    calendar: calendar, deletedIDs: deletedIDs)
+                if var rule = edited.recurrenceRule {
+                    rule.id = UUID()
+                    rule.templateHistory = nil
+                    rule.continuation = nil
+                    edited.recurrenceRule = rule
+                }
+                return try apply(edited, replacing: nil, in: stopped.journal,
+                    scope: .future, referenceDate: referenceDate, calendar: calendar,
+                    deletedIDs: deletedIDs.union(stopped.deletedIDs.subtracting([edited.id])))
             }
             if isAnchor && scheduleChanged && scope != .future {
                 throw ValidationError(message: "Confirm Update Repeating Schedule to change the first entry's date or Repeat settings.")

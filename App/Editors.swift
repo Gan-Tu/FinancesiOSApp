@@ -264,8 +264,8 @@ struct TransactionEditorView: View {
                 FinanceFormRow(last: true) { Toggle("Cleared", isOn: $draft.cleared) }
             }
             .padding(.bottom, 40)
-            if !recurrencePolicy.canEditRepeatSettings {
-                Text("Repeat settings belong to the first entry in this series.")
+            if initialDraft.recurrenceRuleID != nil {
+                Text("Repeat changes apply from this entry forward.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
 
@@ -375,7 +375,7 @@ struct TransactionEditorView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(recurrencePolicy.requiresScheduleConfirmation
-                ? "Changing the first entry's date or Repeat settings updates the repeating series and regenerates later occurrences."
+                ? "Repeat changes regenerate this entry's future schedule. Earlier entries are preserved. Changing the first entry's date updates the whole series."
                 : "Choose whether to update only this entry or this entry and later entries in the same series. Other occurrence dates, receipts, and cleared status remain unchanged.")
         }
         .alert("Couldn’t Save Transaction", isPresented: Binding(get: { store.validationError != nil }, set: { if !$0 { store.validationError = nil } })) {

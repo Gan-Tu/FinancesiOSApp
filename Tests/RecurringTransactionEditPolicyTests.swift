@@ -19,14 +19,23 @@ final class RecurringTransactionEditPolicyTests: XCTestCase {
         XCTAssertFalse(policy.requiresScheduleConfirmation)
     }
 
-    func testGeneratedOccurrenceLocksRepeatButKeepsNormalDetailAndDateScopeChoices() {
+    func testGeneratedOccurrenceAllowsRepeatAndKeepsNormalDetailAndDateScopeChoices() {
         let initial = existingDraft()
         var edited = initial
         edited.note = "Just this occurrence"
         edited.date = initial.date.addingTimeInterval(86_400)
         let policy = RecurringTransactionEditPolicy(initialDraft: initial, editedDraft: edited, anchorID: UUID())
-        XCTAssertFalse(policy.canEditRepeatSettings)
+        XCTAssertTrue(policy.canEditRepeatSettings)
         XCTAssertFalse(policy.requiresScheduleConfirmation)
+    }
+
+    func testGeneratedScheduleChangeRequiresConfirmation() {
+        let initial = existingDraft()
+        var edited = initial
+        edited.repeatEndDate = initial.date.addingTimeInterval(86_400 * 90)
+        let policy = RecurringTransactionEditPolicy(initialDraft: initial, editedDraft: edited, anchorID: UUID())
+        XCTAssertTrue(policy.canEditRepeatSettings)
+        XCTAssertTrue(policy.requiresScheduleConfirmation)
     }
 
     func testAnchorDetailsKeepBothExistingSaveChoices() {

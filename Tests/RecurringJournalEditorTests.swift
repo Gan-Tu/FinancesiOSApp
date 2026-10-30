@@ -28,6 +28,28 @@ final class RecurringJournalEditorTests: XCTestCase {
         XCTAssertTrue(f.rows(projected).allSatisfy { $0.recurrenceRule?.endDate == f.calendar.startOfDay(for: f.day(2026, 3, 9)) })
     }
 
+    func testResumingFromRemainingOccurrenceSurvivesDeletedFutureIDsAndReload() throws {
+        let f = Fixture()
+        let original = try f.series(count: 5)
+        let oldRows = f.rows(original)
+        let deletion = try RecurringJournalEditor.deleting(oldRows[2].id, scope: .future, in: original, calendar: f.calendar)
+        var edit = f.rows(deletion.journal)[1]
+        edit.recurrenceRule?.endDate = nil
+        edit.recurrenceRule?.occurrenceCount = 4
+        let resumed = try RecurringJournalEditor.apply(edit, replacing: edit.id, in: deletion.journal,
+            scope: .future, referenceDate: f.day(2026, 1, 1), calendar: f.calendar, deletedIDs: deletion.deletedIDs)
+        let projected = RecurringJournalEditor.materialized(try roundTrip(resumed), referenceDate: f.day(2034, 1, 1), calendar: f.calendar, deletedIDs: deletion.deletedIDs)
+        let rows = f.rows(projected)
+        XCTAssertEqual(rows.map(\.date), (1...5).map { f.day(2026, $0, 10) })
+        XCTAssertEqual(rows[0].id, oldRows[0].id)
+        XCTAssertEqual(rows[0].postings, oldRows[0].postings)
+        XCTAssertEqual(rows[0].attachment, oldRows[0].attachment)
+        XCTAssertEqual(rows[0].cleared, oldRows[0].cleared)
+        XCTAssertEqual(rows[1].id, edit.id)
+        XCTAssertTrue(Set(rows.map(\.id)).isDisjoint(with: deletion.deletedIDs))
+        XCTAssertNotEqual(rows[1].recurrenceRule?.id, rows[0].recurrenceRule?.id)
+    }
+
     func testOneOccurrenceKeepsBaseHistoryAndEveryOtherOccurrenceAfterRoundTrip() throws {
         let f = Fixture()
         let original = try f.series(count: 4)
@@ -126,12 +148,34 @@ final class RecurringJournalEditorTests: XCTestCase {
         XCTAssertEqual(extended.transactions.first { $0.id == rows[2].id }, rows[2])
     }
 
-    func testGeneratedRepeatChangesAreRejectedRatherThanMutatingSharedRule() throws {
+    func testGeneratedRepeatChangesRequireConfirmationAndPreserveEarlierHistory() throws {
         let f = Fixture(); let original = try f.series(count: 4)
         var edit = f.rows(original)[1]; edit.recurrenceRule?.frequency = .daily
-        XCTAssertThrowsError(try RecurringJournalEditor.apply(edit, replacing: edit.id, in: original, scope: .future, calendar: f.calendar))
+        XCTAssertThrowsError(try RecurringJournalEditor.apply(edit, replacing: edit.id, in: original, calendar: f.calendar))
+        let changed = try RecurringJournalEditor.apply(edit, replacing: edit.id, in: original, scope: .future, referenceDate: f.day(2026, 1, 1), calendar: f.calendar)
+        let rows = f.rows(changed)
+        XCTAssertEqual(rows.map(\.date), [f.day(2026, 1, 10)] + [10, 11, 12, 13].map { f.day(2026, 2, $0) })
+        XCTAssertEqual(rows[0].id, f.rows(original)[0].id)
+        XCTAssertEqual(rows[0].payee, f.rows(original)[0].payee)
+        XCTAssertEqual(rows[1].id, edit.id)
+        XCTAssertNotEqual(rows[1].recurrenceRule?.id, rows[0].recurrenceRule?.id)
         var collision = f.rows(original)[1]; collision.date = f.rows(original)[2].date
         XCTAssertThrowsError(try RecurringJournalEditor.apply(collision, replacing: collision.id, in: original, calendar: f.calendar))
+    }
+
+    func testTurningOffRepeatFromGeneratedEntryKeepsEarlierHistory() throws {
+        let f = Fixture()
+        let original = try f.series(count: 4)
+        let oldRows = f.rows(original)
+        var edit = oldRows[1]
+        edit.recurrenceRule = nil
+        XCTAssertThrowsError(try RecurringJournalEditor.apply(edit, replacing: edit.id, in: original, calendar: f.calendar))
+        let changed = try RecurringJournalEditor.apply(edit, replacing: edit.id, in: original,
+            scope: .future, referenceDate: f.day(2026, 1, 1), calendar: f.calendar)
+        let projected = RecurringJournalEditor.materialized(try roundTrip(changed), referenceDate: f.day(2034, 1, 1), calendar: f.calendar)
+        XCTAssertEqual(Set(projected.transactions.map(\.id)), Set(oldRows.prefix(2).map(\.id)))
+        XCTAssertNil(projected.transactions.first { $0.id == edit.id }?.recurrenceRule)
+        XCTAssertEqual(projected.transactions.first { $0.id == oldRows[0].id }?.postings, oldRows[0].postings)
     }
 
     func testLegacyHistoryIsCapturedBeforeAnchorOneOffAndImportedRowsStayAuthoritative() throws {
