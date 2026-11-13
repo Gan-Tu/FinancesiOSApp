@@ -135,13 +135,18 @@ struct AssistantView: View {
                         VStack(alignment: .leading, spacing: 6) {
                             messageBubble(message.text, isUser: message.role == "user", identifier: "assistant.message.\(message.role)")
                             if let attachments = message.attachments, !attachments.isEmpty {
-                                VStack(alignment: .leading, spacing: 4) {
+                                VStack(alignment: message.role == "user" ? .trailing : .leading, spacing: 4) {
                                     Text("\(attachments.count) \(attachments.count == 1 ? "attachment" : "attachments") included with message")
                                         .font(.caption.weight(.medium))
                                     ForEach(attachments) { file in
                                         Label(file.filename, systemImage: "paperclip").font(.caption).textSelection(.enabled)
                                     }
-                                }.foregroundStyle(.secondary).padding(.horizontal, 16)
+                                }
+                                .multilineTextAlignment(message.role == "user" ? .trailing : .leading)
+                                .frame(maxWidth: .infinity, alignment: message.role == "user" ? .trailing : .leading)
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 16)
+                                .padding(.leading, message.role == "user" ? 40 : 0)
                                 .accessibilityIdentifier("assistant.message.attachments")
                             }
                         }.id(message.id)
