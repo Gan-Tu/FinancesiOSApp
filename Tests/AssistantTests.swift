@@ -279,7 +279,8 @@ final class AssistantTests: XCTestCase {
         gate.release()
         try await wait { !coordinator.isRunning }
         XCTAssertEqual(gateway.steps, 2)
-        XCTAssertEqual(gateway.itemsSeen.last?.dropFirst().filter { $0["type"].string == "message" }.compactMap { $0["text"].string }, ["Explain this month", "Only groceries", "And use Chinese"])
+        // The refreshed time context is the final item of every request.
+        XCTAssertEqual(gateway.itemsSeen.last?.dropLast().filter { $0["type"].string == "message" }.compactMap { $0["text"].string }, ["Explain this month", "Only groceries", "And use Chinese"])
         XCTAssertNil(coordinator.conversation.pendingSteering)
         XCTAssertFalse(coordinator.conversation.messages.contains { $0.text == "Obsolete answer" })
         XCTAssertNotEqual(coordinator.conversation.title, "Obsolete title")
@@ -316,7 +317,7 @@ final class AssistantTests: XCTestCase {
         }
         XCTAssertNotEqual(coordinator.conversation.title, "Must not execute")
         let input = try XCTUnwrap(gateway.itemsSeen.last)
-        XCTAssertEqual(input.last?["text"].string, "Leave the saved transaction as-is and just summarize it")
+        XCTAssertEqual(input.dropLast().last?["text"].string, "Leave the saved transaction as-is and just summarize it")
         XCTAssertEqual(input.filter { $0["type"].string == "tool_result" }.count, 3)
         coordinator.dismiss()
     }
@@ -397,7 +398,7 @@ final class AssistantTests: XCTestCase {
         gate.release()
         coordinator.resume()
         try await wait { !coordinator.isRunning }
-        XCTAssertEqual(gateway.itemsSeen.last?.dropFirst().filter { $0["type"].string == "message" }.compactMap { $0["text"].string }, ["Original request"])
+        XCTAssertEqual(gateway.itemsSeen.last?.dropLast().filter { $0["type"].string == "message" }.compactMap { $0["text"].string }, ["Original request"])
         coordinator.dismiss()
     }
 
@@ -422,7 +423,7 @@ final class AssistantTests: XCTestCase {
         XCTAssertEqual(gateway.steps, 1)
         gate.release()
         try await wait { !coordinator.isRunning }
-        XCTAssertEqual(gateway.itemsSeen.last?.dropFirst().compactMap { $0["text"].string }, ["Separate chat request"])
+        XCTAssertEqual(gateway.itemsSeen.last?.dropLast().compactMap { $0["text"].string }, ["Separate chat request"])
         XCTAssertNotEqual(coordinator.conversation.id, originalID)
         let original = try db.assistantHistory(scope: subject).map { try JSONDecoder().decode(AssistantConversation.self, from: $0) }.first { $0.id == originalID }
         XCTAssertEqual(original?.pendingSteering?.first?["text"].string, "Original chat correction")
