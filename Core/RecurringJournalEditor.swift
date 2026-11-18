@@ -244,7 +244,9 @@ enum RecurringJournalEditor {
         let countBefore = oldRule.map { old in journal.transactions.filter { $0.recurrenceRule?.id == old.id }.count } ?? 0
         if edited.recurrenceRule != nil && isAnchor &&
             (oldRule == nil || scheduleChanged || (countBefore <= 1 && canonicalRule?.continuation == nil && !journal.preservesRecurringMaterializations(for: edited))) {
-            materialize(ruleID: edited.recurrenceRule!.id, in: &result, referenceDate: referenceDate, calendar: calendar, deletedIDs: deletedIDs)
+            var index = MaterializationIndex(result.transactions)
+            materialize(ruleID: edited.recurrenceRule!.id, in: &result, referenceDate: referenceDate, calendar: calendar, deletedIDs: deletedIDs,
+                        index: &index)
         }
         if oldRule == nil && edited.recurrenceRule == nil,
            calendar.startOfDay(for: edited.date) > horizon(referenceDate, calendar: calendar) {
@@ -261,48 +263,110 @@ enum RecurringJournalEditor {
         var result = journal
         let mixed = mixedRuleIDs(in: journal.transactions)
         let ruleIDs = Set(journal.transactions.filter { journal.shouldExtendRecurrences(for: $0) }.compactMap { $0.recurrenceRule?.id }).subtracting(mixed)
+        guard !ruleIDs.isEmpty else { return result }
+        var index = MaterializationIndex(journal.transactions)
         for id in ruleIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
-            materialize(ruleID: id, in: &result, referenceDate: referenceDate, calendar: calendar, deletedIDs: deletedIDs)
+            materialize(ruleID: id, in: &result, referenceDate: referenceDate, calendar: calendar, deletedIDs: deletedIDs,
+                        index: &index)
         }
         return result
     }
 
-    private static func materialize(ruleID: UUID, in journal: inout JournalData, referenceDate: Date, calendar: Calendar, deletedIDs: Set<UUID>) {
-        if var rule = anchor(ruleID: ruleID, in: journal.transactions)?.recurrenceRule, rule.continuation != nil {
-            var ids = Set(journal.transactions.map(\.id))
+    /// What every rule's pass used to recompute by scanning the whole journal
+    /// (once per rule and batch, with a calendar call per one-off row). It is
+    /// built once and kept current as occurrences are appended, which is the
+    /// only way materialization changes the journal: rows are never removed or
+    /// reordered, and a row's rule identity never changes.
+    private struct MaterializationIndex {
+        /// Generated occurrences always carry their rule, so each journal's
+        /// latest one-off date is fixed for the whole call. The start of a day
+        /// only moves forward with time, so the latest entry's day is the
+        /// latest of all their days.
+        let latestOneOffDates: [UUID: Date]
+        /// Every transaction ID in the journal being materialized.
+        var allIDs: Set<UUID>
+        /// Each rule's rows and their journal positions, in journal order.
+        private var rowsByRule: [UUID: [LedgerTransaction]]
+        private var positionsByRule: [UUID: [Int]]
+
+        init(_ transactions: [LedgerTransaction]) {
+            var latest: [UUID: Date] = [:]
+            var ids = Set<UUID>(minimumCapacity: transactions.count)
+            var rows: [UUID: [LedgerTransaction]] = [:]
+            var positions: [UUID: [Int]] = [:]
+            for (position, row) in transactions.enumerated() {
+                ids.insert(row.id)
+                if let ruleID = row.recurrenceRule?.id {
+                    rows[ruleID, default: []].append(row)
+                    positions[ruleID, default: []].append(position)
+                } else if latest[row.ledgerID].map({ $0 < row.date }) ?? true {
+                    latest[row.ledgerID] = row.date
+                }
+            }
+            latestOneOffDates = latest
+            allIDs = ids
+            rowsByRule = rows
+            positionsByRule = positions
+        }
+
+        func rows(ruleID: UUID) -> [LedgerTransaction] { rowsByRule[ruleID] ?? [] }
+        func positions(ruleID: UUID) -> [Int] { positionsByRule[ruleID] ?? [] }
+
+        func latestOneOffDay(ledgerID: UUID?, calendar: Calendar) -> Date {
+            ledgerID.flatMap { latestOneOffDates[$0] }.map { calendar.startOfDay(for: $0) } ?? .distantPast
+        }
+
+        /// Records rows appended to the end of the journal for `ruleID`.
+        mutating func appended(_ additions: [LedgerTransaction], ruleID: UUID, journalCount: Int) {
+            guard !additions.isEmpty else { return }
+            let start = journalCount - additions.count
+            rowsByRule[ruleID, default: []].append(contentsOf: additions)
+            positionsByRule[ruleID, default: []].append(contentsOf: start..<journalCount)
+            for row in additions { allIDs.insert(row.id) }
+        }
+    }
+
+    private static func materialize(ruleID: UUID, in journal: inout JournalData, referenceDate: Date, calendar: Calendar, deletedIDs: Set<UUID>,
+                                    index: inout MaterializationIndex) {
+        if var rule = anchor(ruleID: ruleID, in: index.rows(ruleID: ruleID))?.recurrenceRule, rule.continuation != nil {
             let activeCalendar = rule.continuation!.calendar
-            let ledgerID = anchor(ruleID: ruleID, in: journal.transactions)?.ledgerID
-            let horizonDay = max(horizon(referenceDate, calendar: activeCalendar), journal.transactions
-                .filter { $0.ledgerID == ledgerID && $0.recurrenceRule == nil }
-                .map { activeCalendar.startOfDay(for: $0.date) }.max() ?? .distantPast)
+            let ledgerID = anchor(ruleID: ruleID, in: index.rows(ruleID: ruleID))?.ledgerID
+            let horizonDay = max(horizon(referenceDate, calendar: activeCalendar),
+                                 index.latestOneOffDay(ledgerID: ledgerID, calendar: activeCalendar))
             var more: Bool
             repeat {
-                let result = continueSeries(rule: rule, rows: journal.transactions.filter { $0.recurrenceRule?.id == ruleID },
-                    referenceDate: referenceDate, horizonDay: horizonDay, allIDs: &ids, deletedIDs: deletedIDs)
+                let rows = index.rows(ruleID: ruleID)
+                let result = continueSeries(rule: rule, rows: rows,
+                    referenceDate: referenceDate, horizonDay: horizonDay, allIDs: &index.allIDs, deletedIDs: deletedIDs)
                 rule = result.rule; more = result.hasMore
                 journal.transactions.append(contentsOf: result.additions)
+                index.appended(result.additions, ruleID: ruleID, journalCount: journal.transactions.count)
             } while more
-            for index in journal.transactions.indices where journal.transactions[index].recurrenceRule?.id == ruleID {
-                journal.transactions[index].recurrenceRule = rule
+            for position in index.positions(ruleID: ruleID) {
+                journal.transactions[position].recurrenceRule = rule
             }
             return
         }
         // Complete finite schedules in bounded allocation chunks. Replaying known
         // slots is necessary to preserve moved identities and deleted-slot counts.
-        while materializeBatch(ruleID: ruleID, in: &journal, referenceDate: referenceDate, calendar: calendar, deletedIDs: deletedIDs) {}
+        while materializeBatch(ruleID: ruleID, in: &journal, referenceDate: referenceDate, calendar: calendar, deletedIDs: deletedIDs,
+                                index: &index) {}
     }
 
-    private static func materializeBatch(ruleID: UUID, in journal: inout JournalData, referenceDate: Date, calendar: Calendar, deletedIDs: Set<UUID>) -> Bool {
-        guard let first = anchor(ruleID: ruleID, in: journal.transactions), let rule = first.recurrenceRule,
+    private static func materializeBatch(ruleID: UUID, in journal: inout JournalData, referenceDate: Date, calendar: Calendar, deletedIDs: Set<UUID>,
+                                         index: inout MaterializationIndex) -> Bool {
+        let existing = index.rows(ruleID: ruleID)
+        guard let first = anchor(ruleID: ruleID, in: existing), let rule = first.recurrenceRule,
               rule.frequency != .never, rule.frequency != .custom else { return false }
         let scheduleAnchor = rule.templateHistory?.scheduleAnchorDate ?? first.date
         let referenceDay = calendar.startOfDay(for: referenceDate)
-        let horizonDay = max(horizon(referenceDate, calendar: calendar), journal.transactions
-            .filter { $0.ledgerID == first.ledgerID && $0.recurrenceRule == nil }
-            .map { calendar.startOfDay(for: $0.date) }.max() ?? .distantPast)
-        let existing = journal.transactions.filter { $0.recurrenceRule?.id == ruleID }
+        let horizonDay = max(horizon(referenceDate, calendar: calendar),
+                             index.latestOneOffDay(ledgerID: first.ledgerID, calendar: calendar))
         let existingIDs = Set(existing.map(\.id))
-        var allIDs = Set(journal.transactions.map(\.id))
+        let startCount = journal.transactions.count
+        defer {
+            index.appended(Array(journal.transactions[startCount...]), ruleID: ruleID, journalCount: journal.transactions.count)
+        }
         var days = Set(existing.map { calendar.startOfDay(for: $0.date) })
         var count = existing.count + (calendar.startOfDay(for: scheduleAnchor) < calendar.startOfDay(for: first.date) ? 1 : 0)
         var latestFutureDay = days.filter { $0 >= referenceDay }.max()
@@ -338,8 +402,10 @@ enum RecurringJournalEditor {
                 if day < referenceDay { continue }
                 if day > horizonDay { break }
             }
+            // A slot whose day is taken is skipped before hashing its identity.
+            if days.contains(day) { continue }
             let id = occurrenceID(ruleID: ruleID, day: day)
-            if days.contains(day) || existingIDs.contains(id) { continue }
+            if existingIDs.contains(id) { continue }
             if deletedIDs.contains(id) {
                 days.insert(day); count += 1
                 if day >= referenceDay { latestFutureDay = max(latestFutureDay ?? day, day) }
@@ -348,7 +414,7 @@ enum RecurringJournalEditor {
             guard appended < 2400 else { return true }
             var row = first
             rule.templateHistory?.template(on: day).apply(to: &row)
-            row.id = allIDs.contains(id) ? UUID() : id
+            row.id = index.allIDs.contains(id) ? UUID() : id
             row.date = next; row.cleared = false; row.attachment = nil
             row.postings = row.postings.enumerated().map { index, posting in
                 Posting(id: postingID(transactionID: row.id, index: index), accountID: posting.accountID,
@@ -356,7 +422,7 @@ enum RecurringJournalEditor {
             }
             journal.transactions.append(row)
             appended += 1
-            allIDs.insert(row.id); days.insert(day); count += 1
+            index.allIDs.insert(row.id); days.insert(day); count += 1
             if day >= referenceDay { latestFutureDay = max(latestFutureDay ?? day, day) }
         }
         return false
@@ -368,10 +434,13 @@ enum RecurringJournalEditor {
     static func postingID(transactionID: UUID, index: Int) -> UUID {
         identifier(namespace: "recurring-posting", parts: [transactionID.uuidString, String(index)])
     }
+    /// The UUID's bytes are the digest's first 16 bytes, in order (what
+    /// formatting them as a UUID string and parsing it back produced, without
+    /// sixteen `String(format:)` calls per identity).
     private static func identifier(namespace: String, parts: [String]) -> UUID {
-        let bytes = SHA256.hash(data: Data(([namespace] + parts).joined(separator: "\u{1f}").utf8)).prefix(16)
-        let hex = bytes.map { String(format: "%02x", Int($0)) }.joined()
-        return UUID(uuidString: "\(hex.prefix(8))-\(hex.dropFirst(8).prefix(4))-\(hex.dropFirst(12).prefix(4))-\(hex.dropFirst(16).prefix(4))-\(hex.dropFirst(20).prefix(12))")!
+        let digest = Array(SHA256.hash(data: Data(([namespace] + parts).joined(separator: "\u{1f}").utf8)))
+        return UUID(uuid: (digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7],
+                           digest[8], digest[9], digest[10], digest[11], digest[12], digest[13], digest[14], digest[15]))
     }
     private static func horizon(_ referenceDate: Date, calendar: Calendar) -> Date {
         let day = calendar.startOfDay(for: referenceDate)

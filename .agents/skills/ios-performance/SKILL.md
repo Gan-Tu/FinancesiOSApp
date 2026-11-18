@@ -28,6 +28,7 @@ Everything the user sees is driven by one `@MainActor` object, `MobileLedgerStor
 | `RegisterPresentationCache` + `RegisterRenderWorker` | Off-main scope filtering, search, running balances, month sections, keyed by content revision. | Cached per revision; `clearTransactionListCaches()` throws every entry away. |
 | `HistoricalTextSuggestionCache` | Per-journal payee/note index built on a worker. | Never scans on a keystroke; invalidate per journal, not globally. |
 | `AccountBalanceProjection`, `MobileAppIconBadge`, `HomeScreenQuickActions`, `SystemEntryRouter.updateCatalog` | Side computations triggered by `data.didSet` or day changes. | Must stay O(1) on the main actor or hop to a detached task with a value snapshot. |
+| `RecurringJournalEditor.materialized` | Tops up repeating entries on the main actor at launch and on the first foreground of each day. | One pass over the journal builds `MaterializationIndex`; each rule then touches only its own rows. A whole-journal scan per rule cost about 300 ms for 10,000 transactions and 24 rules. |
 
 ## 2. Rules for the main actor
 
@@ -36,24 +37,29 @@ Everything the user sees is driven by one `@MainActor` object, `MobileLedgerStor
 3. **Check identity before rebuilding.** `JournalData.hasIdenticalContent(to:)` and plain array `==` return in constant time when storage is shared. Use them to skip validation, cache rebuilds, publishes, and file scans when nothing changed.
 4. **Prefer incremental cache updates.** `refreshDerivedCache()` is the fallback for scope edits and imports. Single-row edits, cleared toggles, renames, template changes, and journal inserts all have targeted helpers; add a new helper rather than widening a call to the full rebuild.
 5. **Publish only real changes.** Assign a `@Published` property only when the value differs (`if !flag { flag = true }`). Never reassign `data` with identical content. One stray publish per sync pass re-renders every screen.
-6. **Validate once per journal value.** `validateLiveJournalIfChanged()` caches the last validated value and is cleared by `data.didSet`. Call it instead of `validateCandidateData(data, ...)` in flush paths.
+6. **Validate once per journal value.** `validateLiveJournalIfChanged()` caches the last validated value and is cleared by `data.didSet`. Call it instead of `validateCandidateData(data, ...)` in flush paths. When a candidate is validated and then installed, set `lastValidatedJournal = data` right after the assignment. When the writer validates a snapshot, call `noteValidatedJournal(revision:)` with the `journalRevision` captured with that snapshot. Sync flushes validate on the writer (`persistSnapshotAsync(validateFirst:)`), not on the main actor.
 7. **Keep `data.didSet` cheap.** Anything added there runs on every mutation. Compare inputs first (as `HomeScreenQuickActions.update` does) and defer real work.
+8. **Bookkeeping installs stay silent.** `installSyncTimestamp` changes only `lastSyncedAt`: no publish, no badge or shortcut refresh, and the validated value is kept. Do not route another field through it unless nothing renders, validates, or exports that field.
+9. **Repeating entries are indexed once per call.** Do not add a filter over `journal.transactions` or a calendar call per transaction inside the per-rule code in `RecurringJournalEditor`. Extend `MaterializationIndex` instead, and keep its invariants: materialization only appends rows, and generated rows always carry their rule.
 
 ## 3. Rules for SQLite
 
 1. One transaction per logical operation. Fold per-record lookups into a single `withCloudKitDatabase` call (see `classifyCloudKitPull`).
-2. Read only the keys you need. Never load a whole mirror table (`readKnownCloudKitRecords`) to answer questions about a page of records.
+2. Read only the keys you need. Never load a whole mirror table (`readKnownCloudKitRecords`) to answer questions about a page of records. Use `hasKnownCloudKitRecords` for emptiness and `readKnownCloudKitRecord(forKey:)` for the incoming keys, as `persistCloudKitPull` does.
 3. Encode only what you compare. The candidate guard uses `syncEnvelopes(for:limitedTo:)`; do not reintroduce whole-journal JSON encoding and hashing for a few outstanding edits.
 4. Diff against the committed baseline; `persist(_:previous:)` already skips unchanged families by storage identity. Keep the baseline rule: it is read and written only on the persistence queue.
 5. Long transactions on `CloudKitJournalSyncCoordinator.databaseQueue` hold `accessLock` and the SQLite write lock. Any main-thread `.sync` write waits for them (busy timeout is 8 s). Keep database-queue work short and never add main-thread sync writes that can overlap a pass.
+6. Tables that only grow (`cloudkit_receipt_claims`, accepted `sync_outbox` rows, `cloudkit_mutation_receipts`) must not be decoded in full on a repeating path. Query by key, or memoize a pure decode the way `attachmentFileRetention` does for completed claims.
+7. Do not read or hash a receipt file to confirm what its row already records. `markCloudKitReceiptStored` skips an echo whose checksum, size, and uploaded state already match.
 
 ## 4. Rules for CloudKit passes
 
 1. An idle page (no records) must not touch the graph: bind the change token on the database queue and return.
 2. Echo-only pages (this device's own uploads coming back) update bookkeeping only. They must not rebuild caches, invalidate registers, or reassign `data`.
 3. Classification (pending outbox, known records for fetched keys, in-flight versions, acknowledgement receipts, receipt claims, pending descendants) runs on the database queue. Only merge, validation, and the atomic commit stay on the main actor. If the journal changed during the reads, redo them; the SQLite candidate guard is the last line of defense, not the first.
-4. The flush at pass start and in the upload loop is awaited. Do not add synchronous flushes to the pass.
-5. Known remaining cost: when another device really changed data, the merge still runs `refreshDerivedCache()` on the main actor once. Moving that off-main needs a precomputed cache handed into `cloudKitCommitRemote`; do not attempt it piecemeal.
+4. The flush at pass start and in the upload loop is awaited, and so is the end of the pass (`cloudKitSyncDidFinishAsync`). Do not add synchronous flushes to the pass.
+5. `CloudKitJournalMerger.applying` must not write a value that is already equal. An echo-only merge then shares storage with the live journal, which keeps `hasIdenticalContent`, the SQLite diff, and `cloudKitValidate` constant time.
+6. When another device changed up to 64 one-off transactions and nothing else, `refreshDerivedCacheForRemoteTransactionChanges` applies them through the single-row helpers (deletions first, then changes in journal order). It must decline, leaving the full `refreshDerivedCache()`, for other record families, repeating entries, larger changes, or reordered rows. Known remaining cost: that full rebuild still runs on the main actor; moving it off-main needs a precomputed cache handed into `cloudKitCommitRemote`, so do not attempt it piecemeal.
 
 ## 5. Rules for SwiftUI views
 
@@ -74,13 +80,14 @@ Work through this list in order; stop when the measurement points at a cause.
 2. **Use the repo's own probes.**
    - `--demo-performance` launch argument with the demo data: `FinancePerformanceTrace.begin` marks actions and `.performanceDestination` marks their first layout; results are written to `FinancesiOS-Demo/performance-actions.json` inside the app's temporary directory when the app resigns active.
    - `--measure-startup` prints `startup.<phase>` timings.
-   - `python3 scripts/benchmark_register.py` times register construction with synthetic data and no Simulator.
+   - `python3 scripts/benchmark_register.py` times register construction with synthetic data and no Simulator. The same approach (copy `Core/Models.swift` and the file under test into a temporary Swift package) times any pure `Core` function, and can compile the previous version beside the new one to compare their outputs.
 3. **Grep the hot paths.** Suspicious patterns on the main actor:
    - `deferredPersistenceQueue.sync` reachable from timers, scene phase, or sync.
    - `refreshDerivedCache()` where a targeted helper exists.
    - `validateCandidateData(` more than once per journal value.
    - `data = ` assignments with unchanged content; `@Published` writes without a change check.
    - Loops that call a `SQLiteJournalStore` method per record.
+   - A filter, `Set`, or calendar call over all transactions inside a loop over rules, accounts, or records.
    - `.flatMap`, `.filter`, `.sorted` over `data.transactions` inside `body`, `didSet`, or `onReceive`.
 4. **Count publishes per sync pass.** Temporarily log `objectWillChange` on `MobileLedgerStore` and run one pass with no remote changes. The expected number is small: the `lastSyncedAt` write at the end of the pass and the sync-state object's own progress updates. Anything else is a regression.
 5. **Check sync trigger frequency** in `CloudKitForegroundSyncTriggers` (300 s fallback), `scheduleDeferredCloudSave` (0.5 s), scene activation, and push handling before blaming the UI.
@@ -90,7 +97,7 @@ Work through this list in order; stop when the measurement points at a cause.
 1. Measure first and write down the number.
 2. Find the main-actor work. Decide: skip it (identity check), make it incremental, or move it off-main with a snapshot and a guard.
 3. Keep behavior identical. Performance changes in this repo must not alter sync semantics, validation, or UI. When replacing several queries with one, add an equivalence test that compares the batched result with the individual calls (see `testPullClassificationMatchesIndividualQueriesAndIdleTokenBindLeavesJournalUntouched`).
-4. Run `scripts/test.sh --smoke` plus the suites that cover the changed area (`CloudKitJournalSyncTests`, `SQLiteCloudKitSyncTests`, `MobileCompanionTests`, `RegisterPresentationCacheTests`, `InteractionLatencyBenchmarks`). Never use live model inference or production endpoints for verification (see AGENTS.md).
+4. Run `scripts/test.sh --smoke` plus the suites that cover the changed area (`CloudKitJournalSyncTests`, `SQLiteCloudKitSyncTests`, `MobileCompanionTests`, `RegisterPresentationCacheTests`, `InteractionLatencyBenchmarks`, and `RecurringJournalEditorTests` with the other recurrence suites for anything under `Core/Recurr*`). Never use live model inference or production endpoints for verification (see AGENTS.md).
 5. Record the before/after numbers and the rationale in `docs/PERFORMANCE.md`. Keep the Xcode Cloud smoke selection unchanged; heavy benchmarks belong in `FinancesiOSFullTests`.
 
 ## 8. Files to know
@@ -101,5 +108,6 @@ Work through this list in order; stop when the measurement points at a cause.
 - `App/RegisterPresentation.swift`, `App/RegisterPresentationCache.swift`: register math and caching.
 - `App/HistoricalTextSuggestionCache.swift`, `Core/HistoricalTextSuggestionIndex.swift`: typing suggestions.
 - `App/AccountBalanceProjection.swift`: daily balance rollover off-main.
+- `Core/RecurringJournalEditor.swift`, `Core/RecurrenceContinuation.swift`: repeating-entry edits and the daily top-up.
 - `App/FinancePerformanceTrace.swift`, `Core/StartupTiming.swift`: measurement hooks.
 - `docs/PERFORMANCE.md`: history of measured changes.

@@ -54,3 +54,35 @@ Changes:
 - `MobileLedgerStore.data` is published by hand so the sync-timestamp write at the end of every pass, which no view renders, no longer re-renders every screen.
 
 Verification: `AssistantTests` asserts that appending to the draft publishes the draft object only, never the coordinator; its run-loop tests cover the awaited checkpoints. Device frame pacing while typing and streaming was not measured as part of this change.
+
+## Daily stalls: repeating entries and the end of every sync pass (November 17, 2026)
+
+Reports described the app getting stuck for a moment during ordinary use, almost every day, as if background work were blocking the interface. Three causes were found by reading the main-actor paths and measuring the heaviest one.
+
+**Repeating entries.** `RecurringJournalEditor.materialized` runs on the main actor at every launch and on the first foreground of each day. For every repeating rule it rescanned the whole journal several times: once with a calendar call per one-off transaction to find the horizon, again to find the rule's rows and anchor, and again to rebuild the set of all IDs. It also hashed an identity for every slot, including slots whose day was already taken, and built each identity with sixteen `String(format:)` calls.
+
+| Synthetic journal | Before | After |
+| --- | ---: | ---: |
+| 10,197 transactions, 24 repeating rules, daily top-up | 292 ms | 19 ms |
+
+Medians of three runs in an optimized build on the same Mac; a phone is slower. Changes, none of which alter the output:
+
+- The journal is indexed once per call (`MaterializationIndex`: latest one-off date per journal, each rule's rows and positions, all IDs) and kept current as occurrences are appended. Materialization only appends, and generated occurrences always carry their rule, so the one-off dates cannot change during a call. The latest one-off day is the start of day of the latest one-off date, because the start of a day only moves forward with time.
+- A slot whose day is already taken is skipped before its identity is hashed.
+- Identities are built from the digest bytes directly. The resulting UUIDs are identical; `RecurringJournalEditorTests` pins two known values because these IDs are synced between devices.
+
+The new code was compared with the previous implementation on 3,720 randomized cases (four time zones, daily/weekly/monthly/yearly rules, intervals, workday shifting, counts, end dates, deleted slots, continuation cursors, far-future one-off entries, and schedules needing several 2,400-row batches) with zero differences in the resulting transactions.
+
+**Every sync pass.** Passes run after each edit, on each foreground, every five minutes, and on each push:
+
+- The pass asked whether the known mirror was empty by reading and decoding every mirrored record while holding the process-wide SQLite lock. It now asks SQLite with `hasKnownCloudKitRecords` (`SELECT EXISTS`).
+- A page with records, including this device's own uploads coming back, re-read the whole mirror inside the main actor's synchronous commit. `persistCloudKitPull` now reads only the incoming keys, before any write, so every lookup still sees the mirror as it was before the pull.
+- The same commit re-read and hashed the full file of every echoed receipt. A row that already records the same checksum, file size, and uploaded state cannot change (a matching file rewrites identical values, a mismatching one writes nothing), so that case is skipped.
+- `CloudKitJournalMerger.applying` rewrote unchanged values and so copied whole arrays. It now leaves equal values alone; an echo-only merge shares storage with the live journal, which makes later identity checks, the SQLite diff, and validation constant time.
+- The pass ended by blocking the main actor on the serial writer, then on a scan that decodes every receipt-upload claim ever made (claims are never deleted). The pass now awaits `cloudKitSyncDidFinishAsync`; the claim scan decodes each distinct claim once per process.
+- Installing the sync timestamp cleared the validated-journal cache and refreshed the badge and system shortcuts, so the next pass validated the whole journal on the main actor again. The timestamp install is now silent in every respect (`installSyncTimestamp`).
+- Validation for a sync flush runs on the writer. Values validated on the main actor for a save, or by the writer for a deferred save, are remembered through a journal revision counter, so a journal is not scanned twice.
+
+**Changes from another device.** Any remote change rebuilt every derived cache on the main actor (12.6 ms for 5,000 and 25.2 ms for 10,000 synthetic transactions in an optimized Mac build, before register invalidation). Up to 64 changed one-off transactions are now applied through the same targeted helpers that local single-row edits use (`refreshDerivedCacheForRemoteTransactionChanges`). Other record families, repeating entries, larger changes, and reordered rows still take the full rebuild.
+
+Verification: `MobileCompanionTests` compares every cached view (all scopes, per-account and per-currency registers, balances, totals, amounts, account flows, search, recurrence anchors) between the targeted update and a store rebuilt from the same journal, checks that the fallbacks still rebuild, and checks that a finished pass stores its timestamp without publishing. `SQLiteCloudKitSyncTests` covers the mirror existence check and the receipt echo conditions. The sync-pass changes were verified for behavior, not timed: that suite's wall time varied between 4 s and 37 s on the same build, so it is not a usable benchmark. Frame pacing on a device was not measured as part of this change.

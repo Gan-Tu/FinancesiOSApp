@@ -112,6 +112,14 @@ private enum MobilePersistenceTiming {
     case deferredLocal
 }
 
+/// A rejected snapshot failed validation on the writer and wrote nothing; a
+/// failed one reached SQLite and is reported like any other disk failure.
+private enum MobileSnapshotWriteOutcome: Sendable {
+    case committed
+    case rejected(Error)
+    case failed(Error)
+}
+
 private struct MobileLedgerDerivedCache {
     var balanceDateCutoff = Calendar.current.dateInterval(of: .day, for: Date())!.end
     var orderedLedgers: [Ledger] = []
@@ -359,8 +367,11 @@ final class MobileLedgerStore: ObservableObject {
     private(set) var data: JournalData {
         willSet { if !installsJournalSilently { objectWillChange.send() } }
         didSet {
+            journalRevision &+= 1
             lastValidatedJournal = nil
-            guard !assistantMutationInProgress else { return }
+            // A silent install changes only the sync timestamp. The badge
+            // count, home screen shortcuts, and share catalog never read it.
+            guard !assistantMutationInProgress, !installsJournalSilently else { return }
             appIconBadge?.update(data)
             if systemIntegrationsEnabled { refreshSystemIntegrations() }
         }
@@ -395,6 +406,9 @@ final class MobileLedgerStore: ObservableObject {
     /// storage with `data` until the next assignment clears it, so repeated
     /// sync flushes of an unchanged journal skip the whole-journal scan.
     private var lastValidatedJournal: JournalData?
+    /// Advances on every assignment to `data`. Async writers compare it to
+    /// learn whether the live journal is still the value they validated.
+    private var journalRevision: UInt64 = 0
     private var installsJournalSilently = false
     private var persistenceSequence: UInt64 = 0
     private var persistenceOutcomes = MobilePersistenceOutcomeState()
@@ -610,7 +624,15 @@ final class MobileLedgerStore: ObservableObject {
         }
     }
 
+    #if DEBUG
+    /// Lets tests prove that a change took a targeted cache update.
+    private(set) var fullDerivedCacheRebuildsForTesting = 0
+    #endif
+
     private func refreshDerivedCache() {
+        #if DEBUG
+        fullDerivedCacheRebuildsForTesting += 1
+        #endif
         derivedCache = MobileLedgerDerivedCache(data: data)
         invalidateTransactionSearchWarmup()
         clearTransactionListCaches()
@@ -688,9 +710,10 @@ final class MobileLedgerStore: ObservableObject {
 
     /// Inserts one new transaction into the derived caches touched by mobile
     /// duplication without forcing every journal/account/search cache to rebuild.
-    private func refreshDerivedCacheForTransactionInsertion(_ transaction: LedgerTransaction) {
+    private func refreshDerivedCacheForTransactionInsertion(_ transaction: LedgerTransaction,
+                                                           sourceIndexByID knownSourceIndexByID: [UUID: Int]? = nil) {
         invalidateTransactionSearchWarmup()
-        let sourceIndexByID = transactionSourceIndexByID()
+        let sourceIndexByID = knownSourceIndexByID ?? transactionSourceIndexByID()
         derivedCache.transactionsByID[transaction.id] = transaction
         insertTransaction(transaction, in: &derivedCache.allTransactionsDateDescending, sourceIndexByID: sourceIndexByID)
         insertTransaction(transaction, in: &derivedCache.transactionsByLedgerDateDescending[transaction.ledgerID], sourceIndexByID: sourceIndexByID)
@@ -736,9 +759,10 @@ final class MobileLedgerStore: ObservableObject {
         clearTransactionListCaches()
     }
 
-    private func refreshDerivedCacheForTransactionReplacement(previous: LedgerTransaction?, updated: LedgerTransaction) {
+    private func refreshDerivedCacheForTransactionReplacement(previous: LedgerTransaction?, updated: LedgerTransaction,
+                                                             sourceIndexByID: [UUID: Int]? = nil) {
         guard let previous else {
-            refreshDerivedCacheForTransactionInsertion(updated)
+            refreshDerivedCacheForTransactionInsertion(updated, sourceIndexByID: sourceIndexByID)
             return
         }
         if canRefreshTransactionDisplayReplacement(previous: previous, updated: updated) {
@@ -746,7 +770,58 @@ final class MobileLedgerStore: ObservableObject {
             return
         }
         refreshDerivedCacheForTransactionDeletion(previous)
-        refreshDerivedCacheForTransactionInsertion(updated)
+        refreshDerivedCacheForTransactionInsertion(updated, sourceIndexByID: sourceIndexByID)
+    }
+
+    /// Another device usually changes a handful of transactions at a time.
+    /// Apply those through the targeted helpers that single-row edits use
+    /// instead of re-sorting, re-grouping, and re-totaling the whole journal
+    /// on the UI actor. Returns false, leaving the caches untouched, whenever
+    /// the change needs the full rebuild: other record families changed, a
+    /// repeating schedule is involved (its anchors are rebuilt in full), the
+    /// change is large, or rows were only reordered.
+    private func refreshDerivedCacheForRemoteTransactionChanges(from previous: JournalData) -> Bool {
+        guard previous.ledgers == data.ledgers, previous.commodities == data.commodities,
+              previous.accounts == data.accounts, previous.sources == data.sources,
+              previous.transactionTemplates == data.transactionTemplates,
+              derivedCache.transactionsByID.count == previous.transactions.count else { return false }
+        let limit = 64
+        // Same-day rows are ordered by their position in the journal. The
+        // targeted helpers keep that order only while surviving rows keep their
+        // relative positions, which merges (replace in place, append, remove) do.
+        let previousIndexByID = Dictionary(previous.transactions.enumerated().map { ($0.element.id, $0.offset) },
+                                           uniquingKeysWith: { first, _ in first })
+        var changed: [(previous: LedgerTransaction?, updated: LedgerTransaction)] = []
+        var seen = Set<UUID>(minimumCapacity: data.transactions.count)
+        var lastSurvivingIndex = -1
+        for transaction in data.transactions {
+            guard seen.insert(transaction.id).inserted else { return false }
+            if let index = previousIndexByID[transaction.id] {
+                guard index > lastSurvivingIndex else { return false }
+                lastSurvivingIndex = index
+            }
+            let cached = derivedCache.transactionsByID[transaction.id]
+            guard cached != transaction else { continue }
+            changed.append((cached, transaction))
+            if changed.count > limit { return false }
+        }
+        var removed: [LedgerTransaction] = []
+        for (id, cached) in derivedCache.transactionsByID where !seen.contains(id) {
+            removed.append(cached)
+            if changed.count + removed.count > limit { return false }
+        }
+        guard !changed.isEmpty || !removed.isEmpty,
+              removed.allSatisfy({ $0.recurrenceRule == nil }),
+              changed.allSatisfy({ $0.previous?.recurrenceRule == nil && $0.updated.recurrenceRule == nil }) else { return false }
+        // Remove first so no departed row can mislead where a new or moved row
+        // is inserted among same-day entries.
+        for transaction in removed { refreshDerivedCacheForTransactionDeletion(transaction) }
+        let sourceIndexByID = transactionSourceIndexByID()
+        for change in changed {
+            refreshDerivedCacheForTransactionReplacement(previous: change.previous, updated: change.updated,
+                                                         sourceIndexByID: sourceIndexByID)
+        }
+        return true
     }
 
     private func canRefreshTransactionDisplayReplacement(previous: LedgerTransaction, updated: LedgerTransaction) -> Bool {
@@ -2172,6 +2247,7 @@ final class MobileLedgerStore: ObservableObject {
             try Self.validateCandidateData(candidate, operation: "Recurring projection")
             let suggestionJournals = changedSuggestionJournals(in: candidate.transactions)
             data = candidate
+            lastValidatedJournal = data
             refreshDerivedCache()
             refreshHistoricalTextSuggestions(in: suggestionJournals)
             save(syncCloud: syncCloud, refreshCache: false)
@@ -2492,6 +2568,7 @@ final class MobileLedgerStore: ObservableObject {
                 ? (hasChangedSuggestionSource(previous, transaction) ? [transaction.ledgerID] : [])
                 : changedSuggestionJournals(in: candidate.transactions)
             data = candidate
+            lastValidatedJournal = data
             committed = true
             if singleRow {
                 refreshDerivedCacheForTransactionReplacement(previous: previous, updated: transaction)
@@ -3423,6 +3500,7 @@ final class MobileLedgerStore: ObservableObject {
         }
         sealPendingDeferredWrite()
         let snapshot = data
+        let revision = journalRevision
         let databaseURL = sqliteStore.databaseURL
         let baseline = persistenceBaseline
         let directory = supportDirectory
@@ -3447,12 +3525,19 @@ final class MobileLedgerStore: ObservableObject {
                 }
             }
             finishPersistence(sequence: sequence, error: nil)
+            noteValidatedJournal(revision: revision)
             refreshCloudSyncDataAvailability()
             if shouldSync { scheduleDeferredCloudSave() }
         } catch {
             finishPersistence(sequence: sequence, error: error)
             throw error
         }
+    }
+
+    /// Records that the live journal is still exactly a value that passed full
+    /// validation off the UI actor, so the next flush need not scan it again.
+    private func noteValidatedJournal(revision: UInt64) {
+        if journalRevision == revision { lastValidatedJournal = data }
     }
 
     private func save(
@@ -3532,7 +3617,7 @@ final class MobileLedgerStore: ObservableObject {
         let request = MobileDeferredPersistenceBatch.Request(
             snapshot: data, sequence: nextPersistenceSequence(), trackSyncChanges: trackSyncChanges,
             validateSnapshot: validateSnapshot, scheduleCloudAfterSuccess: scheduleCloudAfterSuccess,
-            refreshCloudStateAfterSuccess: refreshCloudStateAfterSuccess
+            refreshCloudStateAfterSuccess: refreshCloudStateAfterSuccess, journalRevision: journalRevision
         )
         if pendingDeferredWrite?.replacePending(with: request) == true { return }
         sealPendingDeferredWrite()
@@ -3544,10 +3629,12 @@ final class MobileLedgerStore: ObservableObject {
         let lease = MobilePersistenceBackgroundLease()
         Self.deferredPersistenceQueue.async { [weak self, batch, databaseURL, baseline, supportDirectory, lease] in
             let request = batch.take()
+            var validated = false
             let outcome = Result<Void, Error> {
                 let previous = baseline.snapshot
                 if request.validateSnapshot || previous == nil {
                     try Self.validateCandidateData(request.snapshot, operation: "Journal")
+                    validated = true
                 }
                 let store = SQLiteJournalStore(databaseURL: databaseURL)
                 try store.persist(request.snapshot, previous: previous, trackSyncChanges: request.trackSyncChanges)
@@ -3555,12 +3642,14 @@ final class MobileLedgerStore: ObservableObject {
                 Self.removeObsoleteAttachmentFiles(supportDirectory: supportDirectory, previous: previous, data: request.snapshot)
             }
             if case .failure = outcome { baseline.snapshot = nil }
+            let writerValidated = validated
             Task { @MainActor [weak self] in
                 lease.end()
                 guard let self else { return }
                 switch outcome {
                 case .success:
                     self.finishPersistence(sequence: request.sequence, error: nil)
+                    if writerValidated { self.noteValidatedJournal(revision: request.journalRevision) }
                     if request.refreshCloudStateAfterSuccess { self.refreshCloudSyncDataAvailability() }
                     if request.scheduleCloudAfterSuccess { self.scheduleDeferredCloudSave() }
                 case .failure(let error):
@@ -3962,7 +4051,10 @@ final class MobileLedgerStore: ObservableObject {
             Set(snapshot?.transactions.flatMap { $0.attachment?.assets.map { normalizedAttachmentStoredPathValue($0.storedPath) } ?? [] } ?? [])
         }
         let current = storedPaths(in: data)
-        var candidates = storedPaths(in: previous).subtracting(current)
+        // Unchanged transactions cannot have dropped a path; skip collecting
+        // and normalizing every stored path a second time.
+        let transactionsUnchanged = previous.map { $0.transactions == data.transactions } ?? false
+        var candidates = transactionsUnchanged ? [] : storedPaths(in: previous).subtracting(current)
         guard !candidates.isEmpty || collectCompletedClaims else { return }
         let database = SQLiteJournalStore(databaseURL: supportDirectory.appendingPathComponent("journal.sqlite"))
         // Failed retention reads must never turn into destructive cleanup.
@@ -4061,11 +4153,24 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
 
     /// The sync pass awaits the serial writer instead of blocking the UI actor
     /// on it. Unlike the editor's flush, this never schedules another cloud
-    /// pass, so a running pass cannot queue its own follow-up forever.
+    /// pass, so a running pass cannot queue its own follow-up forever. A
+    /// journal not yet validated is validated by the writer before the commit,
+    /// so an edit never costs a whole-journal scan on the UI actor here.
     func cloudKitFlushLocalChangesAsync() async throws {
         try requireWritableJournal()
-        try validateLiveJournalIfChanged()
         let snapshot = data
+        let revision = journalRevision
+        let alreadyValidated = lastValidatedJournal.map { $0.hasIdenticalContent(to: snapshot) } ?? false
+        try await persistSnapshotAsync(snapshot, trackSyncChanges: true, validateFirst: !alreadyValidated)
+        if !alreadyValidated { noteValidatedJournal(revision: revision) }
+    }
+
+    /// Awaits the serial writer instead of blocking the UI actor. With
+    /// `validateFirst`, the writer runs the full validation and a rejected
+    /// snapshot writes nothing; its error is thrown exactly as a failed
+    /// validation on the UI actor was, without being reported as a disk failure.
+    private func persistSnapshotAsync(_ snapshot: JournalData, trackSyncChanges: Bool,
+                                      collectCompletedReceipts: Bool = false, validateFirst: Bool = false) async throws {
         let databaseURL = sqliteStore.databaseURL
         let baseline = persistenceBaseline
         let directory = supportDirectory
@@ -4073,29 +4178,40 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
         sealPendingDeferredWrite()
         let lease = MobilePersistenceBackgroundLease()
         defer { lease.end() }
-        do {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                Self.deferredPersistenceQueue.async {
-                    do {
-                        let previous = baseline.snapshot
-                        try SQLiteJournalStore(databaseURL: databaseURL).persist(snapshot, previous: previous, trackSyncChanges: true)
-                        baseline.snapshot = snapshot
-                        Self.removeObsoleteAttachmentFiles(supportDirectory: directory, previous: previous, data: snapshot)
-                        continuation.resume()
-                    } catch {
-                        baseline.snapshot = nil
-                        continuation.resume(throwing: error)
-                    }
+        let outcome = await withCheckedContinuation { (continuation: CheckedContinuation<MobileSnapshotWriteOutcome, Never>) in
+            Self.deferredPersistenceQueue.async {
+                if validateFirst {
+                    do { try Self.validateCandidateData(snapshot, operation: "Journal") }
+                    catch { continuation.resume(returning: .rejected(error)); return }
+                }
+                do {
+                    let previous = baseline.snapshot
+                    try SQLiteJournalStore(databaseURL: databaseURL).persist(snapshot, previous: previous, trackSyncChanges: trackSyncChanges)
+                    baseline.snapshot = snapshot
+                    Self.removeObsoleteAttachmentFiles(supportDirectory: directory, previous: previous, data: snapshot,
+                                                       collectCompletedClaims: collectCompletedReceipts)
+                    continuation.resume(returning: .committed)
+                } catch {
+                    baseline.snapshot = nil
+                    continuation.resume(returning: .failed(error))
                 }
             }
+        }
+        switch outcome {
+        case .committed:
             finishPersistence(sequence: sequence, error: nil)
-        } catch {
+        case .rejected(let error):
+            throw error
+        case .failed(let error):
             finishPersistence(sequence: sequence, error: error)
             throw error
         }
     }
 
     func cloudKitValidate(_ candidate: JournalData) throws {
+        // Validation is a pure function of the journal. A merge of echoes
+        // only shares storage with the live journal that already passed it.
+        if let validated = lastValidatedJournal, validated.hasIdenticalContent(to: candidate) { return }
         try Self.validateCandidateData(candidate, operation: "iCloud sync")
     }
 
@@ -4134,10 +4250,13 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
         let contentChanged = !data.hasIdenticalContent(to: candidate)
         if contentChanged {
             let suggestionJournals = changedSuggestionJournals(in: candidate.transactions)
+            let replaced = data
             data = candidate
-            refreshDerivedCache()
+            if !refreshDerivedCacheForRemoteTransactionChanges(from: replaced) { refreshDerivedCache() }
             refreshHistoricalTextSuggestions(in: suggestionJournals)
         }
+        // The live journal now equals the candidate validated above.
+        lastValidatedJournal = data
         // An echo-only page (this device's own uploads coming back) updates
         // sync bookkeeping only. Every derived index, cached register, and
         // suggestion index stays warm, and no view is asked to re-render.
@@ -4189,6 +4308,7 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
         let previousSecurity = data.security
         let suggestionJournals = changedSuggestionJournals(in: candidate.transactions)
         data = candidate
+        lastValidatedJournal = data
         refreshDerivedCache()
         refreshHistoricalTextSuggestions(in: suggestionJournals)
         receiptContentRevisions.invalidateAll()
@@ -4231,6 +4351,7 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
         let previousSecurity = data.security
         let suggestionJournals = changedSuggestionJournals(in: candidate.transactions)
         if !data.hasIdenticalContent(to: candidate) { data = candidate; refreshDerivedCache() }
+        lastValidatedJournal = data
         refreshHistoricalTextSuggestions(in: suggestionJournals)
         receiptContentRevisions.invalidateAll()
         refreshUnlockStateForLoadedData(previousSecurity: previousSecurity)
@@ -4261,18 +4382,49 @@ extension MobileLedgerStore: CloudKitJournalSyncHost {
     func cloudKitSyncDidFinish(at date: Date) throws {
         PaymentMetadataStore.shared.refreshIfStarted()
         Task { await ReceiptPreferencesStore.shared.refresh() }
-        var updated = data
-        updated.lastSyncedAt = date
-        let snapshot = updated
+        var snapshot = data
+        snapshot.lastSyncedAt = date
         // Publish the completion timestamp only after the current journal and
         // any edit made during network awaits have reached the same save queue.
         try persistSnapshot(snapshot, trackSyncChanges: true, collectCompletedReceipts: true)
-        // Only the timestamp changed. Nothing renders it, so skip the
-        // app-wide re-render that closed every pass.
-        installsJournalSilently = true
-        data = snapshot
-        installsJournalSilently = false
+        installSyncTimestamp(date)
         if validationError != nil { validationError = nil }
         refreshCloudSyncDataAvailability()
+    }
+
+    /// Every pass ends here, so the UI actor must not wait on the writer (or on
+    /// the receipt-claim scan behind it). The timestamp is installed first: an
+    /// edit made while the writer works carries it too, and that edit's own
+    /// write queues behind this one on the same serial writer.
+    func cloudKitSyncDidFinishAsync(at date: Date) async throws {
+        PaymentMetadataStore.shared.refreshIfStarted()
+        Task { await ReceiptPreferencesStore.shared.refresh() }
+        try requireWritableJournal()
+        let previousTimestamp = data.lastSyncedAt
+        let errorAtCompletion = validationError?.id
+        installSyncTimestamp(date)
+        do {
+            try await persistSnapshotAsync(data, trackSyncChanges: true, collectCompletedReceipts: true)
+        } catch {
+            // The pass did not complete; do not leave its timestamp behind.
+            if data.lastSyncedAt == date { installSyncTimestamp(previousTimestamp) }
+            throw error
+        }
+        // Clear only the message this pass supersedes, never one an action
+        // reported while the writer was busy.
+        if let errorAtCompletion, validationError?.id == errorAtCompletion { validationError = nil }
+        refreshCloudSyncDataAvailability()
+    }
+
+    /// Only the timestamp changes. Nothing renders it and validation ignores
+    /// it, so install it without the app-wide re-render that closed every pass
+    /// and without discarding the validated value.
+    private func installSyncTimestamp(_ date: Date?) {
+        guard data.lastSyncedAt != date else { return }
+        let wasValidated = lastValidatedJournal.map { $0.hasIdenticalContent(to: data) } ?? false
+        installsJournalSilently = true
+        data.lastSyncedAt = date
+        installsJournalSilently = false
+        if wasValidated { lastValidatedJournal = data }
     }
 }

@@ -272,6 +272,47 @@ final class RecurringJournalEditorTests: XCTestCase {
         XCTAssertEqual(RecurringJournalEditor.materialized(extended, referenceDate: f.day(2026, 9, 8), calendar: f.calendar, deletedIDs: [deleted.id]).transactions, extended.transactions)
     }
 
+    /// Generated identities are synced between devices; any change would
+    /// duplicate every projected occurrence. These values came from the
+    /// original string-formatting implementation.
+    func testGeneratedOccurrenceAndPostingIdentitiesAreStable() throws {
+        let rule = try XCTUnwrap(UUID(uuidString: "0A1B2C3D-4E5F-4061-8293-A4B5C6D7E8F9"))
+        XCTAssertEqual(RecurringJournalEditor.occurrenceID(ruleID: rule, day: Date(timeIntervalSince1970: 1_700_006_400)).uuidString,
+                       "6C0C5CD0-1D14-1D0E-F0BD-E259DC4CB20D")
+        XCTAssertEqual(RecurringJournalEditor.postingID(transactionID: rule, index: 1).uuidString,
+                       "A8E54A7A-77B9-84D5-877C-46D5FCC913C9")
+    }
+
+    /// A daily top-up must neither duplicate nor skip occurrences when one-off
+    /// entries and several schedules share journals, and repeating it is a no-op.
+    func testMaterializingSeveralSchedulesIsIdempotentAndHonorsLaterOneOffEntries() throws {
+        let f = Fixture()
+        var journal = f.journal
+        let cash = journal.accounts[0], expense = journal.accounts[1], currency = journal.commodities[0]
+        func entry(_ date: Date, rule: RecurrenceRule?) -> LedgerTransaction {
+            LedgerTransaction(ledgerID: journal.ledgers[0].id, date: date, payee: "Synthetic", note: "", number: "", cleared: true,
+                postings: [Posting(accountID: cash.id, commodityID: currency.id, amount: -5, listIndex: 0),
+                           Posting(accountID: expense.id, commodityID: currency.id, amount: 5, listIndex: 1)], recurrenceRule: rule)
+        }
+        journal.transactions = [entry(f.day(2026, 1, 3), rule: nil),
+                                entry(f.day(2026, 1, 5), rule: RecurrenceRule(frequency: .weekly)),
+                                entry(f.day(2026, 1, 7), rule: RecurrenceRule(frequency: .monthly, intervalValue: 2)),
+                                entry(f.day(2026, 1, 9), rule: RecurrenceRule(frequency: .daily, occurrenceCount: 30)),
+                                // A one-off entry beyond the five-year horizon extends unlimited schedules to its day.
+                                entry(f.day(2033, 6, 1), rule: nil)]
+        let projected = RecurringJournalEditor.materialized(journal, referenceDate: f.day(2026, 1, 10), calendar: f.calendar)
+        let ids = projected.transactions.map(\.id)
+        XCTAssertEqual(Set(ids).count, ids.count)
+        let weekly = projected.transactions.filter { $0.recurrenceRule?.frequency == .weekly }.map(\.date).sorted()
+        XCTAssertEqual(weekly.last.map { f.calendar.startOfDay(for: $0) <= f.calendar.startOfDay(for: f.day(2033, 6, 1)) }, true)
+        XCTAssertGreaterThan(weekly.last ?? .distantPast, f.day(2033, 5, 24))
+        XCTAssertEqual(projected.transactions.filter { $0.recurrenceRule?.frequency == .daily }.count, 30)
+        let again = RecurringJournalEditor.materialized(projected, referenceDate: f.day(2026, 1, 10), calendar: f.calendar)
+        XCTAssertEqual(again.transactions, projected.transactions)
+        let nextDay = RecurringJournalEditor.materialized(projected, referenceDate: f.day(2026, 1, 11), calendar: f.calendar)
+        XCTAssertEqual(Array(nextDay.transactions.prefix(projected.transactions.count)), projected.transactions)
+    }
+
     private func roundTrip(_ journal: JournalData) throws -> JournalData {
         try JSONDecoder().decode(JournalData.self, from: JSONEncoder().encode(journal))
     }

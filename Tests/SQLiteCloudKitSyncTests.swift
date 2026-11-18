@@ -382,6 +382,34 @@ final class SQLiteCloudKitSyncTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), newerBytes)
     }
 
+    func testKnownMirrorExistenceAndVerifiedReceiptEchoesLeaveTheReceiptRowCurrent() throws {
+        let f = try fixture(receipt: true)
+        XCTAssertFalse(try f.store.hasKnownCloudKitRecords(contextKey: context))
+        try f.store.prepareInitialCloudKitSnapshot(f.data, contextKey: context)
+        let claimed = try f.store.claimCloudKitChanges(contextKey: context, limit: 1_000)
+        let saved = claimed.map { value -> CloudKitSyncRecord in var copy = value; copy.systemFields = Data([1]); copy.assetFileURL = nil; return copy }
+        try f.store.acknowledgeCloudKitRecords(saved, submitted: claimed, contextKey: context)
+        XCTAssertTrue(try f.store.hasKnownCloudKitRecords(contextKey: context))
+        XCTAssertEqual(try f.store.knownCloudKitRecords(contextKey: context).count, saved.count)
+        let echo = try XCTUnwrap(saved.first { $0.recordType == "attachment_asset" })
+        let sha = try XCTUnwrap(echo.assetSHA256)
+        let size = try XCTUnwrap(f.asset).sizeBytes
+        func receiptRow() throws -> String {
+            try text("SELECT sha256 || '|' || size_bytes || '|' || upload_state FROM attachment_assets WHERE id = '\(echo.recordID)'", f)
+        }
+        let verified = "\(sha)|\(size)|uploaded"
+        XCTAssertEqual(try receiptRow(), verified)
+        // This device's own upload coming back leaves the verified row as it is.
+        try f.store.persistCloudKitPull([echo], data: f.data, previous: f.data, contextKey: context, changeToken: Data([2]))
+        XCTAssertEqual(try receiptRow(), verified)
+        // A row not yet marked uploaded, or recording another size, is still
+        // verified against the file's bytes and corrected by the echo.
+        try execute("UPDATE attachment_assets SET upload_state = 'pending', size_bytes = 1 WHERE id = '\(echo.recordID)'", f)
+        try f.store.persistCloudKitPull([echo], data: f.data, previous: f.data, contextKey: context, changeToken: Data([3]))
+        XCTAssertEqual(try receiptRow(), verified)
+        XCTAssertEqual(try f.store.cloudKitChangeToken(contextKey: context), Data([3]))
+    }
+
     func testPullClassificationMatchesIndividualQueriesAndIdleTokenBindLeavesJournalUntouched() throws {
         let f = try fixture(receipt: true)
         try f.store.prepareInitialCloudKitSnapshot(f.data, contextKey: context)
@@ -605,6 +633,15 @@ final class SQLiteCloudKitSyncTests: XCTestCase {
         guard sqlite3_open(f.store.databaseURL.path, &db) == SQLITE_OK, let db else { throw SQLiteJournalStoreError.openFailed("Synthetic fixture") }
         defer { sqlite3_close(db) }
         guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else { throw SQLiteJournalStoreError.stepFailed(String(cString: sqlite3_errmsg(db))) }
+    }
+
+    private func text(_ sql: String, _ f: Fixture) throws -> String {
+        var db: OpaquePointer?; var statement: OpaquePointer?
+        guard sqlite3_open(f.store.databaseURL.path, &db) == SQLITE_OK, let db else { throw SQLiteJournalStoreError.openFailed("Synthetic fixture") }
+        defer { sqlite3_finalize(statement); sqlite3_close(db) }
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, sqlite3_step(statement) == SQLITE_ROW,
+              let value = sqlite3_column_text(statement, 0) else { throw SQLiteJournalStoreError.stepFailed("Synthetic text query") }
+        return String(cString: value)
     }
 
     private func scalar(_ sql: String, _ f: Fixture) throws -> Int {

@@ -131,8 +131,9 @@ extension RecurringJournalEditor {
             guard state.consumedOccurrences < Int.max else { break }
             state.consumedOccurrences += 1
             if rule.occurrenceCount == nil && rule.endDate == nil && day < referenceDay { continue }
+            if existingDays.contains(day) { continue }
             let id = occurrenceID(ruleID: rule.id, day: day)
-            if existingDays.contains(day) || existingIDs.contains(id) || deletedIDs.contains(id) { continue }
+            if existingIDs.contains(id) || deletedIDs.contains(id) { continue }
             var row = first
             rule.templateHistory?.template(on: day).apply(to: &row)
             row.id = allIDs.contains(id) ? UUID() : id

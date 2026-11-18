@@ -123,10 +123,15 @@ protocol CloudKitJournalSyncHost: AnyObject {
     func cloudKitSyncDidUpdate(_ progress: CloudSyncProgress)
     func cloudKitSyncDidFail(_ message: String)
     func cloudKitSyncDidFinish(at date: Date) throws
+    /// Same outcome as `cloudKitSyncDidFinish`, but the pass may suspend while
+    /// the host's serial writer records the timestamp instead of blocking the
+    /// UI actor at the end of every pass.
+    func cloudKitSyncDidFinishAsync(at date: Date) async throws
 }
 
 extension CloudKitJournalSyncHost {
     func cloudKitFlushLocalChangesAsync() async throws { try cloudKitFlushLocalChanges() }
+    func cloudKitSyncDidFinishAsync(at date: Date) async throws { try cloudKitSyncDidFinish(at: date) }
 }
 
 /// Value-only journal snapshots cross the database queue without sharing mutable
@@ -680,9 +685,9 @@ final class CloudKitJournalSyncCoordinator {
             _ = try await database(gate: gate) { try $0.bindCloudKitAccount(contextKey: context, accountID: account) }
             try check(id, gate: gate)
             let startingToken = try await database(gate: gate) { try $0.cloudKitChangeToken(contextKey: context) }
-            let known = try await database(gate: gate) { try $0.knownCloudKitRecords(contextKey: context) }
+            let hasKnownRecords = try await database(gate: gate) { try $0.hasKnownCloudKitRecords(contextKey: context) }
             try check(id, gate: gate)
-            if startingToken == nil && known.isEmpty {
+            if startingToken == nil && !hasKnownRecords {
                 try await client.prepareZone()
                 try check(id, gate: gate)
             }
@@ -799,7 +804,7 @@ final class CloudKitJournalSyncCoordinator {
             guard unresolved.isEmpty else {
                 throw CloudKitSyncError.reviewRequired(unresolved.count)
             }
-            try host.cloudKitSyncDidFinish(at: dependencies.now())
+            try await host.cloudKitSyncDidFinishAsync(at: dependencies.now())
             try check(id, gate: gate)
             failureCount = 0
             retryNotBefore = nil
@@ -862,7 +867,6 @@ final class CloudKitJournalSyncCoordinator {
     private func commitClassified(_ records: [CloudKitSyncRecord], classification: CloudKitPullClassification, token: Data?, context: String, id: UUID, gate: CloudKitPersistenceGate) async throws {
         try check(id, gate: gate)
         guard let host else { throw CancellationError() }
-        let store = host.cloudKitSQLiteStore
         let pending = classification.pendingRecords
         let known = classification.knownRecords
         let versions = classification.pendingVersions
@@ -1038,9 +1042,17 @@ enum CloudKitJournalMerger {
                 throw CloudKitSyncError.invalidData("An iCloud record does not match its journal or parent.")
             }
         }
-        func replace<T: Identifiable>(_ value: T, in values: inout [T]) where T.ID == UUID {
-            if let index = values.firstIndex(where: { $0.id == value.id }) { values[index] = value }
-            else { values.append(value) }
+        // An unchanged value (most often this device's own upload coming back)
+        // is not written, so untouched families keep sharing storage with the
+        // live journal and later identity checks stay constant time.
+        func replace<T: Identifiable & Equatable>(_ value: T, in values: inout [T]) where T.ID == UUID {
+            if let index = values.firstIndex(where: { $0.id == value.id }) {
+                if values[index] != value { values[index] = value }
+            } else { values.append(value) }
+        }
+        func remove<T>(from values: inout [T], where matches: (T) -> Bool) {
+            guard values.contains(where: matches) else { return }
+            values.removeAll(where: matches)
         }
         for record in records where record.operation != "delete" {
             switch record.recordType {
@@ -1082,6 +1094,7 @@ enum CloudKitJournalMerger {
                 guard var container = candidate.transactions[index].attachment,
                       let assetIndex = container.assets.firstIndex(where: { $0.id == asset.id }) else { continue }
                 try requireParent(record, container.id)
+                guard container.assets[assetIndex] != asset else { continue }
                 container.assets[assetIndex] = asset
                 candidate.transactions[index].attachment = container
             }
@@ -1090,21 +1103,24 @@ enum CloudKitJournalMerger {
             guard let id = UUID(uuidString: record.recordID) else { throw CloudKitSyncError.invalidData("An iCloud deletion has an invalid identity.") }
             switch record.recordType {
             case "ledger":
-                candidate.ledgers.removeAll { $0.id == id }
-                candidate.commodities.removeAll { $0.ledgerID == id }
-                candidate.accounts.removeAll { $0.ledgerID == id }
-                candidate.sources.removeAll { $0.ledgerID == id }
-                candidate.transactions.removeAll { $0.ledgerID == id }
-                candidate.transactionTemplates.removeAll { $0.ledgerID == id }
-            case "commodity": candidate.commodities.removeAll { $0.id == id }
-            case "account": candidate.accounts.removeAll { $0.id == id }
+                remove(from: &candidate.ledgers) { $0.id == id }
+                remove(from: &candidate.commodities) { $0.ledgerID == id }
+                remove(from: &candidate.accounts) { $0.ledgerID == id }
+                remove(from: &candidate.sources) { $0.ledgerID == id }
+                remove(from: &candidate.transactions) { $0.ledgerID == id }
+                remove(from: &candidate.transactionTemplates) { $0.ledgerID == id }
+            case "commodity": remove(from: &candidate.commodities) { $0.id == id }
+            case "account": remove(from: &candidate.accounts) { $0.id == id }
             case "source":
-                candidate.sources.removeAll { $0.id == id }
+                remove(from: &candidate.sources) { $0.id == id }
                 for index in candidate.transactions.indices where candidate.transactions[index].sourceID == id { candidate.transactions[index].sourceID = nil }
-            case "transaction": candidate.transactions.removeAll { $0.id == id }
-            case "transaction_template": candidate.transactionTemplates.removeAll { $0.id == id }
+            case "transaction": remove(from: &candidate.transactions) { $0.id == id }
+            case "transaction_template": remove(from: &candidate.transactionTemplates) { $0.id == id }
             case "attachment_asset":
-                for index in candidate.transactions.indices { candidate.transactions[index].attachment?.assets.removeAll { $0.id == id } }
+                for index in candidate.transactions.indices
+                where candidate.transactions[index].attachment?.assets.contains(where: { $0.id == id }) == true {
+                    candidate.transactions[index].attachment?.assets.removeAll { $0.id == id }
+                }
             case "journal_metadata": break
             default: throw CloudKitSyncError.invalidData("An iCloud deletion uses an unsupported schema.")
             }

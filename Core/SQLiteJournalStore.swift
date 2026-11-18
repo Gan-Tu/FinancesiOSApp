@@ -498,6 +498,9 @@ struct CloudKitSyncConflict: Identifiable, Equatable, Sendable {
 final class SQLiteJournalStore: @unchecked Sendable {
     static let currentSchemaVersion = 2
     private static let accessLock = NSRecursiveLock()
+    /// Stored path decoded from each completed receipt claim's JSON text.
+    /// Read and written only while `accessLock` is held.
+    nonisolated(unsafe) private static var completedClaimStoredPaths: [String: String] = [:]
     /// Gives concurrent app/sync writes time to finish instead of surfacing a
     /// transient `database is locked` error to the user.
     private static let busyTimeoutMilliseconds: Int32 = 8_000
@@ -1286,6 +1289,17 @@ final class SQLiteJournalStore: @unchecked Sendable {
         try withCloudKitDatabase(contextKey: contextKey) { try readKnownCloudKitRecords(contextKey: contextKey, database: $0) }
     }
 
+    /// Whether the known mirror has any entry, without reading or decoding it.
+    /// Every sync pass asks this; decoding the whole mirror to answer it held
+    /// the process-wide SQLite lock for time proportional to the journal.
+    func hasKnownCloudKitRecords(contextKey: String) throws -> Bool {
+        try withCloudKitDatabase(contextKey: contextKey) { database in
+            try rows("SELECT EXISTS(SELECT 1 FROM cloudkit_records WHERE context_key = ?)", database: database,
+                     bindValues: { try bind(contextKey, to: $0, at: 1, database) },
+                     map: { sqlite3_column_int64($0, 0) != 0 }).first ?? false
+        }
+    }
+
     func knownCloudKitRecord(forKey key: String, contextKey: String) throws -> CloudKitSyncRecord? {
         try withCloudKitDatabase(contextKey: contextKey) {
             try readKnownCloudKitRecord(forKey: key, contextKey: contextKey, database: $0)
@@ -1377,12 +1391,19 @@ final class SQLiteJournalStore: @unchecked Sendable {
             }
             var completed = Set<String>()
             if includeCompletedClaims {
-                let records = try rows("SELECT record_json FROM cloudkit_receipt_claims AS claim WHERE NOT EXISTS (SELECT 1 FROM sync_outbox WHERE client_change_id = claim.client_change_id AND state IN ('pending', 'in_flight'))", database: database) { statement in
-                    try decodeCloudKitRecord(columnText(statement, 0) ?? "")
+                // Claims are kept forever and this runs after every sync pass.
+                // A claim's stored path is a pure function of its JSON text, so
+                // each distinct text is decoded once per process.
+                let claims = try rows("SELECT record_json FROM cloudkit_receipt_claims AS claim WHERE NOT EXISTS (SELECT 1 FROM sync_outbox WHERE client_change_id = claim.client_change_id AND state IN ('pending', 'in_flight'))", database: database) { statement in
+                    columnText(statement, 0) ?? ""
                 }
-                for record in records {
+                for text in claims {
+                    if let path = Self.completedClaimStoredPaths[text] { completed.insert(path); continue }
+                    let record = try decodeCloudKitRecord(text)
                     guard let json = record.payloadJSON?.data(using: .utf8) else { throw cloudKitError("Completed receipt metadata is missing.") }
-                    completed.insert(try JSONDecoder.appDecoder.decode(AttachmentAsset.self, from: json).storedPath)
+                    let path = try JSONDecoder.appDecoder.decode(AttachmentAsset.self, from: json).storedPath
+                    Self.completedClaimStoredPaths[text] = path
+                    completed.insert(path)
                 }
             }
             return (Set(pending.map(\.storedPath)), completed, pending)
@@ -1440,7 +1461,15 @@ final class SQLiteJournalStore: @unchecked Sendable {
                 ? try initialDefaultCloudKitMetadataIDs(contextKey: contextKey, database: database) : []
             try guardCloudKitCandidate(data, contextKey: contextKey, ignoringClientIDs: placeholders, database: database)
             let pending = try readCloudKitOutbox(database: database)
-            let knownBeforePull = try readKnownCloudKitRecords(contextKey: contextKey, database: database)
+            // Only the incoming keys are consulted. Read them before any write
+            // below so each lookup still sees the mirror as it was before this
+            // pull, without decoding every known record for a page of echoes.
+            var knownBeforePull: [String: CloudKitSyncRecord] = [:]
+            for record in records where knownBeforePull[record.key] == nil {
+                if let known = try readKnownCloudKitRecord(forKey: record.key, contextKey: contextKey, database: database) {
+                    knownBeforePull[record.key] = known
+                }
+            }
             for record in records {
                 try validateCloudKitRecord(record)
                 // The coordinator filters historical bases. An exact already
@@ -1984,11 +2013,17 @@ final class SQLiteJournalStore: @unchecked Sendable {
     private func markCloudKitReceiptStored(_ record: CloudKitSyncRecord, database: OpaquePointer) throws {
         guard record.recordType == "attachment_asset", record.operation == "upsert", validCloudKitSHA(record.assetSHA256),
               let expectedSHA = record.assetSHA256?.lowercased(), let payloadHash = record.contentHash else { return }
-        let storedPath = try rows("SELECT stored_path FROM attachment_assets WHERE id = ? AND EXISTS(SELECT 1 FROM sync_records WHERE record_type = 'attachment_asset' AND record_id = attachment_assets.id AND content_hash = ? AND deleted_at IS NULL)", database: database, bindValues: {
+        let stored = try rows("SELECT stored_path, sha256, size_bytes, upload_state FROM attachment_assets WHERE id = ? AND EXISTS(SELECT 1 FROM sync_records WHERE record_type = 'attachment_asset' AND record_id = attachment_assets.id AND content_hash = ? AND deleted_at IS NULL)", database: database, bindValues: {
             try bind(record.recordID, to: $0, at: 1, database); try bind(payloadHash, to: $0, at: 2, database)
-        }, map: { columnText($0, 0) }).first ?? nil
-        guard let storedPath, let file = ownedCloudKitReceiptURL(storedPath),
-              let verified = try? hashStableCloudKitReceipt(file), verified.sha256 == expectedSHA else { return }
+        }, map: { (path: columnText($0, 0), sha256: columnText($0, 1), size: sqlite3_column_int64($0, 2), state: columnText($0, 3)) }).first
+        guard let stored, let storedPath = stored.path, let file = ownedCloudKitReceiptURL(storedPath) else { return }
+        // An echo of a receipt this row already records as uploaded with the
+        // same checksum and file size cannot change the row: a matching file
+        // rewrites identical values and a mismatching one writes nothing.
+        // Skip re-reading and hashing the whole file for every such echo.
+        if stored.sha256 == expectedSHA, stored.state == "uploaded",
+           let size = Self.fileSize(at: file), size == stored.size { return }
+        guard let verified = try? hashStableCloudKitReceipt(file), verified.sha256 == expectedSHA else { return }
         // Blob bytes can legitimately change without any JSON/size change.
         // Refresh the cached SHA only from the actual owned file, never from
         // an old echo or trusted-looking metadata alone.

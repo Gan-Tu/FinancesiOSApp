@@ -1,6 +1,7 @@
 import XCTest
 import SQLite3
 import CryptoKit
+import Combine
 @testable import FinancesClone
 
 @MainActor
@@ -373,6 +374,146 @@ final class MobileCompanionTests: XCTestCase {
         let reopened = MobileLedgerStore(supportDirectory: folder)
         let asset = try XCTUnwrap(reopened.transaction(moved.transactions[0].id)?.attachment?.assets.first)
         XCTAssertEqual(try Data(contentsOf: reopened.attachmentURL(for: asset)), bytes)
+    }
+
+    func testRemoteTransactionEditsUpdateEveryCachedViewLikeAFullRebuild() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let referenceFolder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder); try? FileManager.default.removeItem(at: referenceFolder) }
+        let store = MobileLedgerStore(supportDirectory: folder,
+                                      initialData: DemoData.fixture(includeFutureEntries: true, includeRecurringEntries: true))
+        let context = "synthetic-incremental-context"
+        _ = try store.cloudKitSQLiteStore.bindCloudKitAccount(contextKey: context, accountID: "synthetic-account")
+        warmLazyCaches(store)
+
+        var changed = store.data
+        let plain = changed.transactions.indices.filter { changed.transactions[$0].recurrenceRule == nil }
+        XCTAssertGreaterThan(plain.count, 8)
+        changed.transactions[plain[0]].note = "Edited on another device"
+        // Joins another entry's day, so same-day order must follow the journal.
+        changed.transactions[plain[1]].date = changed.transactions[plain[2]].date
+        for index in changed.transactions[plain[1]].postings.indices { changed.transactions[plain[1]].postings[index].amount *= 2 }
+        changed.transactions[plain[3]].cleared.toggle()
+        var sameDay = changed.transactions[plain[4]]
+        sameDay.id = UUID(); sameDay.note = "Added on another device"
+        for index in sameDay.postings.indices { sameDay.postings[index].id = UUID() }
+        var future = changed.transactions[plain[5]]
+        future.id = UUID(); future.note = "Scheduled on another device"
+        future.date = try XCTUnwrap(Calendar.current.date(byAdding: .year, value: 2, to: Date()))
+        for index in future.postings.indices { future.postings[index].id = UUID() }
+        let removed = changed.transactions[plain[6]].id
+        changed.transactions.removeAll { $0.id == removed }
+        changed.transactions.append(contentsOf: [sameDay, future])
+
+        let rebuilds = store.fullDerivedCacheRebuildsForTesting
+        try store.cloudKitCommitRemote([], data: changed, contextKey: context, changeToken: Data([1]))
+        XCTAssertEqual(store.fullDerivedCacheRebuildsForTesting, rebuilds, "A few remote rows update the caches in place")
+        XCTAssertTrue(store.data.hasIdenticalContent(to: changed))
+        XCTAssertNil(store.transaction(removed))
+        assertSameDerivedViews(store, MobileLedgerStore(supportDirectory: referenceFolder, initialData: changed))
+    }
+
+    func testRemoteChangesOutsidePlainTransactionsStillRebuildEveryCachedView() throws {
+        for change in ["repeating", "account"] {
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            let referenceFolder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: folder); try? FileManager.default.removeItem(at: referenceFolder) }
+            let store = MobileLedgerStore(supportDirectory: folder,
+                                          initialData: DemoData.fixture(includeFutureEntries: true, includeRecurringEntries: true))
+            let context = "synthetic-rebuild-context"
+            _ = try store.cloudKitSQLiteStore.bindCloudKitAccount(contextKey: context, accountID: "synthetic-account")
+            warmLazyCaches(store)
+            var changed = store.data
+            if change == "repeating" {
+                let index = try XCTUnwrap(changed.transactions.firstIndex { $0.recurrenceRule != nil })
+                changed.transactions[index].note = "Repeating entry edited on another device"
+            } else {
+                let index = try XCTUnwrap(changed.accounts.firstIndex { $0.name == "Cash" })
+                changed.accounts[index].name = "Wallet"
+                changed.transactions[0].note = "Edited with an account rename"
+            }
+            let rebuilds = store.fullDerivedCacheRebuildsForTesting
+            try store.cloudKitCommitRemote([], data: changed, contextKey: context, changeToken: Data([1]))
+            XCTAssertEqual(store.fullDerivedCacheRebuildsForTesting, rebuilds + 1, change)
+            assertSameDerivedViews(store, MobileLedgerStore(supportDirectory: referenceFolder, initialData: changed))
+        }
+    }
+
+    func testFinishedSyncPassStoresItsTimestampWithoutRerenderingTheApp() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = MobileLedgerStore(supportDirectory: folder, initialData: DemoData.fixture())
+        try store.flushLocalChanges()
+        // The first finished pass legitimately reports that iCloud data is now
+        // available. Every later pass has nothing left to announce.
+        try await store.cloudKitSyncDidFinishAsync(at: Date(timeIntervalSince1970: 1_799_000_000))
+        for _ in 0..<500 where !store.cloudSyncDataAvailable { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(store.cloudSyncDataAvailable)
+        let finished = Date(timeIntervalSince1970: 1_800_000_000)
+        var publishes = 0
+        let observation = store.objectWillChange.sink { _ in publishes += 1 }
+        try await store.cloudKitSyncDidFinishAsync(at: finished)
+        observation.cancel()
+        XCTAssertEqual(publishes, 0, "Nothing renders the sync timestamp")
+        XCTAssertEqual(store.data.lastSyncedAt, finished)
+        XCTAssertNil(store.validationError)
+        await MobileLedgerStore.drainPersistenceQueueForTesting()
+        XCTAssertEqual(try XCTUnwrap(store.cloudKitSQLiteStore.loadData()).lastSyncedAt, finished)
+    }
+
+    /// Populates the lazily built per-account, per-currency, search, amount,
+    /// and flow caches so targeted updates must keep each of them current.
+    private func warmLazyCaches(_ store: MobileLedgerStore) {
+        for account in store.data.accounts { _ = store.transactions(scope: .account(account.id), ledgerID: account.ledgerID) }
+        for commodity in store.data.commodities { _ = store.transactions(scope: .currency(commodity.id), ledgerID: commodity.ledgerID) }
+        _ = store.transactions(scope: .all, search: "market")
+        for row in store.data.transactions { _ = store.registerAmounts(for: row); _ = store.accountFlowDisplay(for: row) }
+    }
+
+    private func assertSameDerivedViews(_ store: MobileLedgerStore, _ reference: MobileLedgerStore,
+                                        file: StaticString = #filePath, line: UInt = #line) {
+        func ids(_ rows: [LedgerTransaction]) -> [UUID] { rows.map(\.id) }
+        // A targeted update drops a currency whose balance returns to zero
+        // where a full rebuild lists it at zero; both show the same amounts.
+        func amounts(_ rows: [MobileBalanceRow]) -> [String: Decimal] {
+            Dictionary(rows.filter { $0.amount != .zero }.map { ("\($0.commodityID?.uuidString ?? "default")-\($0.symbol)", $0.amount) },
+                       uniquingKeysWith: +)
+        }
+        let data = reference.data
+        XCTAssertTrue(store.data.hasIdenticalContent(to: data), file: file, line: line)
+        for ledger in data.ledgers {
+            for scope in [MobileTransactionScope.all, .uncleared, .repeating, .today, .lastMonth] {
+                XCTAssertEqual(ids(store.transactions(scope: scope, ledgerID: ledger.id)),
+                               ids(reference.transactions(scope: scope, ledgerID: ledger.id)), "\(scope.id) in \(ledger.name)", file: file, line: line)
+            }
+            for search in ["another device", "market", "67.3"] {
+                XCTAssertEqual(ids(store.transactions(scope: .all, ledgerID: ledger.id, search: search)),
+                               ids(reference.transactions(scope: .all, ledgerID: ledger.id, search: search)), search, file: file, line: line)
+            }
+            XCTAssertEqual(ids(store.registerSourceRows(ledgerID: ledger.id)), ids(reference.registerSourceRows(ledgerID: ledger.id)), file: file, line: line)
+            XCTAssertEqual(store.unclearedTransactionCount(ledgerID: ledger.id), reference.unclearedTransactionCount(ledgerID: ledger.id), file: file, line: line)
+            let totals = store.ledgerTotalsByKind(ledgerID: ledger.id), expected = reference.ledgerTotalsByKind(ledgerID: ledger.id)
+            for kind in AccountKind.allCases {
+                XCTAssertEqual(amounts(totals[kind] ?? []), amounts(expected[kind] ?? []), "\(kind) totals", file: file, line: line)
+            }
+        }
+        for account in data.accounts {
+            XCTAssertEqual(ids(store.transactions(scope: .account(account.id), ledgerID: account.ledgerID)),
+                           ids(reference.transactions(scope: .account(account.id), ledgerID: account.ledgerID)), account.name, file: file, line: line)
+            XCTAssertEqual(amounts(store.balanceRows(for: account.id)), amounts(reference.balanceRows(for: account.id)), account.name, file: file, line: line)
+        }
+        for commodity in data.commodities {
+            XCTAssertEqual(ids(store.transactions(scope: .currency(commodity.id), ledgerID: commodity.ledgerID)),
+                           ids(reference.transactions(scope: .currency(commodity.id), ledgerID: commodity.ledgerID)), commodity.symbol, file: file, line: line)
+        }
+        for row in data.transactions {
+            XCTAssertEqual(store.transaction(row.id), row, file: file, line: line)
+            XCTAssertEqual(store.registerAmounts(for: row), reference.registerAmounts(for: row), file: file, line: line)
+            XCTAssertEqual(store.accountFlowDisplay(for: row), reference.accountFlowDisplay(for: row), file: file, line: line)
+            if let ruleID = row.recurrenceRule?.id {
+                XCTAssertEqual(store.recurrenceAnchorID(ruleID: ruleID), reference.recurrenceAnchorID(ruleID: ruleID), file: file, line: line)
+            }
+        }
     }
 
     private func executeReviewSQL(_ sql: String, at url: URL) throws {

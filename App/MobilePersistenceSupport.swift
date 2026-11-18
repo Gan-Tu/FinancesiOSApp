@@ -11,6 +11,10 @@ final class MobileDeferredPersistenceBatch: @unchecked Sendable {
         var validateSnapshot: Bool
         var scheduleCloudAfterSuccess: Bool
         var refreshCloudStateAfterSuccess: Bool
+        /// The store's journal revision when `snapshot` was captured. A
+        /// completion compares it to learn whether the live journal is still
+        /// exactly the value the writer validated.
+        var journalRevision: UInt64 = 0
     }
 
     private let lock = NSLock()
@@ -24,6 +28,7 @@ final class MobileDeferredPersistenceBatch: @unchecked Sendable {
         guard acceptingUpdates, request.trackSyncChanges == newer.trackSyncChanges else { return false }
         request.snapshot = newer.snapshot
         request.sequence = newer.sequence
+        request.journalRevision = newer.journalRevision
         request.validateSnapshot = request.validateSnapshot || newer.validateSnapshot
         request.scheduleCloudAfterSuccess = request.scheduleCloudAfterSuccess || newer.scheduleCloudAfterSuccess
         request.refreshCloudStateAfterSuccess = request.refreshCloudStateAfterSuccess || newer.refreshCloudStateAfterSuccess
