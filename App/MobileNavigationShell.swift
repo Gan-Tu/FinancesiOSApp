@@ -1335,6 +1335,7 @@ struct QuickSearchSheet: View {
     @State private var pendingDeletion: LedgerTransaction?
     @State private var pendingDuplication: LedgerTransaction?
     @State private var inlineEditorRoute: EditorRoute?
+    @State private var selectedTransactionID: UUID?
     @State private var resultsQuery = ""
     @State private var hasInitializedSearch = false
     @State private var searchText = ""
@@ -1423,7 +1424,7 @@ struct QuickSearchSheet: View {
                         if !searchResults.transactions.isEmpty {
                             ForEach(searchResults.transactions) { transaction in
                                 Button {
-                                    openTransaction(transaction)
+                                    selectedTransactionID = transaction.id
                                 } label: {
                                     MobileTransactionPreviewRow(
                                         presentation: mobileTransactionPreviewPresentation(for: transaction, store: store)
@@ -1510,6 +1511,9 @@ struct QuickSearchSheet: View {
             .onSubmit(of: .search) {
                 // Keep the query, suggestions, results, and sheet in place.
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            }
+            .navigationDestination(item: $selectedTransactionID) { id in
+                TransactionDetailScreen(transactionID: id, route: $inlineEditorRoute)
             }
             .navigationTitle("Quick Search")
             .navigationBarTitleDisplayMode(.inline)
@@ -1651,13 +1655,6 @@ struct QuickSearchSheet: View {
         if let ledgerID = contextLedgerID ?? store.selectedLedgerID {
             navigationPath.append(.transactions(scope: scope, title: title, ledgerID: ledgerID))
         }
-        dismissSheet()
-    }
-
-    private func openTransaction(_ transaction: LedgerTransaction) {
-        store.selectLedger(transaction.ledgerID)
-        if contextScope != nil { navigationPath.append(.transaction(transaction.id)) }
-        else { navigationPath = [.journal(transaction.ledgerID), .transaction(transaction.id)] }
         dismissSheet()
     }
 

@@ -152,6 +152,10 @@ final class CompanionFlowTests: XCTestCase {
         result.tap()
         XCTAssertTrue(app.navigationBars["Details"].waitForExistence(timeout: 5))
         app.navigationBars["Details"].buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.navigationBars["Quick Search"].waitForExistence(timeout: 5))
+        XCTAssertEqual(field.value as? String, "Weekly groceries")
+        XCTAssertTrue(result.exists)
+        app.navigationBars["Quick Search"].buttons["Done"].tap()
         XCTAssertTrue(app.navigationBars["All"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.searchFields.firstMatch.exists)
     }
@@ -175,6 +179,13 @@ final class CompanionFlowTests: XCTestCase {
         let result = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "search-transaction-", "Today")).firstMatch
         XCTAssertTrue(result.waitForExistence(timeout: 5), "Every transaction preview includes its date")
         let filled = XCTAttachment(screenshot: app.screenshot()); filled.name = "Quick Search dated results and field filters"; filled.lifetime = .keepAlways; add(filled)
+        result.tap()
+        let details = app.navigationBars["Details"]
+        XCTAssertTrue(details.waitForExistence(timeout: 5))
+        details.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.navigationBars["Quick Search"].waitForExistence(timeout: 5))
+        XCTAssertEqual(search.value as? String, "groceries")
+        XCTAssertTrue(result.exists)
         app.buttons["search-filter-note"].tap()
         XCTAssertTrue(app.navigationBars["Note: groceries"].waitForExistence(timeout: 5))
         let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "register-row-", "Weekly groceries")).firstMatch
